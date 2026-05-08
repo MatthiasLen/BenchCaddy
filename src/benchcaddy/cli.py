@@ -14,10 +14,6 @@ app = typer.Typer(help="Inspect BenchCaddy benchmark suites.")
 console = Console()
 
 
-def _default_database_path() -> Path:
-    return get_database_path()
-
-
 @app.command("list")
 def list_command(
     database: Path = typer.Option(

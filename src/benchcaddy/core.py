@@ -27,7 +27,7 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
         if os.name == "nt" and hasattr(psutil, "HIGH_PRIORITY_CLASS"):
             process.nice(psutil.HIGH_PRIORITY_CLASS)
         elif hasattr(os, "nice"):
-            os.nice(_MAX_UNIX_PRIORITY)
+            os.nice(_MAX_UNIX_PRIORITY - os.nice(0))
     except (PermissionError, psutil.AccessDenied, AttributeError, OSError):
         pass
 
