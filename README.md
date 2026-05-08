@@ -1,1 +1,5 @@
 # BenchCaddy
+
+Look, we both know you should probably be using Scalene PyInstrument or TorchProfile to generate those gorgeous, complex traces that look like modern art. But let's be honest: most days, "benchmarking" just means sprinkling time.time() everywhere like frantic seasoning and trying to remember if the last run was faster or if you just imagined it.
+
+BenchCaddy is a humble sidekick for those of us who live in that chaotic middle ground. It replaces "vibes-based" timing with stabilized sweeps and environment metadata, tucking it all into a neat SQLite database before you can forget it. It won’t map your entire soul, but it will save you from your own memory and provide a CLI summary clean enough to make you look like the organized professional your friends think you are. No traces to decipher, no lost logs—just actual proof that your code is getting faster.
