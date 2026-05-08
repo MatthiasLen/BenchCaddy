@@ -23,7 +23,7 @@ def equality_constraint(state, params=None):
 
 def inequality_constraint(state, params=None):
     x0, x1, x2 = state.unbind()
-    return x0 * x2 + 0.25 * x1.pow(2) - 0.45
+    return x0 * x2 + 0.25 * x1.pow(2) - 0.45  # PTNL expects g(x) <= 0
 
 
 problem = ptnl.ConstrainedNLPProblem(
