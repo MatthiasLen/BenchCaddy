@@ -1,20 +1,3 @@
-# BenchCaddy
-
-BenchCaddy is a small benchmarking helper that records stabilized benchmark sweeps,
-environment metadata, and rich CLI summaries in a local SQLite database.
-
-## Example: benchmark a PTNL interior-point solve
-
-Install the solver package first:
-
-```bash
-pip install ptnl
-```
-
-Then run this example to benchmark a compact nonlinear program with mixed
-constraints:
-
-```python
 import torch
 import pytorch_nonlinear as ptnl
 
@@ -40,7 +23,7 @@ def equality_constraint(state, params=None):
 
 def inequality_constraint(state, params=None):
     x0, x1, x2 = state.unbind()
-    return x0 * x2 + 0.25 * x1.pow(2) - 0.45  # PTNL expects g(x) <= 0
+    return x0 * x2 + 0.25 * x1.pow(2) - 0.45
 
 
 problem = ptnl.ConstrainedNLPProblem(
@@ -67,14 +50,15 @@ def solve_once():
     return result
 
 
-Sweep(
-    target=solve_once,
-    params={},
-    suite_name="ptnl-interior-point",
-    samples=5,
-    warmup_iterations=1,
-).run()
-```
+def main():
+    Sweep(
+        target=solve_once,
+        params={},
+        suite_name="ptnl-interior-point",
+        samples=5,
+        warmup_iterations=1,
+    ).run()
 
-BenchCaddy writes the samples, medians, and environment metadata to
-`benchcaddy.db` in the current working directory.
+
+if __name__ == "__main__":
+    main()
