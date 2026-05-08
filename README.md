@@ -12,7 +12,7 @@ def my_function():
 
 # The "Sweep" does the heavy lifting
 Sweep(target=my_function, samples=5, warmup_iterations=1).run()
-'''
+```
 
 
 # Something missing ?
