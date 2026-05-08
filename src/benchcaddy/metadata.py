@@ -76,7 +76,9 @@ def _read_gpu_model() -> str | None:
         ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
     )
     if nvidia_output:
-        return nvidia_output.splitlines()[0].strip()
+        gpu_names = [line.strip() for line in nvidia_output.splitlines() if line.strip()]
+        if gpu_names:
+            return ", ".join(gpu_names)
 
     system = platform.system().lower()
     if system == "darwin":
