@@ -40,6 +40,18 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
         gc.freeze()
 
 
+def _target_name(target: Callable[..., Any]) -> str:
+    name = getattr(target, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+
+    call_name = getattr(getattr(target, "__call__", None), "__name__", None)
+    if isinstance(call_name, str) and call_name != "__call__":
+        return call_name
+
+    return "callable_instance"
+
+
 @dataclass
 class BenchmarkResult:
     configuration: dict[str, Any]
@@ -109,7 +121,7 @@ class Sweep:
             median_seconds = float(median(samples))
             record_benchmark_run(
                 suite_name=self.suite_name,
-                target_name=getattr(self.target, "__name__", self.target.__class__.__name__),
+                target_name=_target_name(self.target),
                 configuration=configuration,
                 samples=samples,
                 observations=observations,

@@ -6,7 +6,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 
 @dataclass
@@ -33,7 +33,7 @@ def get_active_collector() -> ObservationCollector | None:
 
 
 @contextmanager
-def collect_observations() -> ObservationCollector:
+def collect_observations() -> Iterator[ObservationCollector]:
     previous_value = os.environ.get("BENCH_ACTIVE")
     collector = ObservationCollector()
     token = _ACTIVE_COLLECTOR.set(collector)
