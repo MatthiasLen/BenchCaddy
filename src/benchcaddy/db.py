@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, Text, create_engine, func, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from sqlalchemy.types import JSON
 
@@ -62,7 +63,7 @@ def get_database_path(database_path: str | Path | None = None) -> Path:
     return Path(database_path).resolve()
 
 
-def get_engine(database_path: str | Path | None = None):
+def get_engine(database_path: str | Path | None = None) -> Engine:
     path = get_database_path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return create_engine(f"sqlite:///{path}", future=True)
