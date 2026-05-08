@@ -80,11 +80,25 @@ def _read_gpu_model() -> str | None:
 
     system = platform.system().lower()
     if system == "darwin":
-        return _run_command(["system_profiler", "SPDisplaysDataType"])
+        system_profiler = _run_command(["system_profiler", "SPDisplaysDataType"])
+        if system_profiler:
+            for line in system_profiler.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(("Chipset Model:", "Model:")):
+                    _, _, value = stripped.partition(":")
+                    gpu_name = value.strip()
+                    if gpu_name:
+                        return gpu_name
+        return None
     if system == "windows":
-        return _run_command(
+        wmic_output = _run_command(
             ["wmic", "path", "win32_VideoController", "get", "name"]
         )
+        if wmic_output:
+            for line in wmic_output.splitlines():
+                stripped = line.strip()
+                if stripped and stripped.lower() != "name":
+                    return stripped
     return None
 
 
