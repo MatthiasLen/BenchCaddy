@@ -18,7 +18,7 @@ _COMMAND_TIMEOUT_SECONDS = 2
 class GitState:
     branch: str | None
     commit_hash: str | None
-    dirty: bool
+    dirty: bool | None
 
 
 @dataclass
@@ -111,7 +111,7 @@ def collect_git_state(cwd: Path | None = None) -> GitState:
     try:
         repo = Repo(repository_path, search_parent_directories=True)
     except (InvalidGitRepositoryError, NoSuchPathError):
-        return GitState(branch=None, commit_hash=None, dirty=False)
+        return GitState(branch=None, commit_hash=None, dirty=None)
 
     branch = None if repo.head.is_detached else repo.active_branch.name
 
