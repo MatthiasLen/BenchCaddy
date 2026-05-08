@@ -17,6 +17,7 @@ from .observability import collect_observations
 
 
 def prepare_system(lock_cpu_affinity: bool = True) -> None:
+    """Raise process priority, optionally pin the current affinity set, and freeze GC state."""
     process = psutil.Process()
 
     try:
@@ -30,8 +31,8 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
     if lock_cpu_affinity and hasattr(process, "cpu_affinity"):
         try:
             affinity = list(process.cpu_affinity())
-            target_cpu = affinity[0] if affinity else 0
-            process.cpu_affinity([target_cpu])
+            if affinity:
+                process.cpu_affinity([affinity[0]])
         except (psutil.AccessDenied, NotImplementedError, ValueError):
             pass
 
