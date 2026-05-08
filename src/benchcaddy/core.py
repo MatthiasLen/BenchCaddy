@@ -15,6 +15,9 @@ from .db import record_benchmark_run
 from .metadata import collect_environment_metadata, metadata_to_dict
 from .observability import collect_observations
 
+_MAX_UNIX_PRIORITY = -20
+_DEFAULT_SAMPLE_COUNT = 7
+
 
 def prepare_system(lock_cpu_affinity: bool = True) -> None:
     """Raise process priority, optionally pin the current affinity set, and freeze GC state."""
@@ -24,7 +27,7 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
         if os.name == "nt" and hasattr(psutil, "HIGH_PRIORITY_CLASS"):
             process.nice(psutil.HIGH_PRIORITY_CLASS)
         elif hasattr(os, "nice"):
-            os.nice(-20)
+            os.nice(_MAX_UNIX_PRIORITY)
     except (PermissionError, psutil.AccessDenied, AttributeError, OSError):
         pass
 
@@ -66,7 +69,7 @@ class Sweep:
     target: Callable[..., Any]
     params: Mapping[str, Iterable[Any]]
     suite_name: str
-    samples: int = 7
+    samples: int = _DEFAULT_SAMPLE_COUNT
     warmup_iterations: int = 1
     lock_cpu_affinity: bool = True
     database_path: str | Path | None = None
