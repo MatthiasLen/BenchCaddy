@@ -11,6 +11,8 @@ from typing import Any
 import psutil
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
 
+_COMMAND_TIMEOUT_SECONDS = 2
+
 
 @dataclass
 class GitState:
@@ -43,7 +45,7 @@ def _run_command(command: list[str]) -> str | None:
             check=False,
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_COMMAND_TIMEOUT_SECONDS,
         )
     except (FileNotFoundError, subprocess.SubprocessError):
         return None
