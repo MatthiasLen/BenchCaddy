@@ -166,7 +166,9 @@ def get_suite_details(
             .where(BenchmarkRun.suite_id == suite.id)
             .order_by(BenchmarkRun.created_at.desc())
         ).scalars().all()
-        environment = runs[0].environment if runs else None
+        environment = None
+        if runs:
+            environment = runs[0].environment
 
     return {
         "suite_name": suite.name,
