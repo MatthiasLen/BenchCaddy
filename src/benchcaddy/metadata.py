@@ -109,11 +109,7 @@ def collect_git_state(cwd: Path | None = None) -> GitState:
     except (InvalidGitRepositoryError, NoSuchPathError):
         return GitState(branch=None, commit_hash=None, dirty=False)
 
-    branch: str | None
-    try:
-        branch = repo.active_branch.name
-    except TypeError:
-        branch = None
+    branch = None if repo.head.is_detached else repo.active_branch.name
 
     return GitState(
         branch=branch,
