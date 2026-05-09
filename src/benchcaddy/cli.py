@@ -55,6 +55,21 @@ def _style_row(values: tuple[object, ...], style: str | None = None) -> tuple[ob
     return tuple(_styled(value, style) if style else value for value in values)
 
 
+def _suite_row_style(comparison: dict[str, object], run: dict[str, object]) -> str | None:
+    basis_run = comparison.get("basis_run")
+    if basis_run is None:
+        return None
+
+    best_run = min(comparison["runs"], key=lambda candidate: (candidate["median_seconds"], candidate["id"]))
+    if run["id"] == best_run["id"]:
+        return "green"
+
+    if comparison.get("basis_metric_label") == "Reference Median (s)" and run["id"] == basis_run["id"]:
+        return "yellow"
+
+    return None
+
+
 def _format_optional_seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.6f}"
 
@@ -187,18 +202,8 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
     )
 
 
-def _filtered_keys(
-    baseline: dict[str, object],
-    candidate: dict[str, object],
-    filter_keys: list[str] | None,
-) -> list[str]:
-    allowed = None if filter_keys is None else set(filter_keys)
-    return [key for key in sorted(set(baseline["configuration"]) | set(candidate["configuration"])) if allowed is None or key in allowed]
-
-
 def _print_run_comparison(
     comparison: dict[str, object],
-    filter_keys: list[str] | None,
 ) -> None:
     baseline = comparison["baseline"]
     candidate = comparison["candidate"]
@@ -217,7 +222,7 @@ def _print_run_comparison(
                         _styled(dump_json(baseline["configuration"].get(key)), baseline_style),
                         _styled(dump_json(candidate["configuration"].get(key)), candidate_style),
                     )
-                    for key in _filtered_keys(baseline, candidate, filter_keys)
+                    for key in sorted(set(baseline["configuration"]) | set(candidate["configuration"]))
                 ],
                 ("Median (s)", _styled(f"{baseline['median_seconds']:.6f}", baseline_style), _styled(f"{candidate['median_seconds']:.6f}", candidate_style)),
                 ("Mean +- Std (s)", _styled(_format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), baseline_style), _styled(_format_time(candidate.get("mean_seconds"), candidate.get("std_seconds")), candidate_style)),
@@ -251,7 +256,7 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
     console.print(
         render_table(
             f"Comparison: {comparison['suite_name']}",
-            [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), ("Delta vs Best (s)", "right"), ("Slowdown", "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
+            [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), (comparison["delta_column_label"], "right"), (comparison["ratio_column_label"], "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
             [
                 _style_row(
                     (
@@ -263,22 +268,22 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
                         "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
                         *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
                     ),
-                    "green" if run["delta_seconds"] == 0 else None,
+                    _suite_row_style(comparison, run),
                 )
                 for run in comparison["runs"]
             ],
         )
     )
 
-    if comparison["best_median_seconds"] is not None:
-        best_run = comparison["best_run"]
+    if comparison["basis_median_seconds"] is not None:
+        best_run = comparison["basis_run"]
         console.print(
             Panel.fit(
                 " | ".join(
                     [
                         f"Run ID: {best_run['display_id']}",
                         f"Record ID: {best_run['id']}",
-                        f"Best Median (s): {best_run['median_seconds']:.6f}",
+                        f"{comparison['basis_metric_label']}: {best_run['median_seconds']:.6f}",
                         f"Mean +- Std (s): {_format_time(best_run.get('mean_seconds'), best_run.get('std_seconds'))}",
                     ]
                 ),
@@ -386,7 +391,7 @@ def show_command(
 @app.command("compare")
 def compare_command(
     left: str = typer.Argument(..., help="Suite name or baseline run ID."),
-    right: str | None = typer.Argument(None, help="Candidate run ID for direct comparison."),
+    right: str | None = typer.Argument(None, help="Candidate run ID for direct comparison or reference run for suite comparison."),
     database: Path = typer.Option(
         None,
         "--database",
@@ -394,11 +399,6 @@ def compare_command(
         exists=False,
         dir_okay=False,
         help="Path to the BenchCaddy SQLite database.",
-    ),
-    filter_keys: list[str] = typer.Option(
-        None,
-        "--filter",
-        help="Configuration keys to emphasize in direct run comparisons.",
     ),
 ) -> None:
     database_path = get_database_path(database)
@@ -409,12 +409,15 @@ def compare_command(
         if comparison is None:
             console.print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
             raise typer.Exit(code=1)
-        _print_run_comparison(comparison, filter_keys)
+        _print_run_comparison(comparison)
         return
 
-    comparison = compare_suite_runs(left, database_path)
+    comparison = compare_suite_runs(left, right_run_id, database_path)
     if comparison is None:
-        console.print(f"Suite '{left}' was not found in {database_path}.")
+        if right_run_id is not None:
+            console.print(f"Suite '{left}' or reference run '{right}' was not found in {database_path}.")
+        else:
+            console.print(f"Suite '{left}' was not found in {database_path}.")
         raise typer.Exit(code=1)
     _print_suite_comparison(comparison)
 

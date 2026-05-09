@@ -66,7 +66,8 @@ def _argument_tokens(configuration: Mapping[str, Any]) -> list[str]:
     for k, v in configuration.items():
         flag = f"--{k.replace('_', '-')}"
         if v is True: tokens.append(flag)
-        elif v not in (False, None): tokens.extend([flag, str(v)])
+        elif v is False: tokens.extend([flag, "false"])
+        elif v is not None: tokens.extend([flag, str(v)])
     return tokens
 
 

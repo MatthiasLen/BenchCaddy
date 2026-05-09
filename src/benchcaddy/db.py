@@ -136,7 +136,7 @@ class BenchmarkRun(Base):
             "created_at": self.created_at,
         }
 
-    def to_suite_comparison_row(self, best_median_seconds: float) -> dict[str, Any]:
+    def to_suite_comparison_row(self, reference_median_seconds: float) -> dict[str, Any]:
         return {
             "id": self.id,
             "record_id": self.id,
@@ -147,8 +147,8 @@ class BenchmarkRun(Base):
             "mean_seconds": self.mean_seconds,
             "median_seconds": self.median_seconds,
             "std_seconds": self.std_seconds,
-            "delta_seconds": self.median_seconds - best_median_seconds,
-            "slowdown_factor": None if best_median_seconds <= 0 else self.median_seconds / best_median_seconds,
+            "delta_seconds": self.median_seconds - reference_median_seconds,
+            "slowdown_factor": None if reference_median_seconds <= 0 else self.median_seconds / reference_median_seconds,
             "sample_count": len(self.samples),
             "created_at": self.created_at,
         }
@@ -339,6 +339,7 @@ def get_suite_details(
 
 def compare_suite_runs(
     suite_name: str,
+    reference_run_id: int | tuple[int, int] | None = None,
     database_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
@@ -356,19 +357,41 @@ def compare_suite_runs(
         return {
             "suite_name": suite.name,
             "target_name": suite.target_name,
-            "best_median_seconds": None,
-            "best_run": None,
+            "basis_median_seconds": None,
+            "basis_run": None,
+            "basis_metric_label": "Best Median (s)",
+            "delta_column_label": "Delta vs Best (s)",
+            "ratio_column_label": "Slowdown",
             "runs": [],
         }
 
-    best_run = min(runs, key=lambda run: (run.median_seconds, run.id))
-    best_median_seconds = best_run.median_seconds
+    if reference_run_id is None:
+        basis_run = min(runs, key=lambda run: (run.median_seconds, run.id))
+        basis_metric_label = "Best Median (s)"
+        delta_column_label = "Delta vs Best (s)"
+        ratio_column_label = "Slowdown"
+    else:
+        basis_run = (
+            next((run for run in runs if (run.sweep_execution_id or run.id, run.run_index or 1) == reference_run_id), None)
+            if isinstance(reference_run_id, tuple)
+            else next((run for run in runs if run.id == reference_run_id), None)
+        )
+        if basis_run is None:
+            return None
+        basis_metric_label = "Reference Median (s)"
+        delta_column_label = "Delta vs Reference (s)"
+        ratio_column_label = "Relative"
+
+    basis_median_seconds = basis_run.median_seconds
     return {
         "suite_name": suite.name,
         "target_name": suite.target_name,
-        "best_median_seconds": best_median_seconds,
-        "best_run": best_run.to_suite_comparison_row(best_median_seconds),
-        "runs": [run.to_suite_comparison_row(best_median_seconds) for run in runs],
+        "basis_median_seconds": basis_median_seconds,
+        "basis_run": basis_run.to_suite_comparison_row(basis_median_seconds),
+        "basis_metric_label": basis_metric_label,
+        "delta_column_label": delta_column_label,
+        "ratio_column_label": ratio_column_label,
+        "runs": [run.to_suite_comparison_row(basis_median_seconds) for run in runs],
     }
 
 
