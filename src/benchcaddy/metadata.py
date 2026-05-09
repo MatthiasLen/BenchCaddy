@@ -7,7 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import psutil
-from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+from git import Repo
+from git.exc import GitError
 
 _COMMAND_TIMEOUT_SECONDS = 2
 
@@ -36,6 +37,34 @@ class EnvironmentMetadata:
     gpu_model: str | None
     git: GitState
     process: ProcessState
+
+
+def _empty_git_state() -> GitState:
+    return GitState(branch=None, commit_hash=None, dirty=None)
+
+
+def _read_git_branch(repo: Repo) -> str | None:
+    try:
+        return None if repo.head.is_detached else repo.active_branch.name
+    except (GitError, OSError, TypeError, ValueError):
+        return None
+
+
+def _read_git_commit_hash(repo: Repo) -> str | None:
+    try:
+        return repo.head.commit.hexsha
+    except (GitError, OSError, TypeError, ValueError):
+        return None
+
+
+def _read_git_dirty(repo: Repo) -> bool | None:
+    if repo.bare:
+        return None
+
+    try:
+        return repo.is_dirty(untracked_files=True)
+    except (GitError, OSError, ValueError):
+        return None
 
 
 def _run_command(command: list[str]) -> str | None:
@@ -101,19 +130,17 @@ def collect_git_state(cwd: Path | None = None) -> GitState:
     repository_path = cwd or Path.cwd()
     try:
         repo = Repo(repository_path, search_parent_directories=True)
-    except (InvalidGitRepositoryError, NoSuchPathError):
-        return GitState(branch=None, commit_hash=None, dirty=None)
+    except (GitError, OSError, ValueError):
+        return _empty_git_state()
 
-    try:
-        branch = None if repo.head.is_detached else repo.active_branch.name
-        commit_hash = repo.head.commit.hexsha
-    except ValueError:
-        return GitState(branch=None, commit_hash=None, dirty=None)
+    commit_hash = _read_git_commit_hash(repo)
+    if commit_hash is None:
+        return _empty_git_state()
 
     return GitState(
-        branch=branch,
+        branch=_read_git_branch(repo),
         commit_hash=commit_hash,
-        dirty=repo.is_dirty(untracked_files=True),
+        dirty=_read_git_dirty(repo),
     )
 
 

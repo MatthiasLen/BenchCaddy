@@ -188,6 +188,44 @@ def test_cli_lists_shows_and_compares_runs(
     assert multi_show_result.stdout.index("2.1") < multi_show_result.stdout.index("1.1")
 
 
+def test_cli_show_renders_partial_git_environment(tmp_path: Path, environment_payload: dict[str, object]) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+    partial_git_environment = {
+        **environment_payload,
+        "git": {
+            "branch": None,
+            "commit_hash": "cafebabe1234",
+            "dirty": False,
+        },
+    }
+
+    record_benchmark_run(
+        suite_name="partial-git-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "detached-head"},
+        samples=[0.1, 0.1],
+        observations=[],
+        median_seconds=0.1,
+        min_seconds=0.1,
+        max_seconds=0.1,
+        std_seconds=0.0,
+        environment=partial_git_environment,
+        database_path=database_path,
+    )
+
+    show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "Environment" in show_result.stdout
+    assert "git" in show_result.stdout
+    assert "branch" in show_result.stdout
+    assert "commit_hash" in show_result.stdout
+    assert "cafebabe1234" in show_result.stdout
+    assert "dirty" in show_result.stdout
+    assert "False" in show_result.stdout
+
+
 def test_cli_renders_missing_min_max_as_dash(tmp_path: Path, environment_payload: dict[str, object]) -> None:
     database_path = tmp_path / "benchcaddy.db"
     runner = CliRunner()
