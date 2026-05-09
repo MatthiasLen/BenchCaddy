@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +10,8 @@ from rich.table import Table
 from rich.text import Text
 
 from .db import compare_runs, compare_suite_runs, get_database_path, get_run_details, get_suite_details, list_suite_summaries
+from .observability import summarize_observations
+from .presentation import dump_json, json_panel, render_table
 
 app = typer.Typer(help="Inspect BenchCaddy benchmark suites.")
 console = Console()
@@ -32,43 +33,145 @@ def _as_run_id(value: str) -> int | None:
 
 
 def _style_delta(percent_change: float | None) -> Text:
-    if percent_change is None:
-        return Text("n/a")
-
-    style = None
-    if percent_change <= -5.0:
-        style = "green"
-    elif percent_change >= 5.0:
-        style = "red"
-
-    return Text(f"{percent_change:+.2f}%", style=style)
+    if percent_change is None: return Text("n/a")
+    return Text(f"{percent_change:+.2f}%", style="green" if percent_change <= -5.0 else "red" if percent_change >= 5.0 else None)
 
 
 def _render_observation_table(observations: list[dict[str, object]], title: str) -> Table:
-    totals: dict[str, float] = {}
-    counts: dict[str, int] = {}
-    for sample in observations:
-        for record in sample["records"]:
-            label = str(record["label"])
-            duration = float(record["duration_seconds"])
-            totals[label] = totals.get(label, 0.0) + duration
-            counts[label] = counts.get(label, 0) + 1
+    summary = summarize_observations(observations)
 
-    table = Table(title=title)
-    table.add_column("Label")
-    table.add_column("Calls", justify="right")
-    table.add_column("Total (s)", justify="right")
-    table.add_column("Average (s)", justify="right")
+    return render_table(
+        title,
+        ["Label", ("Calls", "right"), ("Total (s)", "right"), ("Average (s)", "right")],
+        [
+            (
+                label,
+                calls,
+                f"{total:.6f}",
+                f"{total / calls:.6f}",
+            )
+            for label, (calls, total) in sorted(summary.items())
+        ],
+    )
 
-    for label in sorted(totals):
-        table.add_row(
-            label,
-            str(counts[label]),
-            f"{totals[label]:.6f}",
-            f"{totals[label] / counts[label]:.6f}",
+
+def _show_run(run: dict[str, object]) -> None:
+    console.print(
+        render_table(
+            f"Run: {run['id']}",
+            ["Field", "Value"],
+            [
+                ("Suite", run["suite_name"]),
+                ("Target", run["target_name"]),
+                ("Configuration", dump_json(run["configuration"])),
+                ("Median (s)", f"{run['median_seconds']:.6f}"),
+                ("Samples", len(run["samples"])),
+                ("Recorded At", run["created_at"]),
+            ],
+        )
+    )
+    console.print(_render_observation_table(run["observations"], title="Observed Timings"))
+    console.print(json_panel("Environment", run["environment"], indent=2))
+
+
+def _show_suite(details: dict[str, object]) -> None:
+    console.print(render_table(
+        f"Suite: {details['suite_name']}",
+        [("Run ID", "right"), "Configuration", ("Median (s)", "right"), ("Samples", "right"), "Recorded At"],
+        [
+            (
+                run["id"],
+                dump_json(run["configuration"]),
+                f"{run['median_seconds']:.6f}",
+                len(run["samples"]),
+                run["created_at"],
+            )
+            for run in details["runs"]
+        ],
+    ))
+    if details["environment"] is not None:
+        console.print(json_panel("Environment", details["environment"], indent=2))
+    if _STATE.verbose:
+        for run in details["runs"]:
+            console.print(_render_observation_table(run["observations"], title=f"Observed Timings for Run {run['id']}"))
+
+
+def _filtered_keys(
+    baseline: dict[str, object],
+    candidate: dict[str, object],
+    filter_keys: list[str] | None,
+) -> list[str]:
+    allowed = None if filter_keys is None else set(filter_keys)
+    return [key for key in sorted(set(baseline["configuration"]) | set(candidate["configuration"])) if allowed is None or key in allowed]
+
+
+def _print_run_comparison(
+    left_run_id: int,
+    right_run_id: int,
+    comparison: dict[str, object],
+    filter_keys: list[str] | None,
+) -> None:
+    baseline = comparison["baseline"]
+    candidate = comparison["candidate"]
+    console.print(
+        render_table(
+            f"Run Comparison: {left_run_id} -> {right_run_id}",
+            ["Field", "Baseline", "Candidate"],
+            [
+                *[
+                    (
+                        key,
+                        dump_json(baseline["configuration"].get(key)),
+                        dump_json(candidate["configuration"].get(key)),
+                    )
+                    for key in _filtered_keys(baseline, candidate, filter_keys)
+                ],
+                ("Median (s)", f"{baseline['median_seconds']:.6f}", f"{candidate['median_seconds']:.6f}"),
+                ("Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
+                ("Percent Change", "", _style_delta(comparison["percent_change"])),
+            ],
+        )
+    )
+
+    if comparison["observation_rows"]:
+        console.print(
+            render_table(
+                "Observed Timing Diff",
+                ["Label", ("Baseline (s)", "right"), ("Candidate (s)", "right"), ("Delta (s)", "right")],
+                [
+                    (
+                        row["label"],
+                        f"{row['baseline_seconds']:.6f}",
+                        f"{row['candidate_seconds']:.6f}",
+                        f"{row['delta_seconds']:.6f}",
+                    )
+                    for row in comparison["observation_rows"]
+                ],
+            )
         )
 
-    return table
+
+def _print_suite_comparison(comparison: dict[str, object]) -> None:
+    console.print(
+        render_table(
+            f"Comparison: {comparison['suite_name']}",
+            [("Run ID", "right"), "Configuration", ("Median (s)", "right"), ("Delta vs Best (s)", "right"), ("Slowdown", "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
+            [
+                (
+                    run["id"],
+                    dump_json(run["configuration"]),
+                    f"{run['median_seconds']:.6f}",
+                    f"{run['delta_seconds']:.6f}",
+                    "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
+                    *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
+                )
+                for run in comparison["runs"]
+            ],
+        )
+    )
+
+    if comparison["best_median_seconds"] is not None:
+        console.print(Panel.fit(f"Best median: {comparison['best_median_seconds']:.6f}s", title="Comparison Basis"))
 
 
 @app.callback()
@@ -100,21 +203,21 @@ def list_command(
         console.print(f"No suites found in {database_path}.")
         raise typer.Exit()
 
-    table = Table(title=f"BenchCaddy suites ({database_path})")
-    table.add_column("Suite")
-    table.add_column("Target")
-    table.add_column("Runs", justify="right")
-    table.add_column("Last Run")
-
-    for summary in summaries:
-        table.add_row(
-            summary["suite_name"],
-            summary["target_name"],
-            str(summary["run_count"]),
-            str(summary["last_run_at"]),
+    console.print(
+        render_table(
+            f"BenchCaddy suites ({database_path})",
+            ["Suite", "Target", ("Runs", "right"), "Last Run"],
+            [
+                (
+                    summary["suite_name"],
+                    summary["target_name"],
+                    summary["run_count"],
+                    summary["last_run_at"],
+                )
+                for summary in summaries
+            ],
         )
-
-    console.print(table)
+    )
     if _STATE.verbose:
         console.print(Panel.fit(str(database_path), title="Database"))
 
@@ -138,63 +241,14 @@ def show_command(
         if run is None:
             console.print(f"Run '{run_id}' was not found in {database_path}.")
             raise typer.Exit(code=1)
-
-        summary = Table(title=f"Run: {run['id']}")
-        summary.add_column("Field")
-        summary.add_column("Value")
-        summary.add_row("Suite", str(run["suite_name"]))
-        summary.add_row("Target", str(run["target_name"]))
-        summary.add_row("Configuration", json.dumps(run["configuration"], sort_keys=True))
-        summary.add_row("Median (s)", f"{run['median_seconds']:.6f}")
-        summary.add_row("Samples", str(len(run["samples"])))
-        summary.add_row("Recorded At", str(run["created_at"]))
-        console.print(summary)
-        console.print(_render_observation_table(run["observations"], title="Observed Timings"))
-        console.print(
-            Panel(
-                json.dumps(run["environment"], indent=2, sort_keys=True),
-                title="Environment",
-            )
-        )
+        _show_run(run)
         return
 
     details = get_suite_details(identifier, database_path)
     if details is None:
         console.print(f"Suite '{identifier}' was not found in {database_path}.")
         raise typer.Exit(code=1)
-
-    runs_table = Table(title=f"Suite: {details['suite_name']}")
-    runs_table.add_column("Run ID", justify="right")
-    runs_table.add_column("Configuration")
-    runs_table.add_column("Median (s)", justify="right")
-    runs_table.add_column("Samples", justify="right")
-    runs_table.add_column("Recorded At")
-
-    for run in details["runs"]:
-        runs_table.add_row(
-            str(run["id"]),
-            json.dumps(run["configuration"], sort_keys=True),
-            f"{run['median_seconds']:.6f}",
-            str(len(run["samples"])),
-            str(run["created_at"]),
-        )
-
-    console.print(runs_table)
-    if details["environment"] is not None:
-        console.print(
-            Panel(
-                json.dumps(details["environment"], indent=2, sort_keys=True),
-                title="Environment",
-            )
-        )
-    if _STATE.verbose:
-        for run in details["runs"]:
-            console.print(
-                _render_observation_table(
-                    run["observations"],
-                    title=f"Observed Timings for Run {run['id']}",
-                )
-            )
+    _show_suite(details)
 
 
 @app.command("compare")
@@ -223,87 +277,14 @@ def compare_command(
         if comparison is None:
             console.print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
             raise typer.Exit(code=1)
-
-        baseline = comparison["baseline"]
-        candidate = comparison["candidate"]
-        key_set = sorted(set(baseline["configuration"]) | set(candidate["configuration"]))
-        if filter_keys:
-            key_set = [key for key in key_set if key in set(filter_keys)]
-
-        config_table = Table(title=f"Run Comparison: {left_run_id} -> {right_run_id}")
-        config_table.add_column("Field")
-        config_table.add_column("Baseline")
-        config_table.add_column("Candidate")
-        for key in key_set:
-            config_table.add_row(
-                key,
-                json.dumps(baseline["configuration"].get(key), sort_keys=True),
-                json.dumps(candidate["configuration"].get(key), sort_keys=True),
-            )
-        config_table.add_row("Median (s)", f"{baseline['median_seconds']:.6f}", f"{candidate['median_seconds']:.6f}")
-        config_table.add_row("Delta (s)", "", f"{comparison['delta_seconds']:.6f}")
-        config_table.add_row("Percent Change", "", _style_delta(comparison["percent_change"]))
-        console.print(config_table)
-
-        if comparison["observation_rows"]:
-            observation_table = Table(title="Observed Timing Diff")
-            observation_table.add_column("Label")
-            observation_table.add_column("Baseline (s)", justify="right")
-            observation_table.add_column("Candidate (s)", justify="right")
-            observation_table.add_column("Delta (s)", justify="right")
-            for row in comparison["observation_rows"]:
-                observation_table.add_row(
-                    row["label"],
-                    f"{row['baseline_seconds']:.6f}",
-                    f"{row['candidate_seconds']:.6f}",
-                    f"{row['delta_seconds']:.6f}",
-                )
-            console.print(observation_table)
+        _print_run_comparison(left_run_id, right_run_id, comparison, filter_keys)
         return
 
     comparison = compare_suite_runs(left, database_path)
     if comparison is None:
         console.print(f"Suite '{left}' was not found in {database_path}.")
         raise typer.Exit(code=1)
-
-    comparison_table = Table(title=f"Comparison: {comparison['suite_name']}")
-    comparison_table.add_column("Run ID", justify="right")
-    comparison_table.add_column("Configuration")
-    comparison_table.add_column("Median (s)", justify="right")
-    comparison_table.add_column("Delta vs Best (s)", justify="right")
-    comparison_table.add_column("Slowdown", justify="right")
-
-    if _STATE.verbose:
-        comparison_table.add_column("Samples", justify="right")
-        comparison_table.add_column("Recorded At")
-
-    for run in comparison["runs"]:
-        slowdown = "n/a"
-        if run["slowdown_factor"] is not None:
-            slowdown = f"{run['slowdown_factor']:.2f}x"
-
-        row = [
-            str(run["id"]),
-            json.dumps(run["configuration"], sort_keys=True),
-            f"{run['median_seconds']:.6f}",
-            f"{run['delta_seconds']:.6f}",
-            slowdown,
-        ]
-        if _STATE.verbose:
-            row.extend([str(run["sample_count"]), str(run["created_at"])])
-
-        comparison_table.add_row(*row)
-
-    console.print(comparison_table)
-
-    if comparison["best_median_seconds"] is not None:
-        console.print(
-            Panel.fit(
-                f"Best median: {comparison['best_median_seconds']:.6f}s",
-                title="Comparison Basis",
-            )
-        )
+    _print_suite_comparison(comparison)
 
 
-def main() -> None:
-    app()
+main = app
