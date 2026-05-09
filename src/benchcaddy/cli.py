@@ -47,6 +47,10 @@ def _format_time(mean_seconds: float | None, std_seconds: float | None) -> str:
     return f"{mean_value:.6f} +- {std_value:.6f}"
 
 
+def _format_optional_seconds(value: float | None) -> str:
+    return "-" if value is None else f"{value:.6f}"
+
+
 def _render_observation_table(observations: list[dict[str, object]], title: str) -> Table:
     summary = summarize_observations(observations)
 
@@ -176,9 +180,9 @@ def _print_run_comparison(
                 [
                     (
                         row["label"],
-                        f"{row['baseline_seconds']:.6f}",
-                        f"{row['candidate_seconds']:.6f}",
-                        f"{row['delta_seconds']:.6f}",
+                        _format_optional_seconds(row["baseline_seconds"]),
+                        _format_optional_seconds(row["candidate_seconds"]),
+                        _format_optional_seconds(row["delta_seconds"]),
                     )
                     for row in comparison["observation_rows"]
                 ],
@@ -272,6 +276,8 @@ def show_command(
     ),
 ) -> None:
     database_path = get_database_path(database)
+    
+    # First try to interpret the identifier as a run ID (either simple or composite)
     run_id = _as_run_id(identifier)
     if run_id is not None:
         run = get_run_details(run_id, database_path)
@@ -281,6 +287,7 @@ def show_command(
         _show_run(run)
         return
 
+    # If not a run ID, treat as suite name
     details = get_suite_details(identifier, database_path)
     if details is None:
         console.print(f"Suite '{identifier}' was not found in {database_path}.")
