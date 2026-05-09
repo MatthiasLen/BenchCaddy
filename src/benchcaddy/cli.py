@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .db import compare_runs, compare_suite_runs, get_database_path, get_run_details, get_suite_details, list_suite_summaries
+from .db import compare_runs, compare_suite_runs, get_database_path, get_run_details, get_selected_run_details, get_suite_details, list_suite_summaries
 from .observability import summarize_observations
 from .presentation import dump_json, json_panel, render_table
 
@@ -56,15 +56,15 @@ def _render_observation_table(observations: list[dict[str, object]], title: str)
 
     return render_table(
         title,
-        ["Label", ("Calls", "right"), ("Total (s)", "right"), ("Average (s)", "right")],
+        ["Label", ("Calls", "right"), ("Time (s)", "right"), ("Total (s)", "right")],
         [
             (
                 label,
-                calls,
-                f"{total:.6f}",
-                f"{total / calls:.6f}",
+                stats.calls,
+                _format_time(stats.mean_seconds, stats.std_seconds),
+                f"{stats.total_seconds:.6f}",
             )
-            for label, (calls, total) in sorted(summary.items())
+            for label, stats in summary.items()
         ],
     )
 
@@ -118,11 +118,11 @@ def _show_suite(details: dict[str, object]) -> None:
                 (
                     run["display_id"],
                     label,
-                    calls,
-                    _format_time(total / calls, 0.0),
+                    stats.calls,
+                    _format_time(stats.mean_seconds, stats.std_seconds),
                 )
                 for run in details["runs"]
-                for label, (calls, total) in sorted(summarize_observations(run["observations"]).items())
+                for label, stats in summarize_observations(run["observations"]).items()
             ],
         )
     )
@@ -131,6 +131,52 @@ def _show_suite(details: dict[str, object]) -> None:
     if _STATE.verbose:
         for run in details["runs"]:
             console.print(_render_observation_table(run["observations"], title=f"Observed Timings for Run {run['display_id']}"))
+
+
+def _show_selected_runs(runs: list[dict[str, object]]) -> None:
+    console.print(render_table(
+        "Selected Runs",
+        [
+            ("Run ID", "right"),
+            ("Record ID", "right"),
+            "Suite",
+            "Target",
+            "Configuration",
+            ("Time (s)", "right"),
+            ("Samples", "right"),
+            "Recorded At",
+        ],
+        [
+            (
+                run["display_id"],
+                run["id"],
+                run["suite_name"],
+                run["target_name"],
+                dump_json(run["configuration"]),
+                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+                len(run["samples"]),
+                run["created_at"],
+            )
+            for run in runs
+        ],
+    ))
+    console.print(
+        render_table(
+            "Observed Timings: Selected Runs",
+            [("Run ID", "right"), ("Record ID", "right"), "Label", ("Calls", "right"), ("Time (s)", "right")],
+            [
+                (
+                    run["display_id"],
+                    run["id"],
+                    label,
+                    stats.calls,
+                    _format_time(stats.mean_seconds, stats.std_seconds),
+                )
+                for run in runs
+                for label, stats in summarize_observations(run["observations"]).items()
+            ],
+        )
+    )
 
 
 def _filtered_keys(
@@ -180,8 +226,8 @@ def _print_run_comparison(
                 [
                     (
                         row["label"],
-                        _format_optional_seconds(row["baseline_seconds"]),
-                        _format_optional_seconds(row["candidate_seconds"]),
+                        "-" if row["baseline_mean_seconds"] is None else _format_time(row["baseline_mean_seconds"], row["baseline_std_seconds"]),
+                        "-" if row["candidate_mean_seconds"] is None else _format_time(row["candidate_mean_seconds"], row["candidate_std_seconds"]),
                         _format_optional_seconds(row["delta_seconds"]),
                     )
                     for row in comparison["observation_rows"]
@@ -211,7 +257,20 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
     )
 
     if comparison["best_median_seconds"] is not None:
-        console.print(Panel.fit(f"Best median: {comparison['best_median_seconds']:.6f}s", title="Comparison Basis"))
+        best_run = comparison["best_run"]
+        console.print(
+            Panel.fit(
+                " | ".join(
+                    [
+                        f"Run ID: {best_run['display_id']}",
+                        f"Record ID: {best_run['id']}",
+                        f"Best Median (s): {best_run['median_seconds']:.6f}",
+                        f"Time (s): {_format_time(best_run.get('mean_seconds'), best_run.get('std_seconds'))}",
+                    ]
+                ),
+                title="Comparison Basis",
+            )
+        )
 
 
 @app.callback()
@@ -265,7 +324,7 @@ def list_command(
 
 @app.command("show")
 def show_command(
-    identifier: str = typer.Argument(..., help="Suite name or run ID to inspect (for example 3.2)."),
+    identifiers: list[str] = typer.Argument(..., help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1)."),
     database: Path = typer.Option(
         None,
         "--database",
@@ -276,23 +335,38 @@ def show_command(
     ),
 ) -> None:
     database_path = get_database_path(database)
-    
-    # First try to interpret the identifier as a run ID (either simple or composite)
-    run_id = _as_run_id(identifier)
-    if run_id is not None:
-        run = get_run_details(run_id, database_path)
-        if run is None:
-            console.print(f"Run '{run_id}' was not found in {database_path}.")
+
+    if len(identifiers) == 1:
+        identifier = identifiers[0]
+        run_id = _as_run_id(identifier)
+        if run_id is not None:
+            run = get_run_details(run_id, database_path)
+            if run is None:
+                console.print(f"Run '{identifier}' was not found in {database_path}.")
+                raise typer.Exit(code=1)
+            _show_run(run)
+            return
+
+        details = get_suite_details(identifier, database_path)
+        if details is None:
+            console.print(f"Suite '{identifier}' was not found in {database_path}.")
             raise typer.Exit(code=1)
-        _show_run(run)
+        _show_suite(details)
         return
 
-    # If not a run ID, treat as suite name
-    details = get_suite_details(identifier, database_path)
-    if details is None:
-        console.print(f"Suite '{identifier}' was not found in {database_path}.")
+    run_ids: list[int | tuple[int, int]] = []
+    for identifier in identifiers:
+        run_id = _as_run_id(identifier)
+        if run_id is None:
+            console.print(f"'{identifier}' is not a valid run ID.")
+            raise typer.Exit(code=1)
+        run_ids.append(run_id)
+
+    runs = get_selected_run_details(run_ids, database_path)
+    if runs is None:
+        console.print(f"One or more runs were not found in {database_path}.")
         raise typer.Exit(code=1)
-    _show_suite(details)
+    _show_selected_runs(runs)
 
 
 @app.command("compare")

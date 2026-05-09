@@ -6,6 +6,7 @@ import benchcaddy.core as core_module
 from benchcaddy import Sweep, observe
 from benchcaddy.db import compare_runs, db_session, get_run_details, initialize_database
 from benchcaddy.db import get_suite_details, list_suite_summaries
+from benchcaddy.observability import summarize_observations
 
 
 def test_sweep_records_results_and_observations(
@@ -260,6 +261,20 @@ def test_multiple_observe_labels_are_recorded_and_compared(
     comparison = compare_runs((1, 1), (1, 2), database_path)
     assert comparison is not None
     assert [row["label"] for row in comparison["observation_rows"]] == ["inner", "outer"]
+
+
+def test_observation_summary_tracks_mean_and_std_per_sample_total() -> None:
+    summary = summarize_observations(
+        [
+            {"sample": 1, "records": [{"label": "inner", "duration_seconds": 0.01}, {"label": "inner", "duration_seconds": 0.02}]},
+            {"sample": 2, "records": [{"label": "inner", "duration_seconds": 0.06}]},
+        ]
+    )
+
+    assert summary["inner"].calls == 3
+    assert summary["inner"].total_seconds == 0.09
+    assert summary["inner"].mean_seconds == 0.045
+    assert round(summary["inner"].std_seconds, 6) == 0.021213
 
 
 def test_prepare_system_keeps_current_affinity_set(monkeypatch) -> None:
