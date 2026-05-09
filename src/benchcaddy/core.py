@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
-from statistics import median
+from statistics import median, stdev
 from time import perf_counter
 from typing import Any, Callable, Iterable, Mapping
 
@@ -78,6 +78,9 @@ class BenchmarkResult:
     samples: list[float]
     observations: list[dict[str, Any]]
     median_seconds: float
+    min_seconds: float
+    max_seconds: float
+    std_seconds: float
 
 
 @dataclass
@@ -186,6 +189,9 @@ class Sweep:
                 observations.append(observation)
 
             median_seconds = float(median(samples))
+            min_seconds, max_seconds = float(min(samples)), float(max(samples))
+            std_seconds = float(stdev(samples)) if len(samples) > 1 else 0.0
+
             record_benchmark_run(
                 suite_name=self.suite_name,
                 target_name=_target_name(self.target),
@@ -193,6 +199,9 @@ class Sweep:
                 samples=samples,
                 observations=observations,
                 median_seconds=median_seconds,
+                min_seconds=min_seconds,
+                max_seconds=max_seconds,
+                std_seconds=std_seconds,
                 environment=environment,
                 database_path=self.database_path,
             )
@@ -202,6 +211,9 @@ class Sweep:
                     samples=samples,
                     observations=observations,
                     median_seconds=median_seconds,
+                    min_seconds=min_seconds,
+                    max_seconds=max_seconds,
+                    std_seconds=std_seconds,
                 )
             )
 
@@ -212,6 +224,9 @@ class Sweep:
                 total=len(configurations),
                 configuration=configuration,
                 median_seconds=median_seconds,
+                min_seconds=min_seconds,
+                max_seconds=max_seconds,
+                std_seconds=std_seconds,
                 sample_count=len(samples),
             )
 

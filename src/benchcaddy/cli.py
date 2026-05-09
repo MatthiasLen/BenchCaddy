@@ -65,6 +65,9 @@ def _show_run(run: dict[str, object]) -> None:
                 ("Target", run["target_name"]),
                 ("Configuration", dump_json(run["configuration"])),
                 ("Median (s)", f"{run['median_seconds']:.6f}"),
+                ("Min (s)", f"{run.get('min_seconds') or 0:.6f}"),
+                ("Max (s)", f"{run.get('max_seconds') or 0:.6f}"),
+                ("Std (s)", f"{run.get('std_seconds') or 0:.6f}"),
                 ("Samples", len(run["samples"])),
                 ("Recorded At", run["created_at"]),
             ],
@@ -77,12 +80,13 @@ def _show_run(run: dict[str, object]) -> None:
 def _show_suite(details: dict[str, object]) -> None:
     console.print(render_table(
         f"Suite: {details['suite_name']}",
-        [("Run ID", "right"), "Configuration", ("Median (s)", "right"), ("Samples", "right"), "Recorded At"],
+        [("Run ID", "right"), "Configuration", ("Median (s)", "right"), ("Std (s)", "right"), ("Samples", "right"), "Recorded At"],
         [
             (
                 run["id"],
                 dump_json(run["configuration"]),
                 f"{run['median_seconds']:.6f}",
+                f"{run.get('std_seconds') or 0:.6f}",
                 len(run["samples"]),
                 run["created_at"],
             )
@@ -127,6 +131,9 @@ def _print_run_comparison(
                     for key in _filtered_keys(baseline, candidate, filter_keys)
                 ],
                 ("Median (s)", f"{baseline['median_seconds']:.6f}", f"{candidate['median_seconds']:.6f}"),
+                ("Min (s)", f"{baseline.get('min_seconds') or 0:.6f}", f"{candidate.get('min_seconds') or 0:.6f}"),
+                ("Max (s)", f"{baseline.get('max_seconds') or 0:.6f}", f"{candidate.get('max_seconds') or 0:.6f}"),
+                ("Std (s)", f"{baseline.get('std_seconds') or 0:.6f}", f"{candidate.get('std_seconds') or 0:.6f}"),
                 ("Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
                 ("Percent Change", "", _style_delta(comparison["percent_change"])),
             ],
