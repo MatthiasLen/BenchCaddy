@@ -54,35 +54,22 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
 
 
 def _target_name(target: Callable[..., Any] | str | Path) -> str:
-    script_path = _as_script_path(target)
-    if script_path is not None:
-        return script_path.name
-
-    name = getattr(target, "__name__", None)
-    if isinstance(name, str) and name:
-        return name
-
-    call_name = getattr(getattr(target, "__call__", None), "__name__", None)
-    if isinstance(call_name, str) and call_name != "__call__":
-        return call_name
-
-    return "callable_instance"
+    if (script := _as_script_path(target)): return script.name
+    return getattr(target, "__name__", None) or getattr(getattr(target, "__call__", None), "__name__", None) or "callable_instance"
 
 
 def _argument_tokens(configuration: Mapping[str, Any]) -> list[str]:
     tokens: list[str] = []
-    for key, value in configuration.items():
-        flag = f"--{key.replace('_', '-')}"
-        if isinstance(value, bool):
-            if value:
-                tokens.append(flag)
-            continue
-
-        if value is None:
-            continue
-
-        tokens.extend([flag, str(value)])
+    for k, v in configuration.items():
+        flag = f"--{k.replace('_', '-')}"
+        if v is True: tokens.append(flag)
+        elif v not in (False, None): tokens.extend([flag, str(v)])
     return tokens
+
+
+def _report(reporter: SweepReporter | None, event: str, **payload: Any) -> None:
+    if reporter is not None:
+        getattr(reporter, event)(**payload)
 
 
 @dataclass
@@ -122,19 +109,8 @@ class Sweep:
     def _sync_if_needed(self, result: Any) -> None:
         if self.sync is not None:
             self.sync()
-            return
-
-        synchronize = getattr(result, "synchronize", None)
-        if callable(synchronize):
+        elif callable(synchronize := getattr(result, "synchronize", None)):
             synchronize()
-
-    def _sample_count(self) -> int:
-        return self.iterations if self.iterations is not None else self.samples
-
-    def _warmup_count(self) -> int:
-        if self.warmup_runs is not None:
-            return self.warmup_runs
-        return self.warmup_iterations
 
     def _invoke_target(self, configuration: Mapping[str, Any]) -> Any:
         script_path = _as_script_path(self.target)
@@ -144,70 +120,70 @@ class Sweep:
 
         return self.target(**configuration)
 
-    def _reporter(self) -> SweepReporter | None:
-        if self.reporter is not None:
-            return self.reporter
-        if self.verbose:
-            return RichSweepReporter()
-        return None
+    def _run_sample(
+        self,
+        configuration: Mapping[str, Any],
+        reporter: SweepReporter | None,
+        sample_index: int,
+        sample_total: int,
+    ) -> tuple[float, dict[str, Any]]:
+        gc.collect()
+        with collect_observations() as collector:
+            start = perf_counter()
+            result = self._invoke_target(configuration)
+            self._sync_if_needed(result)
+            elapsed = perf_counter() - start
+
+        _report(
+            reporter,
+            "on_sample_completed",
+            sample_index=sample_index,
+            sample_total=sample_total,
+            elapsed_seconds=elapsed,
+            observation_count=len(collector.records),
+        )
+        return elapsed, {"sample": sample_index, "records": collector.records}
 
     def run(self, sync: Callable[[], None] | None = None) -> list[BenchmarkResult]:
         prepare_system(lock_cpu_affinity=self.lock_cpu_affinity)
         environment = metadata_to_dict(collect_environment_metadata())
         configurations = self._configurations()
-        reporter = self._reporter()
+        reporter = self.reporter or (RichSweepReporter() if self.verbose else None)
         results: list[BenchmarkResult] = []
-        sample_count = self._sample_count()
-        warmup_count = self._warmup_count()
+        sample_count = self.iterations if self.iterations is not None else self.samples
+        warmup_count = self.warmup_runs if self.warmup_runs is not None else self.warmup_iterations
 
         if sync is not None:
             self.sync = sync
 
-        if reporter is not None:
-            reporter.on_sweep_started(
-                suite_name=self.suite_name,
-                total_configurations=len(configurations),
-                samples=sample_count,
-                warmup_iterations=warmup_count,
-                database_path=get_database_path(self.database_path),
-            )
+        _report(
+            reporter,
+            "on_sweep_started",
+            suite_name=self.suite_name,
+            total_configurations=len(configurations),
+            samples=sample_count,
+            warmup_iterations=warmup_count,
+            database_path=get_database_path(self.database_path),
+        )
 
         for configuration_index, configuration in enumerate(configurations, start=1):
-            if reporter is not None:
-                reporter.on_configuration_started(
-                    index=configuration_index,
-                    total=len(configurations),
-                    configuration=configuration,
-                )
+            _report(
+                reporter,
+                "on_configuration_started",
+                index=configuration_index,
+                total=len(configurations),
+                configuration=configuration,
+            )
 
             for _ in range(warmup_count):
-                warmup_result = self._invoke_target(configuration)
-                self._sync_if_needed(warmup_result)
+                self._sync_if_needed(self._invoke_target(configuration))
 
             samples: list[float] = []
             observations: list[dict[str, Any]] = []
-            for sample_index in range(sample_count):
-                gc.collect()
-                with collect_observations() as collector:
-                    start = perf_counter()
-                    result = self._invoke_target(configuration)
-                    self._sync_if_needed(result)
-                    elapsed = perf_counter() - start
-
+            for sample_index in range(1, sample_count + 1):
+                elapsed, observation = self._run_sample(configuration, reporter, sample_index, sample_count)
                 samples.append(elapsed)
-                observations.append(
-                    {
-                        "sample": sample_index + 1,
-                        "records": collector.records,
-                    }
-                )
-                if reporter is not None:
-                    reporter.on_sample_completed(
-                        sample_index=sample_index + 1,
-                        sample_total=sample_count,
-                        elapsed_seconds=elapsed,
-                        observation_count=len(collector.records),
-                    )
+                observations.append(observation)
 
             median_seconds = float(median(samples))
             record_benchmark_run(
@@ -229,19 +205,18 @@ class Sweep:
                 )
             )
 
-            if reporter is not None:
-                reporter.on_configuration_completed(
-                    index=configuration_index,
-                    total=len(configurations),
-                    configuration=configuration,
-                    median_seconds=median_seconds,
-                    sample_count=len(samples),
-                )
+            _report(
+                reporter,
+                "on_configuration_completed",
+                index=configuration_index,
+                total=len(configurations),
+                configuration=configuration,
+                median_seconds=median_seconds,
+                sample_count=len(samples),
+            )
 
-        if reporter is not None:
-            reporter.on_sweep_completed(results=results)
+        _report(reporter, "on_sweep_completed", results=results)
 
         return results
 
-    def __call__(self) -> list[BenchmarkResult]:
-        return self.run()
+    __call__ = run

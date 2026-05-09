@@ -5,9 +5,11 @@ from typing import Any
 
 from sqlalchemy import DateTime, Float, ForeignKey, String, create_engine, select
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 from sqlalchemy.sql.functions import count, max as sql_max, now
 from sqlalchemy.types import JSON
+
+from .observability import summarize_observations
 
 
 class Base(DeclarativeBase):
@@ -41,6 +43,31 @@ class EnvironmentInfo(Base):
 
     runs: Mapped[list["BenchmarkRun"]] = relationship(back_populates="environment")
 
+    @classmethod
+    def from_payload(cls, environment: dict[str, Any]) -> "EnvironmentInfo":
+        return cls(
+            python_version=environment["python_version"],
+            operating_system=environment["operating_system"],
+            cpu_model=environment["cpu_model"],
+            gpu_model=environment.get("gpu_model"),
+            git_branch=environment["git"]["branch"],
+            git_commit_hash=environment["git"]["commit_hash"],
+            git_dirty=environment["git"]["dirty"],
+            process_state=environment["process"],
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "python_version": self.python_version,
+            "operating_system": self.operating_system,
+            "cpu_model": self.cpu_model,
+            "gpu_model": self.gpu_model,
+            "git_branch": self.git_branch,
+            "git_commit_hash": self.git_commit_hash,
+            "git_dirty": self.git_dirty,
+            "process_state": self.process_state,
+        }
+
 
 class BenchmarkRun(Base):
     __tablename__ = "benchmark_runs"
@@ -57,6 +84,31 @@ class BenchmarkRun(Base):
     suite: Mapped[BenchmarkSuite] = relationship(back_populates="runs")
     environment: Mapped[EnvironmentInfo] = relationship(back_populates="runs")
 
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "configuration": self.configuration,
+            "samples": self.samples,
+            "observations": self.observations,
+            "median_seconds": self.median_seconds,
+            "created_at": self.created_at,
+        }
+
+    def to_suite_comparison_row(self, best_median_seconds: float) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "configuration": self.configuration,
+            "median_seconds": self.median_seconds,
+            "delta_seconds": self.median_seconds - best_median_seconds,
+            "slowdown_factor": None if best_median_seconds <= 0 else self.median_seconds / best_median_seconds,
+            "sample_count": len(self.samples),
+            "created_at": self.created_at,
+        }
+
+
+def _suite_query(suite_name: str):
+    return select(BenchmarkSuite).where(BenchmarkSuite.name == suite_name)
+
 
 def get_database_path(database_path: str | Path | None = None) -> Path:
     if database_path is None:
@@ -64,16 +116,19 @@ def get_database_path(database_path: str | Path | None = None) -> Path:
     return Path(database_path).resolve()
 
 
+from contextlib import contextmanager
+
 def get_engine(database_path: str | Path | None = None) -> Engine:
     path = get_database_path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return create_engine(f"sqlite:///{path}", future=True)
 
-
-def get_session_factory(database_path: str | Path | None = None) -> sessionmaker[Session]:
+@contextmanager
+def db_session(database_path: str | Path | None = None):
     engine = get_engine(database_path)
     Base.metadata.create_all(engine)
-    return sessionmaker(engine, expire_on_commit=False)
+    with Session(engine, expire_on_commit=False) as session:
+        yield session
 
 
 def record_benchmark_run(
@@ -87,27 +142,14 @@ def record_benchmark_run(
     environment: dict[str, Any],
     database_path: str | Path | None = None,
 ) -> BenchmarkRun:
-    session_factory = get_session_factory(database_path)
-
-    with session_factory() as session:
-        suite = session.scalar(
-            select(BenchmarkSuite).where(BenchmarkSuite.name == suite_name)
-        )
+    with db_session(database_path) as session:
+        suite = session.scalar(_suite_query(suite_name))
         if suite is None:
             suite = BenchmarkSuite(name=suite_name, target_name=target_name)
             session.add(suite)
             session.flush()
 
-        environment_info = EnvironmentInfo(
-            python_version=environment["python_version"],
-            operating_system=environment["operating_system"],
-            cpu_model=environment["cpu_model"],
-            gpu_model=environment.get("gpu_model"),
-            git_branch=environment["git"]["branch"],
-            git_commit_hash=environment["git"]["commit_hash"],
-            git_dirty=environment["git"]["dirty"],
-            process_state=environment["process"],
-        )
+        environment_info = EnvironmentInfo.from_payload(environment)
         session.add(environment_info)
         session.flush()
 
@@ -126,8 +168,7 @@ def record_benchmark_run(
 
 
 def list_suite_summaries(database_path: str | Path | None = None) -> list[dict[str, Any]]:
-    session_factory = get_session_factory(database_path)
-    with session_factory() as session:
+    with db_session(database_path) as session:
         rows = session.execute(
             select(
                 BenchmarkSuite.name,
@@ -155,11 +196,8 @@ def get_suite_details(
     suite_name: str,
     database_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    session_factory = get_session_factory(database_path)
-    with session_factory() as session:
-        suite = session.scalar(
-            select(BenchmarkSuite).where(BenchmarkSuite.name == suite_name)
-        )
+    with db_session(database_path) as session:
+        suite = session.scalar(_suite_query(suite_name))
         if suite is None:
             return None
 
@@ -175,29 +213,8 @@ def get_suite_details(
     return {
         "suite_name": suite.name,
         "target_name": suite.target_name,
-        "runs": [
-            {
-                "id": run.id,
-                "configuration": run.configuration,
-                "samples": run.samples,
-                "observations": run.observations,
-                "median_seconds": run.median_seconds,
-                "created_at": run.created_at,
-            }
-            for run in runs
-        ],
-        "environment": None
-        if environment is None
-        else {
-            "python_version": environment.python_version,
-            "operating_system": environment.operating_system,
-            "cpu_model": environment.cpu_model,
-            "gpu_model": environment.gpu_model,
-            "git_branch": environment.git_branch,
-            "git_commit_hash": environment.git_commit_hash,
-            "git_dirty": environment.git_dirty,
-            "process_state": environment.process_state,
-        },
+        "runs": [run.to_payload() for run in runs],
+        "environment": None if environment is None else environment.to_payload(),
     }
 
 
@@ -205,11 +222,8 @@ def compare_suite_runs(
     suite_name: str,
     database_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    session_factory = get_session_factory(database_path)
-    with session_factory() as session:
-        suite = session.scalar(
-            select(BenchmarkSuite).where(BenchmarkSuite.name == suite_name)
-        )
+    with db_session(database_path) as session:
+        suite = session.scalar(_suite_query(suite_name))
         if suite is None:
             return None
 
@@ -228,30 +242,11 @@ def compare_suite_runs(
         }
 
     best_median_seconds = runs[0].median_seconds
-    comparison_rows = []
-    for run in runs:
-        delta_seconds = run.median_seconds - best_median_seconds
-        slowdown_factor = None
-        if best_median_seconds > 0:
-            slowdown_factor = run.median_seconds / best_median_seconds
-
-        comparison_rows.append(
-            {
-                "id": run.id,
-                "configuration": run.configuration,
-                "median_seconds": run.median_seconds,
-                "delta_seconds": delta_seconds,
-                "slowdown_factor": slowdown_factor,
-                "sample_count": len(run.samples),
-                "created_at": run.created_at,
-            }
-        )
-
     return {
         "suite_name": suite.name,
         "target_name": suite.target_name,
         "best_median_seconds": best_median_seconds,
-        "runs": comparison_rows,
+        "runs": [run.to_suite_comparison_row(best_median_seconds) for run in runs],
     }
 
 
@@ -259,8 +254,7 @@ def get_run_details(
     run_id: int,
     database_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
-    session_factory = get_session_factory(database_path)
-    with session_factory() as session:
+    with db_session(database_path) as session:
         run = session.get(BenchmarkRun, run_id)
         if run is None:
             return None
@@ -277,16 +271,7 @@ def get_run_details(
         "observations": run.observations,
         "median_seconds": run.median_seconds,
         "created_at": run.created_at,
-        "environment": {
-            "python_version": environment.python_version,
-            "operating_system": environment.operating_system,
-            "cpu_model": environment.cpu_model,
-            "gpu_model": environment.gpu_model,
-            "git_branch": environment.git_branch,
-            "git_commit_hash": environment.git_commit_hash,
-            "git_dirty": environment.git_dirty,
-            "process_state": environment.process_state,
-        },
+        "environment": environment.to_payload(),
     }
 
 
@@ -307,34 +292,22 @@ def compare_runs(
             / baseline["median_seconds"]
         ) * 100.0
 
-    def aggregate_observations(observations: list[dict[str, Any]]) -> dict[str, float]:
-        totals: dict[str, float] = {}
-        for sample in observations:
-            for record in sample["records"]:
-                label = str(record["label"])
-                totals[label] = totals.get(label, 0.0) + float(record["duration_seconds"])
-        return totals
-
-    baseline_observations = aggregate_observations(baseline["observations"])
-    candidate_observations = aggregate_observations(candidate["observations"])
+    baseline_observations = summarize_observations(baseline["observations"])
+    candidate_observations = summarize_observations(candidate["observations"])
     labels = sorted(set(baseline_observations) | set(candidate_observations))
-    observation_rows = []
-    for label in labels:
-        baseline_value = baseline_observations.get(label, 0.0)
-        candidate_value = candidate_observations.get(label, 0.0)
-        observation_rows.append(
-            {
-                "label": label,
-                "baseline_seconds": baseline_value,
-                "candidate_seconds": candidate_value,
-                "delta_seconds": candidate_value - baseline_value,
-            }
-        )
 
     return {
         "baseline": baseline,
         "candidate": candidate,
         "delta_seconds": candidate["median_seconds"] - baseline["median_seconds"],
         "percent_change": percent_change,
-        "observation_rows": observation_rows,
+        "observation_rows": [
+            {
+                "label": label,
+                "baseline_seconds": baseline_observations.get(label, (0, 0.0))[1],
+                "candidate_seconds": candidate_observations.get(label, (0, 0.0))[1],
+                "delta_seconds": candidate_observations.get(label, (0, 0.0))[1] - baseline_observations.get(label, (0, 0.0))[1],
+            }
+            for label in labels
+        ],
     }

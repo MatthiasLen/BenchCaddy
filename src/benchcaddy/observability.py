@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -14,12 +15,7 @@ class ObservationCollector:
     records: list[dict[str, float | str]] = field(default_factory=list)
 
     def record(self, label: str, duration_seconds: float) -> None:
-        self.records.append(
-            {
-                "label": label,
-                "duration_seconds": duration_seconds,
-            }
-        )
+        self.records.append({"label": label, "duration_seconds": duration_seconds})
 
 
 _ACTIVE_COLLECTOR: ContextVar[ObservationCollector | None] = ContextVar(
@@ -29,12 +25,14 @@ _ACTIVE_COLLECTOR: ContextVar[ObservationCollector | None] = ContextVar(
 _BENCH_ACTIVE: ContextVar[bool] = ContextVar("benchcaddy_bench_active", default=False)
 
 
-def get_active_collector() -> ObservationCollector | None:
-    return _ACTIVE_COLLECTOR.get()
-
-
-def is_bench_active() -> bool:
-    return _BENCH_ACTIVE.get() or bool(os.getenv("BENCH_ACTIVE"))
+def summarize_observations(observations: Iterable[dict[str, Any]]) -> dict[str, tuple[int, float]]:
+    summary: dict[str, tuple[int, float]] = {}
+    for sample in observations:
+        for record in sample["records"]:
+            label = str(record["label"])
+            calls, total = summary.get(label, (0, 0.0))
+            summary[label] = (calls + 1, total + float(record["duration_seconds"]))
+    return summary
 
 
 @contextmanager
@@ -53,10 +51,10 @@ def observe(label: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(function)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            if not is_bench_active():
+            if not (_BENCH_ACTIVE.get() or bool(os.getenv("BENCH_ACTIVE"))):
                 return function(*args, **kwargs)
 
-            collector = get_active_collector()
+            collector = _ACTIVE_COLLECTOR.get()
             if collector is None:
                 return function(*args, **kwargs)
 

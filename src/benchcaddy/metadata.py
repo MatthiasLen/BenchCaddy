@@ -5,7 +5,6 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 import psutil
 from git import InvalidGitRepositoryError, NoSuchPathError, Repo
@@ -51,8 +50,7 @@ def _run_command(command: list[str]) -> str | None:
     except (FileNotFoundError, subprocess.SubprocessError):
         return None
 
-    output = completed.stdout.strip()
-    return output or None
+    return completed.stdout.strip() or None
 
 
 def _read_cpu_model() -> str:
@@ -75,13 +73,8 @@ def _read_cpu_model() -> str:
 
 
 def _read_gpu_model() -> str | None:
-    nvidia_output = _run_command(
-        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
-    )
-    if nvidia_output:
-        gpu_names = [line.strip() for line in nvidia_output.splitlines() if line.strip()]
-        if gpu_names:
-            return ", ".join(gpu_names)
+    if nvidia_output := _run_command(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]):
+        return ", ".join(line.strip() for line in nvidia_output.splitlines() if line.strip()) or None
 
     system = platform.system().lower()
     if system == "darwin":
@@ -96,10 +89,7 @@ def _read_gpu_model() -> str | None:
                         return gpu_name
         return None
     if system == "windows":
-        wmic_output = _run_command(
-            ["wmic", "path", "win32_VideoController", "get", "name"]
-        )
-        if wmic_output:
+        if wmic_output := _run_command(["wmic", "path", "win32_VideoController", "get", "name"]):
             for line in wmic_output.splitlines():
                 stripped = line.strip()
                 if stripped and stripped.lower() != "name":
@@ -125,28 +115,18 @@ def collect_git_state(cwd: Path | None = None) -> GitState:
 
 def collect_process_state() -> ProcessState:
     process = psutil.Process()
-    affinity: list[int] = []
-    if hasattr(process, "cpu_affinity"):
-        try:
-            affinity = list(process.cpu_affinity())
-        except (psutil.AccessDenied, NotImplementedError):
-            affinity = []
-
-    try:
-        priority: int | str | None = process.nice()
-    except (psutil.AccessDenied, AttributeError):
-        priority = None
-
-    try:
-        peak_rss_bytes = process.memory_info().rss
-    except (psutil.AccessDenied, AttributeError, OSError):
-        peak_rss_bytes = None
+    try: affinity = list(process.cpu_affinity())
+    except (psutil.AccessDenied, NotImplementedError, AttributeError): affinity = []
+    try: priority = process.nice()
+    except (psutil.AccessDenied, AttributeError): priority = None
+    try: peak_rss = process.memory_info().rss
+    except (psutil.AccessDenied, AttributeError, OSError): peak_rss = None
 
     return ProcessState(
         pid=process.pid,
         priority=priority,
         affinity=affinity,
-        peak_rss_bytes=peak_rss_bytes,
+        peak_rss_bytes=peak_rss,
     )
 
 
@@ -167,5 +147,4 @@ def collect_environment_metadata(cwd: Path | None = None) -> EnvironmentMetadata
     )
 
 
-def metadata_to_dict(metadata: EnvironmentMetadata) -> dict[str, Any]:
-    return asdict(metadata)
+metadata_to_dict = asdict
