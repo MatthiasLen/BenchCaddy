@@ -47,6 +47,14 @@ def _format_time(mean_seconds: float | None, std_seconds: float | None) -> str:
     return f"{mean_value:.6f} +- {std_value:.6f}"
 
 
+def _styled(value: object, style: str | None = None) -> Text:
+    return Text(str(value), style=style)
+
+
+def _style_row(values: tuple[object, ...], style: str | None = None) -> tuple[object, ...]:
+    return tuple(_styled(value, style) if style else value for value in values)
+
+
 def _format_optional_seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.6f}"
 
@@ -56,7 +64,7 @@ def _render_observation_table(observations: list[dict[str, object]], title: str)
 
     return render_table(
         title,
-        ["Label", ("Calls", "right"), ("Time (s)", "right"), ("Total (s)", "right")],
+        ["Label", ("Calls", "right"), ("Mean +- Std (s)", "right"), ("Total (s)", "right")],
         [
             (
                 label,
@@ -82,7 +90,7 @@ def _show_run(run: dict[str, object]) -> None:
                 ("Suite", run["suite_name"]),
                 ("Target", run["target_name"]),
                 ("Configuration", dump_json(run["configuration"])),
-                ("Time (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
+                ("Mean +- Std (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
                 ("Min (s)", f"{run.get('min_seconds') or 0:.6f}"),
                 ("Max (s)", f"{run.get('max_seconds') or 0:.6f}"),
                 ("Samples", len(run["samples"])),
@@ -97,7 +105,7 @@ def _show_run(run: dict[str, object]) -> None:
 def _show_suite(details: dict[str, object]) -> None:
     console.print(render_table(
         f"Suite: {details['suite_name']}",
-        [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Time (s)", "right"), ("Samples", "right"), "Recorded At"],
+        [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), ("Samples", "right"), "Recorded At"],
         [
             (
                 run["display_id"],
@@ -113,7 +121,7 @@ def _show_suite(details: dict[str, object]) -> None:
     console.print(
         render_table(
             f"Observed Timings: {details['suite_name']}",
-            [("Run ID", "right"), "Label", ("Calls", "right"), ("Time (s)", "right")],
+            [("Run ID", "right"), "Label", ("Calls", "right"), ("Mean +- Std (s)", "right")],
             [
                 (
                     run["display_id"],
@@ -142,7 +150,7 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
             "Suite",
             "Target",
             "Configuration",
-            ("Time (s)", "right"),
+            ("Mean +- Std (s)", "right"),
             ("Samples", "right"),
             "Recorded At",
         ],
@@ -163,7 +171,7 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
     console.print(
         render_table(
             "Observed Timings: Selected Runs",
-            [("Run ID", "right"), ("Record ID", "right"), "Label", ("Calls", "right"), ("Time (s)", "right")],
+            [("Run ID", "right"), ("Record ID", "right"), "Label", ("Calls", "right"), ("Mean +- Std (s)", "right")],
             [
                 (
                     run["display_id"],
@@ -194,26 +202,29 @@ def _print_run_comparison(
 ) -> None:
     baseline = comparison["baseline"]
     candidate = comparison["candidate"]
+    baseline_style = "green" if baseline["median_seconds"] <= candidate["median_seconds"] else None
+    candidate_style = "green" if candidate["median_seconds"] <= baseline["median_seconds"] else None
     console.print(
         render_table(
             f"Run Comparison: {baseline['display_id']} -> {candidate['display_id']}",
             ["Field", "Baseline", "Candidate"],
             [
-                ("Run ID", baseline["display_id"], candidate["display_id"]),
-                ("Record ID", baseline["id"], candidate["id"]),
+                ("Run ID", _styled(baseline["display_id"], baseline_style), _styled(candidate["display_id"], candidate_style)),
+                ("Record ID", _styled(baseline["id"], baseline_style), _styled(candidate["id"], candidate_style)),
                 *[
                     (
                         key,
-                        dump_json(baseline["configuration"].get(key)),
-                        dump_json(candidate["configuration"].get(key)),
+                        _styled(dump_json(baseline["configuration"].get(key)), baseline_style),
+                        _styled(dump_json(candidate["configuration"].get(key)), candidate_style),
                     )
                     for key in _filtered_keys(baseline, candidate, filter_keys)
                 ],
-                ("Time (s)", _format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), _format_time(candidate.get("mean_seconds"), candidate.get("std_seconds"))),
-                ("Min (s)", f"{baseline.get('min_seconds') or 0:.6f}", f"{candidate.get('min_seconds') or 0:.6f}"),
-                ("Max (s)", f"{baseline.get('max_seconds') or 0:.6f}", f"{candidate.get('max_seconds') or 0:.6f}"),
-                ("Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
-                ("Percent Change", "", _style_delta(comparison["percent_change"])),
+                ("Median (s)", _styled(f"{baseline['median_seconds']:.6f}", baseline_style), _styled(f"{candidate['median_seconds']:.6f}", candidate_style)),
+                ("Mean +- Std (s)", _styled(_format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), baseline_style), _styled(_format_time(candidate.get("mean_seconds"), candidate.get("std_seconds")), candidate_style)),
+                ("Min (s)", _styled(f"{baseline.get('min_seconds') or 0:.6f}", baseline_style), _styled(f"{candidate.get('min_seconds') or 0:.6f}", candidate_style)),
+                ("Max (s)", _styled(f"{baseline.get('max_seconds') or 0:.6f}", baseline_style), _styled(f"{candidate.get('max_seconds') or 0:.6f}", candidate_style)),
+                ("Median Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
+                ("Median Percent Change", "", _style_delta(comparison["percent_change"])),
             ],
         )
     )
@@ -240,16 +251,19 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
     console.print(
         render_table(
             f"Comparison: {comparison['suite_name']}",
-            [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Time (s)", "right"), ("Delta vs Best (s)", "right"), ("Slowdown", "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
+            [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), ("Delta vs Best (s)", "right"), ("Slowdown", "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
             [
-                (
-                    run["display_id"],
-                    run["id"],
-                    dump_json(run["configuration"]),
-                    _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                    f"{run['delta_seconds']:.6f}",
-                    "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
-                    *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
+                _style_row(
+                    (
+                        run["display_id"],
+                        run["id"],
+                        dump_json(run["configuration"]),
+                        _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+                        f"{run['delta_seconds']:.6f}",
+                        "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
+                        *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
+                    ),
+                    "green" if run["delta_seconds"] == 0 else None,
                 )
                 for run in comparison["runs"]
             ],
@@ -265,7 +279,7 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
                         f"Run ID: {best_run['display_id']}",
                         f"Record ID: {best_run['id']}",
                         f"Best Median (s): {best_run['median_seconds']:.6f}",
-                        f"Time (s): {_format_time(best_run.get('mean_seconds'), best_run.get('std_seconds'))}",
+                        f"Mean +- Std (s): {_format_time(best_run.get('mean_seconds'), best_run.get('std_seconds'))}",
                     ]
                 ),
                 title="Comparison Basis",
