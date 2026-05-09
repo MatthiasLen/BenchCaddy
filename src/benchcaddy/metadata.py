@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import platform
 import subprocess
 import sys
@@ -26,6 +25,7 @@ class ProcessState:
     pid: int
     priority: int | str | None
     affinity: list[int]
+    peak_rss_bytes: int | None
 
 
 @dataclass
@@ -33,6 +33,7 @@ class EnvironmentMetadata:
     python_version: str
     operating_system: str
     cpu_model: str
+    total_memory_bytes: int | None
     gpu_model: str | None
     git: GitState
     process: ProcessState
@@ -136,14 +137,30 @@ def collect_process_state() -> ProcessState:
     except (psutil.AccessDenied, AttributeError):
         priority = None
 
-    return ProcessState(pid=process.pid, priority=priority, affinity=affinity)
+    try:
+        peak_rss_bytes = process.memory_info().rss
+    except (psutil.AccessDenied, AttributeError, OSError):
+        peak_rss_bytes = None
+
+    return ProcessState(
+        pid=process.pid,
+        priority=priority,
+        affinity=affinity,
+        peak_rss_bytes=peak_rss_bytes,
+    )
 
 
 def collect_environment_metadata(cwd: Path | None = None) -> EnvironmentMetadata:
+    try:
+        total_memory_bytes = psutil.virtual_memory().total
+    except (psutil.Error, AttributeError):
+        total_memory_bytes = None
+
     return EnvironmentMetadata(
         python_version=sys.version.split()[0],
         operating_system=platform.platform(),
         cpu_model=_read_cpu_model(),
+        total_memory_bytes=total_memory_bytes,
         gpu_model=_read_gpu_model(),
         git=collect_git_state(cwd),
         process=collect_process_state(),

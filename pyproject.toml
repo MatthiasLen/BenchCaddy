@@ -16,6 +16,11 @@ dependencies = [
     "psutil>=6.1.1",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+]
+
 [project.scripts]
 benchcaddy = "benchcaddy.cli:main"
 
