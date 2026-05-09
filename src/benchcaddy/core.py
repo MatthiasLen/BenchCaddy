@@ -36,6 +36,7 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
         if os.name == "nt" and hasattr(psutil, "HIGH_PRIORITY_CLASS"):
             process.nice(psutil.HIGH_PRIORITY_CLASS)
         elif hasattr(os, "nice"):
+            # set to highest priority
             os.nice(_MAX_UNIX_PRIORITY - os.nice(0))
     except (PermissionError, psutil.AccessDenied, AttributeError, OSError):
         pass
@@ -44,6 +45,8 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
         try:
             affinity = list(process.cpu_affinity())
             if affinity:
+                # Self-Affinity Refresh: Re-apply the current affinity to potentially lock 
+                # the process to the current CPU set and avoid migrations.
                 process.cpu_affinity(affinity)
         except (psutil.AccessDenied, NotImplementedError, ValueError):
             pass

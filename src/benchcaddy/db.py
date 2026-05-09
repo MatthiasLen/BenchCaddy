@@ -389,7 +389,11 @@ def get_run_details(
         "configuration": run.configuration,
         "samples": run.samples,
         "observations": run.observations,
+        "mean_seconds": run.mean_seconds,
         "median_seconds": run.median_seconds,
+        "min_seconds": run.min_seconds,
+        "max_seconds": run.max_seconds,
+        "std_seconds": run.std_seconds,
         "created_at": run.created_at,
         "environment": environment.to_payload(),
     }
@@ -424,9 +428,13 @@ def compare_runs(
         "observation_rows": [
             {
                 "label": label,
-                "baseline_seconds": baseline_observations.get(label, (0, 0.0))[1],
-                "candidate_seconds": candidate_observations.get(label, (0, 0.0))[1],
-                "delta_seconds": candidate_observations.get(label, (0, 0.0))[1] - baseline_observations.get(label, (0, 0.0))[1],
+                "baseline_seconds": baseline_observations[label][1] if label in baseline_observations else None,
+                "candidate_seconds": candidate_observations[label][1] if label in candidate_observations else None,
+                "delta_seconds": (
+                    candidate_observations[label][1] - baseline_observations[label][1]
+                    if label in baseline_observations and label in candidate_observations
+                    else None
+                ),
             }
             for label in labels
         ],
