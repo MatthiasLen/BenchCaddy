@@ -188,6 +188,51 @@ def test_cli_lists_shows_and_compares_runs(
     assert multi_show_result.stdout.index("2.1") < multi_show_result.stdout.index("1.1")
 
 
+def test_cli_renders_missing_min_max_as_dash(tmp_path: Path, environment_payload: dict[str, object]) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    record_benchmark_run(
+        suite_name="nullable-times",
+        target_name="benchmark_target",
+        configuration={"variant": "baseline"},
+        samples=[0.1, 0.2],
+        observations=[],
+        median_seconds=0.15,
+        min_seconds=None,
+        max_seconds=None,
+        std_seconds=0.01,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="nullable-times",
+        target_name="benchmark_target",
+        configuration={"variant": "candidate"},
+        samples=[0.3, 0.4],
+        observations=[],
+        median_seconds=0.35,
+        min_seconds=None,
+        max_seconds=None,
+        std_seconds=0.01,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
+    assert show_result.exit_code == 0
+    assert "Min (s)" in show_result.stdout
+    assert "Max (s)" in show_result.stdout
+    assert "-" in show_result.stdout
+
+    compare_result = runner.invoke(app, ["compare", "1.1", "2.1", "--database", str(database_path)])
+    assert compare_result.exit_code == 0
+    assert "Run Comparison: 1.1 -> 2.1" in compare_result.stdout
+    assert "Min (s)" in compare_result.stdout
+    assert "Max (s)" in compare_result.stdout
+    assert "-" in compare_result.stdout
+
+
 def test_run_compare_marks_missing_observations(tmp_path: Path, environment_payload: dict[str, object]) -> None:
     database_path = tmp_path / "benchcaddy.db"
     runner = CliRunner()

@@ -17,7 +17,7 @@ def initial_signal(size: int) -> list[float]:
     ]
 
 
-@observe("nonlinear_iter")
+@observe("nonlinear_iteration")
 def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     next_values: list[float] = []
     for value in values:
@@ -32,6 +32,7 @@ def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
             transformed += 0.03 * math.exp(-(value * value))
         next_values.append(transformed)
     return next_values
+
 
 @observe("outer_loop")
 def benchmark_case(size: int, variant: str) -> float:

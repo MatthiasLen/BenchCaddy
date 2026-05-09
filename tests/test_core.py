@@ -72,6 +72,7 @@ def test_sweep_records_results_and_observations(
     assert len(details["runs"]) == 2
     assert [run["display_id"] for run in details["runs"]] == ["1.2", "1.1"]
     assert details["environment"]["python_version"] == "3.12.0"
+    assert details["environment"]["total_memory_bytes"] == 17179869184
 
 
 def test_verbose_sweep_uses_reporter(
