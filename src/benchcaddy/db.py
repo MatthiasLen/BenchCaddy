@@ -485,7 +485,8 @@ def get_selected_run_details(
     run_ids: Sequence[int | tuple[int, int]],
     database_path: str | Path | None = None,
 ) -> list[dict[str, Any]] | None:
-    runs = [get_run_details(run_id, database_path) for run_id in run_ids]
+    unique_run_ids = list(dict.fromkeys(run_ids))
+    runs = [get_run_details(run_id, database_path) for run_id in unique_run_ids]
     if any(run is None for run in runs):
         return None
 

@@ -187,6 +187,13 @@ def test_cli_lists_shows_and_compares_runs(
     assert "Observed Timings: Selected Runs" in multi_show_result.stdout
     assert multi_show_result.stdout.index("2.1") < multi_show_result.stdout.index("1.1")
 
+    duplicate_multi_show_result = runner.invoke(
+        app,
+        ["show", "1", "2.1", "1", "--database", str(database_path)],
+    )
+    assert duplicate_multi_show_result.exit_code == 0
+    assert duplicate_multi_show_result.stdout == multi_show_result.stdout
+
 
 def test_cli_show_renders_partial_git_environment(tmp_path: Path, environment_payload: dict[str, object]) -> None:
     database_path = tmp_path / "benchcaddy.db"
