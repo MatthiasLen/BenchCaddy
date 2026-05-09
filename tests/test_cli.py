@@ -105,7 +105,7 @@ def test_cli_lists_shows_and_compares_runs(
     )
     assert show_result.exit_code == 0
     assert "Suite: nonlinear-transform" in show_result.stdout
-    assert "Time (s)" in show_result.stdout
+    assert "Mean +- Std (s)" in show_result.stdout
     assert "0.100000" in show_result.stdout
     assert "+-" in show_result.stdout
     assert "0.000000" in show_result.stdout
@@ -122,7 +122,7 @@ def test_cli_lists_shows_and_compares_runs(
     assert "Comparison: nonlinear-transform" in compare_result.stdout
     assert "Delta" in compare_result.stdout
     assert "Best" in compare_result.stdout
-    assert "Time (s)" in compare_result.stdout
+    assert "Mean +- Std (s)" in compare_result.stdout
     assert "1.1" in compare_result.stdout
     assert "2.1" in compare_result.stdout
     assert "1.50x" in compare_result.stdout
@@ -138,13 +138,14 @@ def test_cli_lists_shows_and_compares_runs(
     assert "Best Median (s): 0.100000" in verbose_compare_result.stdout
     assert "Run ID: 1.1" in verbose_compare_result.stdout
     assert "Record ID: 1" in verbose_compare_result.stdout
-    assert "Time (s): 0.100000" in verbose_compare_result.stdout
+    assert "Mean +- Std (s):" in verbose_compare_result.stdout
+    assert "0.100000 +- 0.000000" in verbose_compare_result.stdout
     assert "+- 0.000000" in verbose_compare_result.stdout
 
     run_show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
     assert run_show_result.exit_code == 0
     assert "Run: 1.1" in run_show_result.stdout
-    assert "Time (s)" in run_show_result.stdout
+    assert "Mean +- Std (s)" in run_show_result.stdout
     assert "0.100000 +- 0.000000" in run_show_result.stdout
     assert "Min (s)" in run_show_result.stdout
     assert "Max (s)" in run_show_result.stdout
@@ -158,6 +159,9 @@ def test_cli_lists_shows_and_compares_runs(
     )
     assert run_compare_result.exit_code == 0
     assert "Run Comparison: 1.1 -> 2.1" in run_compare_result.stdout
+    assert "Median (s)" in run_compare_result.stdout
+    assert "Median Delta (s)" in run_compare_result.stdout
+    assert "Median Percent Change" in run_compare_result.stdout
     assert "inner" in run_compare_result.stdout
     assert "outer" in run_compare_result.stdout
     assert "+50.00%" in run_compare_result.stdout
@@ -290,4 +294,5 @@ def test_suite_compare_basis_matches_best_run_time_and_std(
     assert "Run ID: 1.1" in compare_result.stdout
     assert "Record ID: 1" in compare_result.stdout
     assert "Best Median (s): 0.100000" in compare_result.stdout
-    assert "Time (s): 0.126667" in compare_result.stdout
+    assert "Mean +- Std (s):" in compare_result.stdout
+    assert "0.126667 +- 0.064291" in compare_result.stdout
