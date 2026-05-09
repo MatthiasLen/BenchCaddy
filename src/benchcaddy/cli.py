@@ -25,7 +25,11 @@ class CLIState:
 _STATE = CLIState()
 
 
-def _as_run_id(value: str) -> int | None:
+def _as_run_id(value: str) -> int | tuple[int, int] | None:
+    if "." in value:
+        left, dot, right = value.partition(".")
+        if dot and left.isdigit() and right.isdigit():
+            return (int(left), int(right))
     try:
         return int(value)
     except ValueError:
@@ -35,6 +39,12 @@ def _as_run_id(value: str) -> int | None:
 def _style_delta(percent_change: float | None) -> Text:
     if percent_change is None: return Text("n/a")
     return Text(f"{percent_change:+.2f}%", style="green" if percent_change <= -5.0 else "red" if percent_change >= 5.0 else None)
+
+
+def _format_time(mean_seconds: float | None, std_seconds: float | None) -> str:
+    mean_value = 0.0 if mean_seconds is None else mean_seconds
+    std_value = 0.0 if std_seconds is None else std_seconds
+    return f"{mean_value:.6f} +- {std_value:.6f}"
 
 
 def _render_observation_table(observations: list[dict[str, object]], title: str) -> Table:
@@ -58,16 +68,19 @@ def _render_observation_table(observations: list[dict[str, object]], title: str)
 def _show_run(run: dict[str, object]) -> None:
     console.print(
         render_table(
-            f"Run: {run['id']}",
+            f"Run: {run['display_id']}",
             ["Field", "Value"],
             [
+                ("Run ID", run["display_id"]),
+                ("Record ID", run["id"]),
+                ("Sweep ID", run["sweep_id"]),
+                ("Run Index", run["run_index"]),
                 ("Suite", run["suite_name"]),
                 ("Target", run["target_name"]),
                 ("Configuration", dump_json(run["configuration"])),
-                ("Median (s)", f"{run['median_seconds']:.6f}"),
+                ("Time (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
                 ("Min (s)", f"{run.get('min_seconds') or 0:.6f}"),
                 ("Max (s)", f"{run.get('max_seconds') or 0:.6f}"),
-                ("Std (s)", f"{run.get('std_seconds') or 0:.6f}"),
                 ("Samples", len(run["samples"])),
                 ("Recorded At", run["created_at"]),
             ],
@@ -80,24 +93,40 @@ def _show_run(run: dict[str, object]) -> None:
 def _show_suite(details: dict[str, object]) -> None:
     console.print(render_table(
         f"Suite: {details['suite_name']}",
-        [("Run ID", "right"), "Configuration", ("Median (s)", "right"), ("Std (s)", "right"), ("Samples", "right"), "Recorded At"],
+        [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Time (s)", "right"), ("Samples", "right"), "Recorded At"],
         [
             (
+                run["display_id"],
                 run["id"],
                 dump_json(run["configuration"]),
-                f"{run['median_seconds']:.6f}",
-                f"{run.get('std_seconds') or 0:.6f}",
+                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
                 len(run["samples"]),
                 run["created_at"],
             )
             for run in details["runs"]
         ],
     ))
+    console.print(
+        render_table(
+            f"Observed Timings: {details['suite_name']}",
+            [("Run ID", "right"), "Label", ("Calls", "right"), ("Time (s)", "right")],
+            [
+                (
+                    run["display_id"],
+                    label,
+                    calls,
+                    _format_time(total / calls, 0.0),
+                )
+                for run in details["runs"]
+                for label, (calls, total) in sorted(summarize_observations(run["observations"]).items())
+            ],
+        )
+    )
     if details["environment"] is not None:
         console.print(json_panel("Environment", details["environment"], indent=2))
     if _STATE.verbose:
         for run in details["runs"]:
-            console.print(_render_observation_table(run["observations"], title=f"Observed Timings for Run {run['id']}"))
+            console.print(_render_observation_table(run["observations"], title=f"Observed Timings for Run {run['display_id']}"))
 
 
 def _filtered_keys(
@@ -110,8 +139,6 @@ def _filtered_keys(
 
 
 def _print_run_comparison(
-    left_run_id: int,
-    right_run_id: int,
     comparison: dict[str, object],
     filter_keys: list[str] | None,
 ) -> None:
@@ -119,9 +146,11 @@ def _print_run_comparison(
     candidate = comparison["candidate"]
     console.print(
         render_table(
-            f"Run Comparison: {left_run_id} -> {right_run_id}",
+            f"Run Comparison: {baseline['display_id']} -> {candidate['display_id']}",
             ["Field", "Baseline", "Candidate"],
             [
+                ("Run ID", baseline["display_id"], candidate["display_id"]),
+                ("Record ID", baseline["id"], candidate["id"]),
                 *[
                     (
                         key,
@@ -130,10 +159,9 @@ def _print_run_comparison(
                     )
                     for key in _filtered_keys(baseline, candidate, filter_keys)
                 ],
-                ("Median (s)", f"{baseline['median_seconds']:.6f}", f"{candidate['median_seconds']:.6f}"),
+                ("Time (s)", _format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), _format_time(candidate.get("mean_seconds"), candidate.get("std_seconds"))),
                 ("Min (s)", f"{baseline.get('min_seconds') or 0:.6f}", f"{candidate.get('min_seconds') or 0:.6f}"),
                 ("Max (s)", f"{baseline.get('max_seconds') or 0:.6f}", f"{candidate.get('max_seconds') or 0:.6f}"),
-                ("Std (s)", f"{baseline.get('std_seconds') or 0:.6f}", f"{candidate.get('std_seconds') or 0:.6f}"),
                 ("Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
                 ("Percent Change", "", _style_delta(comparison["percent_change"])),
             ],
@@ -162,12 +190,13 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
     console.print(
         render_table(
             f"Comparison: {comparison['suite_name']}",
-            [("Run ID", "right"), "Configuration", ("Median (s)", "right"), ("Delta vs Best (s)", "right"), ("Slowdown", "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
+            [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Time (s)", "right"), ("Delta vs Best (s)", "right"), ("Slowdown", "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
             [
                 (
+                    run["display_id"],
                     run["id"],
                     dump_json(run["configuration"]),
-                    f"{run['median_seconds']:.6f}",
+                    _format_time(run.get("mean_seconds"), run.get("std_seconds")),
                     f"{run['delta_seconds']:.6f}",
                     "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
                     *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
@@ -213,11 +242,12 @@ def list_command(
     console.print(
         render_table(
             f"BenchCaddy suites ({database_path})",
-            ["Suite", "Target", ("Runs", "right"), "Last Run"],
+            ["Suite", "Target", "Observation Labels", ("Runs", "right"), "Last Run"],
             [
                 (
                     summary["suite_name"],
                     summary["target_name"],
+                    ", ".join(summary["observation_labels"]) or "-",
                     summary["run_count"],
                     summary["last_run_at"],
                 )
@@ -231,7 +261,7 @@ def list_command(
 
 @app.command("show")
 def show_command(
-    identifier: str = typer.Argument(..., help="Suite name or run ID to inspect."),
+    identifier: str = typer.Argument(..., help="Suite name or run ID to inspect (for example 3.2)."),
     database: Path = typer.Option(
         None,
         "--database",
@@ -284,7 +314,7 @@ def compare_command(
         if comparison is None:
             console.print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
             raise typer.Exit(code=1)
-        _print_run_comparison(left_run_id, right_run_id, comparison, filter_keys)
+        _print_run_comparison(comparison, filter_keys)
         return
 
     comparison = compare_suite_runs(left, database_path)
