@@ -4,7 +4,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from benchcaddy.cli import app
+from benchcaddy.cli import _suite_row_style, app
 from benchcaddy.db import record_benchmark_run
 
 
@@ -126,6 +126,18 @@ def test_cli_lists_shows_and_compares_runs(
     assert "1.1" in compare_result.stdout
     assert "2.1" in compare_result.stdout
     assert "1.50x" in compare_result.stdout
+
+    suite_reference_compare_result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "2.1", "--database", str(database_path)],
+    )
+    assert suite_reference_compare_result.exit_code == 0
+    assert "Comparison: nonlinear-transform" in suite_reference_compare_result.stdout
+    assert "Reference Median (s): 0.150000" in suite_reference_compare_result.stdout
+    assert "Reference" in suite_reference_compare_result.stdout
+    assert "Relative" in suite_reference_compare_result.stdout
+    assert "0.67x" in suite_reference_compare_result.stdout
+    assert "2.1" in suite_reference_compare_result.stdout
 
     verbose_compare_result = runner.invoke(
         app,
@@ -296,3 +308,31 @@ def test_suite_compare_basis_matches_best_run_time_and_std(
     assert "Best Median (s): 0.100000" in compare_result.stdout
     assert "Mean +- Std (s):" in compare_result.stdout
     assert "0.126667 +- 0.064291" in compare_result.stdout
+
+
+def test_suite_row_style_uses_green_for_best_and_yellow_for_reference() -> None:
+    comparison = {
+        "basis_metric_label": "Reference Median (s)",
+        "basis_run": {"id": 2, "median_seconds": 0.20},
+        "runs": [
+            {"id": 1, "median_seconds": 0.10},
+            {"id": 2, "median_seconds": 0.20},
+        ],
+    }
+
+    assert _suite_row_style(comparison, comparison["runs"][0]) == "green"
+    assert _suite_row_style(comparison, comparison["runs"][1]) == "yellow"
+
+
+def test_suite_row_style_keeps_reference_green_when_it_is_best() -> None:
+    comparison = {
+        "basis_metric_label": "Reference Median (s)",
+        "basis_run": {"id": 2, "median_seconds": 0.10},
+        "runs": [
+            {"id": 1, "median_seconds": 0.12},
+            {"id": 2, "median_seconds": 0.10},
+        ],
+    }
+
+    assert _suite_row_style(comparison, comparison["runs"][1]) == "green"
+    assert _suite_row_style(comparison, comparison["runs"][0]) is None

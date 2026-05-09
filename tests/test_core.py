@@ -190,6 +190,17 @@ def test_sweep_supports_script_targets(
     ]
 
 
+def test_script_argument_tokens_preserve_false_values() -> None:
+    assert core_module._argument_tokens(
+        {
+            "use_cache": False,
+            "dry_run": True,
+            "size": 512,
+            "label": None,
+        }
+    ) == ["--use-cache", "false", "--dry-run", "--size", "512"]
+
+
 def test_separate_sweeps_get_distinct_sweep_ids(
     tmp_path: Path,
     monkeypatch,
