@@ -96,4 +96,7 @@ Sweep(
 
 BenchCaddy writes the samples, medians, and environment metadata to
 `benchcaddy.db` in the current working directory.
+<<<<<<< HEAD
 
+=======
+>>>>>>> 69a059f93b2da001b5b3e4e0e73ced8737c44414
