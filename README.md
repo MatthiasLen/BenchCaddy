@@ -7,7 +7,7 @@ We all tell ourselves we’re going to use Scalene,PyInstrument or TorchProfile 
 
 # Something missing ?
 
-BenchCaddy is intentionally lean - a sidekick, not a supervisor. I built it to curb my own "log-file-chaos," but I’m curious how you manage yours. If you’ve got a feature idea, a bug that’s getting on your nerves, or a suggestion for an export format that actually belongs in this decade, open an issue. I’m not trying to build a bloated enterprise behemoth; I just want this to be the best way to track performance without ever having to name a file timings_final_v4_fixed_REALLY.log again.
+BenchCaddy is intentionally lean. I built it to curb my own occasional "log-file-chaos," but I’m curious how you manage yours. If you’ve got a feature idea, a bug that’s getting on your nerves, or a suggestion for an export format that actually belongs in this decade, open an issue. I’m not trying to build a bloated enterprise behemoth; I just want this to be the best way to track performance without ever having to name a file timings_final_v4_fixed_REALLY.log again.
 
 
 ## Quick start
