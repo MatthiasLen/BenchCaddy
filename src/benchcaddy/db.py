@@ -79,6 +79,9 @@ class BenchmarkRun(Base):
     samples: Mapped[list[float]] = mapped_column(JSON)
     observations: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
     median_seconds: Mapped[float] = mapped_column(Float)
+    min_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    std_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
     suite: Mapped[BenchmarkSuite] = relationship(back_populates="runs")
@@ -91,6 +94,9 @@ class BenchmarkRun(Base):
             "samples": self.samples,
             "observations": self.observations,
             "median_seconds": self.median_seconds,
+            "min_seconds": self.min_seconds,
+            "max_seconds": self.max_seconds,
+            "std_seconds": self.std_seconds,
             "created_at": self.created_at,
         }
 
@@ -139,6 +145,9 @@ def record_benchmark_run(
     samples: list[float],
     observations: list[dict[str, Any]],
     median_seconds: float,
+    min_seconds: float,
+    max_seconds: float,
+    std_seconds: float,
     environment: dict[str, Any],
     database_path: str | Path | None = None,
 ) -> BenchmarkRun:
@@ -160,6 +169,9 @@ def record_benchmark_run(
             samples=samples,
             observations=observations,
             median_seconds=median_seconds,
+            min_seconds=min_seconds,
+            max_seconds=max_seconds,
+            std_seconds=std_seconds,
         )
         session.add(benchmark_run)
         session.commit()
