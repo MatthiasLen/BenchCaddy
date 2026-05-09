@@ -6,7 +6,7 @@ from pathlib import Path
 from statistics import fmean
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, create_engine, inspect, select, text
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, String, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 from sqlalchemy.sql.functions import now
@@ -52,6 +52,7 @@ class EnvironmentInfo(Base):
     python_version: Mapped[str] = mapped_column(String(64))
     operating_system: Mapped[str] = mapped_column(String(255))
     cpu_model: Mapped[str] = mapped_column(String(255))
+    total_memory_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     gpu_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     git_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     git_commit_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -67,6 +68,7 @@ class EnvironmentInfo(Base):
             python_version=environment["python_version"],
             operating_system=environment["operating_system"],
             cpu_model=environment["cpu_model"],
+            total_memory_bytes=environment.get("total_memory_bytes"),
             gpu_model=environment.get("gpu_model"),
             git_branch=environment["git"]["branch"],
             git_commit_hash=environment["git"]["commit_hash"],
@@ -79,6 +81,7 @@ class EnvironmentInfo(Base):
             "python_version": self.python_version,
             "operating_system": self.operating_system,
             "cpu_model": self.cpu_model,
+            "total_memory_bytes": self.total_memory_bytes,
             "gpu_model": self.gpu_model,
             "git_branch": self.git_branch,
             "git_commit_hash": self.git_commit_hash,
@@ -193,6 +196,11 @@ def _migrate_legacy_schema(engine: Engine) -> None:
         statements.append("ALTER TABLE benchmark_runs ADD COLUMN sweep_execution_id INTEGER")
     if "run_index" not in columns:
         statements.append("ALTER TABLE benchmark_runs ADD COLUMN run_index INTEGER")
+
+    if inspector.has_table("environment_info"):
+        environment_columns = {column["name"] for column in inspector.get_columns("environment_info")}
+        if "total_memory_bytes" not in environment_columns:
+            statements.append("ALTER TABLE environment_info ADD COLUMN total_memory_bytes INTEGER")
 
     if not statements:
         return
