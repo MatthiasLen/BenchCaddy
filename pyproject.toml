@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "benchcaddy"
+version = "0.1.0"
+description = "Lightweight benchmark sweeps with environment capture."
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["benchmark", "performance", "profiling", "cli", "testing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: System :: Benchmark",
+]
+
+authors = [
+  {name = "Matthias Lenga" }
+]
+
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+
+dependencies = [
+    "sqlalchemy>=2.0.41",
+    "typer>=0.12.5",
+    "rich>=13.9.4",
+    "gitpython>=3.1.43",
+    "psutil>=6.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/MatthiasLen/BenchCaddy"
+Repository = "https://github.com/MatthiasLen/BenchCaddy"
+Issues = "https://github.com/MatthiasLen/BenchCaddy/issues"
+
+[project.scripts]
+benchcaddy = "benchcaddy.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
