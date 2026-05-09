@@ -15,7 +15,7 @@ BenchCaddy is intentionally lean - a sidekick, not a supervisor. I built it to c
 BenchCaddy is designed around two steps:
 
 1. Run a benchmark sweep over one or more configurations.
-2. Inspect or compare the recorded results from the SQLite database.
+2. Inspect or compare the recorded results from the database (e.g. using the CLI).
 
 This example stays self-contained and benchmarks a nonlinear iterative transform
 with two variants and two input sizes.
@@ -124,7 +124,7 @@ BenchCaddy converts configuration keys to CLI flags:
 That mode works best with scripts that parse explicit values for non-presence
 flags and exit with status code `0` on success.
 
-## Inspect results
+## CLI and inspect results
 
 List all recorded suites:
 
