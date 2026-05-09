@@ -4,8 +4,8 @@ from pathlib import Path
 
 import benchcaddy.core as core_module
 from benchcaddy import Sweep, observe
-from benchcaddy.db import compare_runs, db_session, get_run_details, initialize_database
-from benchcaddy.db import get_suite_details, list_suite_summaries
+from benchcaddy.db import compare_runs, compare_suite_runs, db_session, get_run_details, initialize_database
+from benchcaddy.db import get_suite_details, list_suite_summaries, record_benchmark_run
 from benchcaddy.observability import summarize_observations
 
 
@@ -336,3 +336,43 @@ def test_database_initialization_runs_once(tmp_path: Path, monkeypatch) -> None:
         assert session is not None
 
     assert len(create_all_calls) == 1
+
+
+def test_compare_suite_runs_can_filter_to_matching_reference_config(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    for configuration, median_seconds in [
+        ({"size": 33, "variant": "baseline"}, 0.10),
+        ({"size": 33, "variant": "candidate"}, 0.12),
+        ({"size": 34, "variant": "candidate"}, 0.09),
+        ({"size": 33, "variant": "candidate", "mode": "extra"}, 0.11),
+    ]:
+        record_benchmark_run(
+            suite_name="strict-suite",
+            target_name="benchmark_target",
+            configuration=configuration,
+            samples=[median_seconds, median_seconds],
+            observations=[],
+            median_seconds=median_seconds,
+            min_seconds=median_seconds,
+            max_seconds=median_seconds,
+            std_seconds=0.0,
+            environment=environment_payload,
+            database_path=database_path,
+        )
+
+    comparison = compare_suite_runs("strict-suite", (2, 1), ["size"], database_path)
+
+    assert comparison is not None
+    assert comparison["strict_keys"] == ["size"]
+    assert comparison["strict_config"] == {"size": 33}
+    assert [run["display_id"] for run in comparison["runs"]] == ["4.1", "2.1", "1.1"]
+
+    stricter_comparison = compare_suite_runs("strict-suite", (2, 1), ["size", "variant"], database_path)
+
+    assert stricter_comparison is not None
+    assert stricter_comparison["strict_config"] == {"size": 33, "variant": "candidate"}
+    assert [run["display_id"] for run in stricter_comparison["runs"]] == ["4.1", "2.1"]

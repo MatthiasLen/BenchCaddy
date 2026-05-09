@@ -337,6 +337,79 @@ def test_suite_compare_rejects_reference_run_from_other_suite(
     assert "belongs to suite 'suite-a', not 'suite-b'" in result.stdout
 
 
+def test_cli_strict_suite_compare_filters_reference_configuration(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 34, "variant": "candidate"},
+        median_seconds=0.090,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate", "mode": "extra"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "2.1", "--strict", "size", "variant", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Comparison: nonlinear-transform (strict: size, variant)" in result.stdout
+    assert "2.1" in result.stdout
+    assert "4.1" in result.stdout
+    assert "1.1" not in result.stdout
+    assert "3.1" not in result.stdout
+
+
+def test_cli_strict_suite_compare_requires_reference_run(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "--strict", "size", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 2
+    assert "--strict requires a suite comparison with a reference run ID." in result.stdout
+
+
 def test_suite_compare_basis_matches_best_run_time_and_std(
     tmp_path: Path,
     environment_payload: dict[str, object],

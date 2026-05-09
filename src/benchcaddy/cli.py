@@ -25,6 +25,26 @@ class CLIState:
 _STATE = CLIState()
 
 
+def _parse_compare_operands(values: list[str], strict: bool) -> tuple[str | None, list[str]]:
+    if not values:
+        return None, []
+
+    right, *extra = values
+    if strict and _as_run_id(right) is None:
+        return None, list(dict.fromkeys(values))
+    if extra and not strict:
+        console.print(f"Unexpected arguments: {' '.join(extra)}")
+        raise typer.Exit(code=2)
+    return right, list(dict.fromkeys(extra)) if strict else []
+
+
+def _comparison_title(comparison: dict[str, object]) -> str:
+    strict_keys = comparison.get("strict_keys") or []
+    if not strict_keys:
+        return f"Comparison: {comparison['suite_name']}"
+    return f"Comparison: {comparison['suite_name']} (strict: {', '.join(strict_keys)})"
+
+
 def _as_run_id(value: str) -> int | tuple[int, int] | None:
     if "." in value:
         left, dot, right = value.partition(".")
@@ -255,7 +275,7 @@ def _print_run_comparison(
 def _print_suite_comparison(comparison: dict[str, object]) -> None:
     console.print(
         render_table(
-            f"Comparison: {comparison['suite_name']}",
+            _comparison_title(comparison),
             [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), (comparison["delta_column_label"], "right"), (comparison["ratio_column_label"], "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
             [
                 _style_row(
@@ -391,7 +411,13 @@ def show_command(
 @app.command("compare")
 def compare_command(
     left: str = typer.Argument(..., help="Suite name or baseline run ID."),
-    right: str | None = typer.Argument(None, help="Candidate run ID for direct comparison or reference run for suite comparison."),
+    operands: list[str] = typer.Argument(None, help="Optional reference run ID followed by strict config keys."),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        "-s",
+        help="Restrict suite comparison to runs whose configuration matches the reference run for the given trailing config keys.",
+    ),
     database: Path = typer.Option(
         None,
         "--database",
@@ -401,10 +427,14 @@ def compare_command(
         help="Path to the BenchCaddy SQLite database.",
     ),
 ) -> None:
+    right, strict_keys = _parse_compare_operands(operands, strict)
     database_path = get_database_path(database)
     left_run_id = _as_run_id(left)
     right_run_id = _as_run_id(right) if right is not None else None
     if left_run_id is not None and right_run_id is not None:
+        if strict_keys:
+            console.print("--strict is only supported for suite comparisons with a reference run.")
+            raise typer.Exit(code=2)
         comparison = compare_runs(left_run_id, right_run_id, database_path)
         if comparison is None:
             console.print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
@@ -412,7 +442,11 @@ def compare_command(
         _print_run_comparison(comparison)
         return
 
-    comparison = compare_suite_runs(left, right_run_id, database_path)
+    if strict_keys and right_run_id is None:
+        console.print("--strict requires a suite comparison with a reference run ID.")
+        raise typer.Exit(code=2)
+
+    comparison = compare_suite_runs(left, right_run_id, strict_keys, database_path)
     if comparison is None:
         console.print(f"Suite '{left}' was not found in {database_path}.")
         raise typer.Exit(code=1)
@@ -422,6 +456,15 @@ def compare_command(
     if comparison.get("error") == "reference_run_wrong_suite":
         console.print(
             f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'."
+        )
+        raise typer.Exit(code=1)
+    if comparison.get("error") == "strict_requires_reference_run":
+        console.print("--strict requires a suite comparison with a reference run ID.")
+        raise typer.Exit(code=2)
+    if comparison.get("error") == "strict_keys_not_found":
+        missing_keys = ", ".join(comparison["missing_strict_keys"])
+        console.print(
+            f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}."
         )
         raise typer.Exit(code=1)
     _print_suite_comparison(comparison)
