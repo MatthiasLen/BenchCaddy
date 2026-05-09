@@ -104,11 +104,15 @@ def collect_git_state(cwd: Path | None = None) -> GitState:
     except (InvalidGitRepositoryError, NoSuchPathError):
         return GitState(branch=None, commit_hash=None, dirty=None)
 
-    branch = None if repo.head.is_detached else repo.active_branch.name
+    try:
+        branch = None if repo.head.is_detached else repo.active_branch.name
+        commit_hash = repo.head.commit.hexsha
+    except ValueError:
+        return GitState(branch=None, commit_hash=None, dirty=None)
 
     return GitState(
         branch=branch,
-        commit_hash=repo.head.commit.hexsha,
+        commit_hash=commit_hash,
         dirty=repo.is_dirty(untracked_files=True),
     )
 
@@ -147,4 +151,9 @@ def collect_environment_metadata(cwd: Path | None = None) -> EnvironmentMetadata
     )
 
 
-metadata_to_dict = asdict
+def metadata_to_dict(metadata: EnvironmentMetadata) -> dict[str, object]:
+    payload = asdict(metadata)
+    git_state = payload.get("git")
+    if isinstance(git_state, dict) and not any(value is not None for value in git_state.values()):
+        payload.pop("git", None)
+    return payload

@@ -64,30 +64,35 @@ class EnvironmentInfo(Base):
 
     @classmethod
     def from_payload(cls, environment: dict[str, Any]) -> "EnvironmentInfo":
+        git_payload = environment.get("git") or {}
         return cls(
             python_version=environment["python_version"],
             operating_system=environment["operating_system"],
             cpu_model=environment["cpu_model"],
             total_memory_bytes=environment.get("total_memory_bytes"),
             gpu_model=environment.get("gpu_model"),
-            git_branch=environment["git"]["branch"],
-            git_commit_hash=environment["git"]["commit_hash"],
-            git_dirty=environment["git"]["dirty"],
-            process_state=environment["process"],
+            git_branch=git_payload.get("branch", environment.get("git_branch")),
+            git_commit_hash=git_payload.get("commit_hash", environment.get("git_commit_hash")),
+            git_dirty=git_payload.get("dirty", environment.get("git_dirty")),
+            process_state=environment.get("process", environment.get("process_state", {})),
         )
 
     def to_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "python_version": self.python_version,
             "operating_system": self.operating_system,
             "cpu_model": self.cpu_model,
             "total_memory_bytes": self.total_memory_bytes,
             "gpu_model": self.gpu_model,
-            "git_branch": self.git_branch,
-            "git_commit_hash": self.git_commit_hash,
-            "git_dirty": self.git_dirty,
-            "process_state": self.process_state,
+            "process": self.process_state,
         }
+        if any(value is not None for value in (self.git_branch, self.git_commit_hash, self.git_dirty)):
+            payload["git"] = {
+                "branch": self.git_branch,
+                "commit_hash": self.git_commit_hash,
+                "dirty": self.git_dirty,
+            }
+        return payload
 
 
 class BenchmarkRun(Base):
