@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import benchcaddy.core as core_module
 from benchcaddy import Sweep, observe
+from benchcaddy.db import db_session, initialize_database
 from benchcaddy.db import get_suite_details, list_suite_summaries
 
 
@@ -184,3 +186,46 @@ def test_sweep_supports_script_targets(
         "8:baseline",
         "8:stabilized",
     ]
+
+
+def test_prepare_system_keeps_current_affinity_set(monkeypatch) -> None:
+    recorded_affinity: list[int] = []
+
+    class DummyProcess:
+        def nice(self, *_args, **_kwargs) -> None:
+            return None
+
+        def cpu_affinity(self, cpus=None):
+            nonlocal recorded_affinity
+            if cpus is None:
+                return [2, 4]
+            recorded_affinity = list(cpus)
+            return recorded_affinity
+
+    monkeypatch.setattr(core_module.psutil, "Process", lambda: DummyProcess())
+    monkeypatch.setattr(core_module.gc, "collect", lambda: None)
+    monkeypatch.setattr(core_module.gc, "freeze", lambda: None)
+    monkeypatch.setattr(core_module.os, "name", "nt")
+    monkeypatch.setattr(core_module.psutil, "HIGH_PRIORITY_CLASS", 128, raising=False)
+
+    core_module.prepare_system(lock_cpu_affinity=True)
+
+    assert recorded_affinity == [2, 4]
+
+
+def test_database_initialization_runs_once(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    create_all_calls: list[object] = []
+
+    monkeypatch.setattr(
+        "benchcaddy.db.Base.metadata.create_all",
+        lambda engine: create_all_calls.append(engine),
+    )
+
+    initialize_database(database_path)
+    initialize_database(database_path)
+
+    with db_session(database_path) as session:
+        assert session is not None
+
+    assert len(create_all_calls) == 1

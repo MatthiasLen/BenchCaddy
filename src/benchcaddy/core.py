@@ -29,7 +29,7 @@ def _as_script_path(target: Callable[..., Any] | str | Path) -> Path | None:
 
 
 def prepare_system(lock_cpu_affinity: bool = True) -> None:
-    """Raise process priority, optionally pin the current affinity set, and freeze GC state."""
+    """Raise process priority, optionally preserve the current affinity set, and freeze GC state."""
     process = psutil.Process()
 
     try:
@@ -44,7 +44,7 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
         try:
             affinity = list(process.cpu_affinity())
             if affinity:
-                process.cpu_affinity([affinity[0]])
+                process.cpu_affinity(affinity)
         except (psutil.AccessDenied, NotImplementedError, ValueError):
             pass
 
