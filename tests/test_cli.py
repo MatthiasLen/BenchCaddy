@@ -21,7 +21,22 @@ def _seed_run(
         target_name="benchmark_target",
         configuration=configuration,
         samples=[median_seconds, median_seconds],
-        observations=[{"sample": 1, "records": []}, {"sample": 2, "records": []}],
+        observations=[
+            {
+                "sample": 1,
+                "records": [
+                    {"label": "inner", "duration_seconds": median_seconds / 4},
+                    {"label": "outer", "duration_seconds": median_seconds / 2},
+                ],
+            },
+            {
+                "sample": 2,
+                "records": [
+                    {"label": "inner", "duration_seconds": median_seconds / 5},
+                    {"label": "outer", "duration_seconds": median_seconds / 3},
+                ],
+            },
+        ],
         median_seconds=median_seconds,
         min_seconds=median_seconds,
         max_seconds=median_seconds,
@@ -54,8 +69,11 @@ def test_cli_lists_shows_and_compares_runs(
 
     list_result = runner.invoke(app, ["list", "--database", str(database_path)])
     assert list_result.exit_code == 0
-    assert "nonlinear-transform" in list_result.stdout
-    assert "benchmark_target" in list_result.stdout
+    assert "nonlinear" in list_result.stdout
+    assert "benchmark" in list_result.stdout
+    assert "Observation" in list_result.stdout
+    assert "Labels" in list_result.stdout
+    assert "inner, outer" in list_result.stdout
 
     show_result = runner.invoke(
         app,
@@ -63,6 +81,13 @@ def test_cli_lists_shows_and_compares_runs(
     )
     assert show_result.exit_code == 0
     assert "Suite: nonlinear-transform" in show_result.stdout
+    assert "Time (s)" in show_result.stdout
+    assert "0.100000" in show_result.stdout
+    assert "+-" in show_result.stdout
+    assert "0.000000" in show_result.stdout
+    assert "Observed Timings: nonlinear-transform" in show_result.stdout
+    assert "inner" in show_result.stdout
+    assert "outer" in show_result.stdout
     assert "Environment" in show_result.stdout
 
     compare_result = runner.invoke(
@@ -71,7 +96,11 @@ def test_cli_lists_shows_and_compares_runs(
     )
     assert compare_result.exit_code == 0
     assert "Comparison: nonlinear-transform" in compare_result.stdout
-    assert "Delta vs Best" in compare_result.stdout
+    assert "Delta" in compare_result.stdout
+    assert "Best" in compare_result.stdout
+    assert "Time (s)" in compare_result.stdout
+    assert "1.1" in compare_result.stdout
+    assert "2.1" in compare_result.stdout
     assert "1.50x" in compare_result.stdout
 
     verbose_compare_result = runner.invoke(
@@ -83,15 +112,20 @@ def test_cli_lists_shows_and_compares_runs(
     assert verbose_compare_result.stdout != compare_result.stdout
     assert "Comparison Basis" in verbose_compare_result.stdout
 
-    run_show_result = runner.invoke(app, ["show", "1", "--database", str(database_path)])
+    run_show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
     assert run_show_result.exit_code == 0
-    assert "Run: 1" in run_show_result.stdout
+    assert "Run: 1.1" in run_show_result.stdout
+    assert "Time (s)" in run_show_result.stdout
     assert "Observed Timings" in run_show_result.stdout
+    assert "inner" in run_show_result.stdout
+    assert "outer" in run_show_result.stdout
 
     run_compare_result = runner.invoke(
         app,
-        ["compare", "1", "2", "--database", str(database_path)],
+        ["compare", "1.1", "2.1", "--database", str(database_path)],
     )
     assert run_compare_result.exit_code == 0
-    assert "Run Comparison: 1 -> 2" in run_compare_result.stdout
+    assert "Run Comparison: 1.1 -> 2.1" in run_compare_result.stdout
+    assert "inner" in run_compare_result.stdout
+    assert "outer" in run_compare_result.stdout
     assert "+50.00%" in run_compare_result.stdout

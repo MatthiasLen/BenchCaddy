@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import benchcaddy.core as core_module
 from benchcaddy import Sweep, observe
-from benchcaddy.db import db_session, initialize_database
+from benchcaddy.db import compare_runs, db_session, get_run_details, initialize_database
 from benchcaddy.db import get_suite_details, list_suite_summaries
 
 
@@ -62,6 +61,7 @@ def test_sweep_records_results_and_observations(
             "target_name": "benchmark_target",
             "run_count": 2,
             "last_run_at": summaries[0]["last_run_at"],
+            "observation_labels": ["inner-step"],
         }
     ]
 
@@ -69,6 +69,7 @@ def test_sweep_records_results_and_observations(
     assert details is not None
     assert details["target_name"] == "benchmark_target"
     assert len(details["runs"]) == 2
+    assert [run["display_id"] for run in details["runs"]] == ["1.2", "1.1"]
     assert details["environment"]["python_version"] == "3.12.0"
 
 
@@ -188,6 +189,79 @@ def test_sweep_supports_script_targets(
     ]
 
 
+def test_separate_sweeps_get_distinct_sweep_ids(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda variant: 1.0 if variant == "baseline" else 2.0,
+        params={"variant": ["baseline", "candidate"]},
+        suite_name="grouped-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+    )
+
+    sweep.run()
+    sweep.run()
+
+    details = get_suite_details("grouped-suite", database_path)
+    assert details is not None
+    assert [run["display_id"] for run in details["runs"]] == ["2.2", "2.1", "1.2", "1.1"]
+
+
+def test_multiple_observe_labels_are_recorded_and_compared(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    @observe("outer")
+    def outer_step(scale: int) -> int:
+        return inner_step(scale) + scale
+
+    @observe("inner")
+    def inner_step(scale: int) -> int:
+        return scale * 2
+
+    sweep = Sweep(
+        target=outer_step,
+        params={"scale": [1, 2]},
+        suite_name="observe-suite",
+        samples=2,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+    )
+
+    sweep.run()
+
+    first_run = get_run_details((1, 1), database_path)
+    second_run = get_run_details((1, 2), database_path)
+    assert first_run is not None
+    assert second_run is not None
+    assert all({record["label"] for record in sample["records"]} == {"inner", "outer"} for sample in first_run["observations"])
+
+    comparison = compare_runs((1, 1), (1, 2), database_path)
+    assert comparison is not None
+    assert [row["label"] for row in comparison["observation_rows"]] == ["inner", "outer"]
+
+
 def test_prepare_system_keeps_current_affinity_set(monkeypatch) -> None:
     recorded_affinity: list[int] = []
 
@@ -202,7 +276,10 @@ def test_prepare_system_keeps_current_affinity_set(monkeypatch) -> None:
             recorded_affinity = list(cpus)
             return recorded_affinity
 
-    monkeypatch.setattr(core_module.psutil, "Process", lambda: DummyProcess())
+    def process_factory() -> DummyProcess:
+        return DummyProcess()
+
+    monkeypatch.setattr(core_module.psutil, "Process", process_factory)
     monkeypatch.setattr(core_module.gc, "collect", lambda: None)
     monkeypatch.setattr(core_module.gc, "freeze", lambda: None)
     monkeypatch.setattr(core_module.os, "name", "nt")
@@ -217,9 +294,12 @@ def test_database_initialization_runs_once(tmp_path: Path, monkeypatch) -> None:
     database_path = tmp_path / "benchcaddy.db"
     create_all_calls: list[object] = []
 
+    def record_create_all(engine) -> None:
+        create_all_calls.append(engine)
+
     monkeypatch.setattr(
         "benchcaddy.db.Base.metadata.create_all",
-        lambda engine: create_all_calls.append(engine),
+        record_create_all,
     )
 
     initialize_database(database_path)

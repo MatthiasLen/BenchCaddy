@@ -13,7 +13,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 import psutil
 
-from .db import get_database_path, record_benchmark_run
+from .db import create_sweep_execution, get_database_path, record_benchmark_run
 from .metadata import collect_environment_metadata, metadata_to_dict
 from .observability import collect_observations
 from .reporting import RichSweepReporter, SweepReporter
@@ -169,6 +169,12 @@ class Sweep:
             database_path=get_database_path(self.database_path),
         )
 
+        sweep_execution = create_sweep_execution(
+            suite_name=self.suite_name,
+            target_name=_target_name(self.target),
+            database_path=self.database_path,
+        )
+
         for configuration_index, configuration in enumerate(configurations, start=1):
             _report(
                 reporter,
@@ -203,6 +209,8 @@ class Sweep:
                 max_seconds=max_seconds,
                 std_seconds=std_seconds,
                 environment=environment,
+                sweep_execution_id=sweep_execution.id,
+                run_index=configuration_index,
                 database_path=self.database_path,
             )
             results.append(
