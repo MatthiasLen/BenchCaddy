@@ -8,78 +8,131 @@ We all tell ourselves we’re going to use Scalene,PyInstrument or TorchProfile 
 BenchCaddy is intentionally lean - a sidekick, not a supervisor. I built it to curb my own "log-file-chaos," but I’m curious how you manage yours. If you’ve got a feature idea, a bug that’s getting on your nerves, or a suggestion for an export format that actually belongs in this decade, open an issue. I’m not trying to build a bloated enterprise behemoth; I just want this to be the best way to track performance without ever having to name a file timings_final_v4_fixed_REALLY.log again.
 
 
-## Example: benchmark a PTNL interior-point solve
+## Quick start
 
-Install the solver package first:
+BenchCaddy is designed around two steps:
 
-```bash
-pip install ptnl
-```
+1. Run a benchmark sweep over one or more configurations.
+2. Inspect or compare the recorded results from the SQLite database.
 
-Then run this example to benchmark a compact nonlinear program with mixed
-constraints:
+This example stays self-contained and benchmarks a nonlinear iterative transform
+with two variants and two input sizes.
 
 ```python
-import torch
-import pytorch_nonlinear as ptnl
+import math
 
 from benchcaddy import Sweep, observe
 
 
-DTYPE = torch.float64
+def initial_signal(size: int) -> list[float]:
+    return [
+        math.sin(index * 0.013) + 0.5 * math.cos(index * 0.007)
+        for index in range(size)
+    ]
 
 
-def objective(state, params=None):
-    x0, x1, x2 = state.unbind()
-    return (
-        torch.exp(x0 - 0.8)
-        + 0.4 * (x1 - 0.2).pow(4)
-        + torch.sin(x2 + 0.3).pow(2)
-        + 0.15 * x0 * x2
-    )
+@observe("nonlinear_iteration")
+def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
+    next_values: list[float] = []
+    for value in values:
+        transformed = (
+            math.tanh(value * 1.4)
+            + 0.75 * math.sin(value * value + 0.2)
+            + 0.25 * math.cos(value - 0.1)
+        )
+        if variant == "stabilized":
+            transformed += 0.05 * value * value
+        else:
+            transformed += 0.03 * math.exp(-(value * value))
+        next_values.append(transformed)
+    return next_values
 
 
-def equality_constraint(state, params=None):
-    return state[0] + state[1] - 1.0
-
-
-def inequality_constraint(state, params=None):
-    x0, x1, x2 = state.unbind()
-    return x0 * x2 + 0.25 * x1.pow(2) - 0.45  # PTNL expects g(x) <= 0
-
-
-problem = ptnl.ConstrainedNLPProblem(
-    objective=objective,
-    constraints=[
-        ptnl.EqualityConstraint(equality_constraint),
-        ptnl.InequalityConstraint(inequality_constraint),
-    ],
-    bounds=ptnl.Bounds(
-        lower=torch.tensor([0.05, 0.05, -0.8], dtype=DTYPE),
-        upper=torch.tensor([1.25, 0.95, 0.9], dtype=DTYPE),
-    ),
-)
-
-x0 = torch.tensor([0.55, 0.45, 0.10], dtype=DTYPE)
-config = ptnl.SolverConfig(method="interior_point", max_iter=80, tol=1e-8)
-
-
-@observe("ptnl_interior_point")
-def solve_once():
-    result = ptnl.solve(problem, x0=x0, config=config)
-    if not result.success:
-        raise RuntimeError(result.summary())
-    return result
+def benchmark_case(size: int, variant: str) -> float:
+    values = initial_signal(size)
+    for _ in range(8):
+        values = nonlinear_iteration(values, variant)
+    return sum(abs(value) for value in values)
 
 
 Sweep(
-    target=solve_once,
-    params={},
-    suite_name="ptnl-interior-point",
+    target=benchmark_case,
+    params={
+        "size": [512, 2048],
+        "variant": ["baseline", "stabilized"],
+    },
+    suite_name="nonlinear-transform",
     samples=5,
     warmup_iterations=1,
+    verbose=True,
 ).run()
 ```
 
-BenchCaddy writes the samples, medians, and environment metadata to
+BenchCaddy writes samples, medians, observations, and environment metadata to
 `benchcaddy.db` in the current working directory.
+
+The full runnable example is in `examples/benchmark_nonlinear_transform.py` and
+supports `--verbose`, `--database`, `--samples`, and `--warmup-iterations`.
+
+`Sweep` also accepts a script path as the target. In that mode, parameter keys
+are mapped to CLI flags such as `size -> --size` and `warmup_runs` / `iterations`
+can be used as aliases for `warmup_iterations` / `samples`.
+
+## Inspect results
+
+List all recorded suites:
+
+```bash
+benchcaddy list
+```
+
+Show the recorded runs and environment for a suite:
+
+```bash
+benchcaddy show nonlinear-transform
+```
+
+Show the detailed timings for a single recorded run:
+
+```bash
+benchcaddy show 12
+```
+
+Compare configurations within a suite by median runtime:
+
+```bash
+benchcaddy compare nonlinear-transform
+```
+
+Compare two specific runs directly. Improvements greater than 5% are shown in
+green and regressions greater than 5% are shown in red:
+
+```bash
+benchcaddy compare 12 15
+```
+
+For more detail in the inspection output, add `--verbose`:
+
+```bash
+benchcaddy --verbose show nonlinear-transform
+benchcaddy --verbose compare nonlinear-transform
+```
+
+## What comparisons can I do?
+
+BenchCaddy currently compares runs within a suite. This works best when the
+suite name represents one benchmark target and the parameters represent the
+variants you want to evaluate.
+
+For each recorded run, `benchcaddy compare` shows:
+
+- the configuration that was executed
+- the median runtime across samples
+- the absolute delta versus the fastest recorded run
+- the slowdown factor relative to the fastest recorded run
+
+That gives you a practical baseline for answering questions like:
+
+- Is the stabilized implementation faster than the baseline?
+- How does runtime scale with input size?
+- Did a new run outperform the previous best configuration?
