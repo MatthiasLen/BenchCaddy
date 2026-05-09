@@ -348,6 +348,7 @@ def get_suite_details(
 def compare_suite_runs(
     suite_name: str,
     reference_run_id: int | tuple[int, int] | None = None,
+    strict_keys: Sequence[str] = (),
     database_path: str | Path | None = None,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
@@ -404,6 +405,30 @@ def compare_suite_runs(
         delta_column_label = "Delta vs Reference (s)"
         ratio_column_label = "Relative"
 
+    strict_config = None
+    strict_keys = tuple(dict.fromkeys(strict_keys))
+    if strict_keys:
+        if reference_run_id is None:
+            return {
+                "error": "strict_requires_reference_run",
+                "suite_name": suite.name,
+            }
+        missing_keys = [key for key in strict_keys if key not in basis_run.configuration]
+        if missing_keys:
+            return {
+                "error": "strict_keys_not_found",
+                "suite_name": suite.name,
+                "strict_keys": list(strict_keys),
+                "missing_strict_keys": missing_keys,
+                "reference_run_display_id": basis_run.display_id,
+            }
+        strict_config = {key: basis_run.configuration[key] for key in strict_keys}
+        runs = [
+            run
+            for run in runs
+            if all(run.configuration.get(key) == value for key, value in strict_config.items())
+        ]
+
     basis_median_seconds = basis_run.median_seconds
     return {
         "suite_name": suite.name,
@@ -413,6 +438,8 @@ def compare_suite_runs(
         "basis_metric_label": basis_metric_label,
         "delta_column_label": delta_column_label,
         "ratio_column_label": ratio_column_label,
+        "strict_keys": list(strict_keys),
+        "strict_config": strict_config,
         "runs": [run.to_suite_comparison_row(basis_median_seconds) for run in runs],
     }
 

@@ -168,6 +168,15 @@ Compare a suite against a selected recorded run instead of the best run:
 benchcaddy compare nonlinear-transform 2.4
 ```
 
+Restrict a suite comparison to runs that match selected configuration keys from
+the reference run:
+
+```bash
+benchcaddy compare nonlinear-transform 2.4 --strict size
+benchcaddy compare nonlinear-transform 2.4 --strict size variant
+benchcaddy compare nonlinear-transform 2.4 --strict variant
+```
+
 Compare two specific runs directly. Improvements greater than 5% are shown in
 green and regressions greater than 5% are shown in red:
 
