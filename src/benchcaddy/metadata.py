@@ -24,7 +24,7 @@ class ProcessState:
     pid: int
     priority: int | str | None
     affinity: list[int]
-    peak_rss_bytes: int | None
+    rss_bytes: int | None
 
 
 @dataclass
@@ -119,14 +119,14 @@ def collect_process_state() -> ProcessState:
     except (psutil.AccessDenied, NotImplementedError, AttributeError): affinity = []
     try: priority = process.nice()
     except (psutil.AccessDenied, AttributeError): priority = None
-    try: peak_rss = process.memory_info().rss
-    except (psutil.AccessDenied, AttributeError, OSError): peak_rss = None
+    try: rss_bytes = process.memory_info().rss
+    except (psutil.AccessDenied, AttributeError, OSError): rss_bytes = None
 
     return ProcessState(
         pid=process.pid,
         priority=priority,
         affinity=affinity,
-        peak_rss_bytes=peak_rss,
+        rss_bytes=rss_bytes,
     )
 
 

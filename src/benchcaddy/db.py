@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,9 @@ from sqlalchemy.sql.functions import count, max as sql_max, now
 from sqlalchemy.types import JSON
 
 from .observability import summarize_observations
+
+_ENGINES: dict[Path, Engine] = {}
+_INITIALIZED_DATABASES: set[Path] = set()
 
 
 class Base(DeclarativeBase):
@@ -121,18 +125,28 @@ def get_database_path(database_path: str | Path | None = None) -> Path:
         return (Path.cwd() / "benchcaddy.db").resolve()
     return Path(database_path).resolve()
 
-
-from contextlib import contextmanager
-
 def get_engine(database_path: str | Path | None = None) -> Engine:
     path = get_database_path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return create_engine(f"sqlite:///{path}", future=True)
+    engine = _ENGINES.get(path)
+    if engine is None:
+        engine = create_engine(f"sqlite:///{path}", future=True)
+        _ENGINES[path] = engine
+    return engine
+
+
+def initialize_database(database_path: str | Path | None = None) -> Engine:
+    path = get_database_path(database_path)
+    engine = get_engine(path)
+    if path not in _INITIALIZED_DATABASES:
+        Base.metadata.create_all(engine)
+        _INITIALIZED_DATABASES.add(path)
+    return engine
+
 
 @contextmanager
 def db_session(database_path: str | Path | None = None):
-    engine = get_engine(database_path)
-    Base.metadata.create_all(engine)
+    engine = initialize_database(database_path)
     with Session(engine, expire_on_commit=False) as session:
         yield session
 

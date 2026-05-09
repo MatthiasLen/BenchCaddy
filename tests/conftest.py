@@ -19,5 +19,6 @@ def environment_payload() -> dict[str, object]:
             "pid": 123,
             "priority": 0,
             "affinity": [0],
+            "rss_bytes": 4096,
         },
     }
