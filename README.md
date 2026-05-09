@@ -1,4 +1,4 @@
-<img src="./benchcaddy_logo.png" alt="BenchCaddy logo" width="240"></img>
+<img src="https://raw.githubusercontent.com/MatthiasLen/BenchCaddy/main/benchcaddy_logo.png" alt="BenchCaddy logo" width="240"></img>
 
 We all tell ourselves we’re going to use Scalene,PyInstrument or TorchProfile - tools that produce traces so complex and beautiful they belong in a modern art gallery. But let’s be real: most days, "benchmarking" is just us sprinkling time.time() across our code like frantic seasoning on a failing dish. You’re staring at the terminal, trying to remember if the last run was actually faster or if you just happen to be in a better mood, only to realize you’ve already lost the thread. *"Wait, when did I change the naming convention of the log files? Is 'results_v2_final' newer than 'results_new_test'?"*
 
@@ -9,6 +9,19 @@ We all tell ourselves we’re going to use Scalene,PyInstrument or TorchProfile 
 
 BenchCaddy is intentionally lean. I built it to curb my own occasional "log-file-chaos," but I’m curious how you manage yours. If you’ve got a feature idea, a bug that’s getting on your nerves, or a suggestion for an export format that actually belongs in this decade, open an issue. I’m not trying to build a bloated enterprise behemoth; I just want this to be the best way to track performance without ever having to name a file timings_final_v4_fixed_REALLY.log again.
 
+## Installation
+
+You can install BenchCaddy using [uv](https://github.com/astral-sh/uv), or standard `pip`.
+
+**Using `uv`** Add to your current project dependencies
+```bash
+uv add benchcaddy
+```
+
+**Using `pip`**
+```bash
+pip install benchcaddy
+```
 
 ## Quick start
 
