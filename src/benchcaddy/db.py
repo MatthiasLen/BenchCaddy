@@ -347,6 +347,13 @@ def compare_suite_runs(
         if suite is None:
             return None
 
+        reference_run = None
+        reference_run_suite_name = None
+        if reference_run_id is not None:
+            reference_run = _resolve_run(session, reference_run_id)
+            if reference_run is not None:
+                reference_run_suite_name = reference_run.suite.name
+
         runs = session.execute(
             select(BenchmarkRun)
             .where(BenchmarkRun.suite_id == suite.id)
@@ -371,13 +378,20 @@ def compare_suite_runs(
         delta_column_label = "Delta vs Best (s)"
         ratio_column_label = "Slowdown"
     else:
-        basis_run = (
-            next((run for run in runs if (run.sweep_execution_id or run.id, run.run_index or 1) == reference_run_id), None)
-            if isinstance(reference_run_id, tuple)
-            else next((run for run in runs if run.id == reference_run_id), None)
-        )
-        if basis_run is None:
-            return None
+        if reference_run is None:
+            return {
+                "error": "reference_run_not_found",
+                "suite_name": suite.name,
+            }
+        if reference_run.suite_id != suite.id:
+            return {
+                "error": "reference_run_wrong_suite",
+                "suite_name": suite.name,
+                "reference_run_display_id": reference_run.display_id,
+                "reference_run_record_id": reference_run.id,
+                "reference_run_suite_name": reference_run_suite_name,
+            }
+        basis_run = reference_run
         basis_metric_label = "Reference Median (s)"
         delta_column_label = "Delta vs Reference (s)"
         ratio_column_label = "Relative"

@@ -264,6 +264,34 @@ def test_cli_shows_observation_std_for_selected_runs_and_compare(
     assert "0.030000 +- 0.014142" in compare_result.stdout
 
 
+def test_suite_compare_rejects_reference_run_from_other_suite(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-a",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-b",
+        configuration={"variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["compare", "suite-b", "1", "--database", str(database_path)])
+
+    assert result.exit_code == 1
+    assert "belongs to suite 'suite-a', not 'suite-b'" in result.stdout
+
+
 def test_suite_compare_basis_matches_best_run_time_and_std(
     tmp_path: Path,
     environment_payload: dict[str, object],

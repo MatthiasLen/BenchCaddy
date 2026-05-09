@@ -17,8 +17,8 @@ def initial_signal(size: int) -> list[float]:
     ]
 
 
-@observe("nonlinear_iteration2")
-def nonlinear_iteration2(values: list[float], variant: str) -> list[float]:
+@observe("nonlinear_iter")
+def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     next_values: list[float] = []
     for value in values:
         transformed = (
@@ -33,11 +33,11 @@ def nonlinear_iteration2(values: list[float], variant: str) -> list[float]:
         next_values.append(transformed)
     return next_values
 
-@observe("outer_loop2")
-def benchmark_case2(size: int, variant: str) -> float:
+@observe("outer_loop")
+def benchmark_case(size: int, variant: str) -> float:
     values = initial_signal(size)
     for _ in range(8):
-        values = nonlinear_iteration2(values, variant)
+        values = nonlinear_iteration(values, variant)
     return sum(abs(value) for value in values)
 
 
@@ -74,12 +74,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     sweep = Sweep(
-        target=benchmark_case2,
+        target=benchmark_case,
         params={
-            "size": [512, 2048],
-            "variant": ["baseline2", "stabilized"],
+            "size": [512, 1024, 2048],
+            "variant": ["baseline", "stabilized"],
         },
-        suite_name="nonlinear-transform2",
+        suite_name="nonlinear-transform",
         samples=args.samples,
         warmup_iterations=args.warmup_iterations,
         database_path=args.database,

@@ -414,10 +414,15 @@ def compare_command(
 
     comparison = compare_suite_runs(left, right_run_id, database_path)
     if comparison is None:
-        if right_run_id is not None:
-            console.print(f"Suite '{left}' or reference run '{right}' was not found in {database_path}.")
-        else:
-            console.print(f"Suite '{left}' was not found in {database_path}.")
+        console.print(f"Suite '{left}' was not found in {database_path}.")
+        raise typer.Exit(code=1)
+    if comparison.get("error") == "reference_run_not_found":
+        console.print(f"Reference run '{right}' was not found in {database_path}.")
+        raise typer.Exit(code=1)
+    if comparison.get("error") == "reference_run_wrong_suite":
+        console.print(
+            f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'."
+        )
         raise typer.Exit(code=1)
     _print_suite_comparison(comparison)
 
