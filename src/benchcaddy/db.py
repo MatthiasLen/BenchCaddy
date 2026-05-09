@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from statistics import fmean
@@ -145,6 +146,7 @@ class BenchmarkRun(Base):
             "configuration": self.configuration,
             "mean_seconds": self.mean_seconds,
             "median_seconds": self.median_seconds,
+            "std_seconds": self.std_seconds,
             "delta_seconds": self.median_seconds - best_median_seconds,
             "slowdown_factor": None if best_median_seconds <= 0 else self.median_seconds / best_median_seconds,
             "sample_count": len(self.samples),
@@ -355,14 +357,17 @@ def compare_suite_runs(
             "suite_name": suite.name,
             "target_name": suite.target_name,
             "best_median_seconds": None,
+            "best_run": None,
             "runs": [],
         }
 
-    best_median_seconds = min(run.median_seconds for run in runs)
+    best_run = min(runs, key=lambda run: (run.median_seconds, run.id))
+    best_median_seconds = best_run.median_seconds
     return {
         "suite_name": suite.name,
         "target_name": suite.target_name,
         "best_median_seconds": best_median_seconds,
+        "best_run": best_run.to_suite_comparison_row(best_median_seconds),
         "runs": [run.to_suite_comparison_row(best_median_seconds) for run in runs],
     }
 
@@ -399,6 +404,20 @@ def get_run_details(
     }
 
 
+def get_selected_run_details(
+    run_ids: Sequence[int | tuple[int, int]],
+    database_path: str | Path | None = None,
+) -> list[dict[str, Any]] | None:
+    runs = [get_run_details(run_id, database_path) for run_id in run_ids]
+    if any(run is None for run in runs):
+        return None
+
+    return sorted(
+        [run for run in runs if run is not None],
+        key=lambda run: -int(run["id"]),
+    )
+
+
 def compare_runs(
     baseline_run_id: int | tuple[int, int],
     candidate_run_id: int | tuple[int, int],
@@ -428,10 +447,12 @@ def compare_runs(
         "observation_rows": [
             {
                 "label": label,
-                "baseline_seconds": baseline_observations[label][1] if label in baseline_observations else None,
-                "candidate_seconds": candidate_observations[label][1] if label in candidate_observations else None,
+                "baseline_mean_seconds": baseline_observations[label].mean_seconds if label in baseline_observations else None,
+                "baseline_std_seconds": baseline_observations[label].std_seconds if label in baseline_observations else None,
+                "candidate_mean_seconds": candidate_observations[label].mean_seconds if label in candidate_observations else None,
+                "candidate_std_seconds": candidate_observations[label].std_seconds if label in candidate_observations else None,
                 "delta_seconds": (
-                    candidate_observations[label][1] - baseline_observations[label][1]
+                    candidate_observations[label].mean_seconds - baseline_observations[label].mean_seconds
                     if label in baseline_observations and label in candidate_observations
                     else None
                 ),

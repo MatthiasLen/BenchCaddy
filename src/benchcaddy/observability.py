@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
+from statistics import fmean, stdev
 from time import perf_counter
 from typing import Any, Callable, Iterator
 
@@ -18,6 +19,14 @@ class ObservationCollector:
         self.records.append({"label": label, "duration_seconds": duration_seconds})
 
 
+@dataclass(frozen=True)
+class ObservationSummary:
+    calls: int
+    total_seconds: float
+    mean_seconds: float
+    std_seconds: float
+
+
 _ACTIVE_COLLECTOR: ContextVar[ObservationCollector | None] = ContextVar(
     "benchcaddy_active_collector",
     default=None,
@@ -25,14 +34,28 @@ _ACTIVE_COLLECTOR: ContextVar[ObservationCollector | None] = ContextVar(
 _BENCH_ACTIVE: ContextVar[bool] = ContextVar("benchcaddy_bench_active", default=False)
 
 
-def summarize_observations(observations: Iterable[dict[str, Any]]) -> dict[str, tuple[int, float]]:
-    summary: dict[str, tuple[int, float]] = {}
+def summarize_observations(observations: Iterable[dict[str, Any]]) -> dict[str, ObservationSummary]:
+    sample_totals: list[dict[str, float]] = []
+    call_counts: dict[str, int] = {}
+
     for sample in observations:
-        for record in sample["records"]:
+        totals: dict[str, float] = {}
+        for record in sample.get("records", []):
             label = str(record["label"])
-            calls, total = summary.get(label, (0, 0.0))
-            summary[label] = (calls + 1, total + float(record["duration_seconds"]))
-    return summary
+            totals[label] = totals.get(label, 0.0) + float(record["duration_seconds"])
+            call_counts[label] = call_counts.get(label, 0) + 1
+        sample_totals.append(totals)
+
+    return {
+        label: ObservationSummary(
+            calls=call_counts[label],
+            total_seconds=sum(per_sample_totals),
+            mean_seconds=float(fmean(per_sample_totals)),
+            std_seconds=float(stdev(per_sample_totals)) if len(per_sample_totals) > 1 else 0.0,
+        )
+        for label in sorted(call_counts)
+        if (per_sample_totals := [totals.get(label, 0.0) for totals in sample_totals])
+    }
 
 
 @contextmanager
