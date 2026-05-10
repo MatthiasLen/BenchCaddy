@@ -16,6 +16,7 @@ import psutil
 from .db import create_sweep_execution, get_database_path, record_benchmark_run
 from .metadata import collect_environment_metadata, metadata_to_dict
 from .observability import collect_observations
+from .return_values import StoredReturnValue, normalize_return_value
 from .reporting import RichSweepReporter, SweepReporter
 
 _MAX_UNIX_PRIORITY = -20
@@ -85,7 +86,7 @@ class BenchmarkResult:
     min_seconds: float
     max_seconds: float
     std_seconds: float
-    target_return_value: bool | int | float | str | None = None
+    target_return_value: StoredReturnValue | None = None
 
 
 @dataclass
@@ -101,11 +102,11 @@ class Sweep:
     database_path: str | Path | None = None
     sync: Callable[[], None] | None = None
     store_target_return_value: bool = False
-    return_value_postprocessor: Callable[[Any], bool | int | float | str] | None = None
+    return_value_postprocessor: Callable[[Any], Any] | None = None
     verbose: bool = False
     reporter: SweepReporter | None = None
 
-    def _prepare_return_value(self, result: Any) -> bool | int | float | str | None:
+    def _prepare_return_value(self, result: Any) -> StoredReturnValue | None:
         if not self.store_target_return_value:
             return None
 
@@ -114,18 +115,19 @@ class Sweep:
             if self.return_value_postprocessor is not None
             else result
         )
-        if isinstance(transformed, bool):
-            return transformed
-        if isinstance(transformed, (int, float, str)):
-            return transformed
-        if self.return_value_postprocessor is None:
+        try:
+            return normalize_return_value(transformed)
+        except TypeError as error:
+            if self.return_value_postprocessor is None:
+                raise TypeError(
+                    "Target returned an unsupported value type. "
+                    "Provide return_value_postprocessor to map it to one of: "
+                    "bool, int, float, str, or a one-dimensional numeric array/list/tuple."
+                ) from error
             raise TypeError(
-                "Target returned an unsupported value type. "
-                "Provide return_value_postprocessor to map it to one of: bool, int, float, str."
-            )
-        raise TypeError(
-            "return_value_postprocessor must return one of: bool, int, float, str."
-        )
+                "return_value_postprocessor must return one of: "
+                "bool, int, float, str, or a one-dimensional numeric array/list/tuple."
+            ) from error
 
     def _configurations(self) -> list[dict[str, Any]]:
         if not self.params:
@@ -158,7 +160,7 @@ class Sweep:
         reporter: SweepReporter | None,
         sample_index: int,
         sample_total: int,
-    ) -> tuple[float, dict[str, Any], bool | int | float | str | None]:
+    ) -> tuple[float, dict[str, Any], StoredReturnValue | None]:
         gc.collect()
         with collect_observations() as collector:
             start = perf_counter()
@@ -219,7 +221,7 @@ class Sweep:
 
             samples: list[float] = []
             observations: list[dict[str, Any]] = []
-            target_return_value: bool | int | float | str | None = None
+            target_return_value: StoredReturnValue | None = None
             for sample_index in range(1, sample_count + 1):
                 elapsed, observation, sample_return_value = self._run_sample(
                     configuration, reporter, sample_index, sample_count

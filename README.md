@@ -101,7 +101,7 @@ The main public `Sweep(...)` options are:
 - `database_path`: store results in a specific SQLite file instead of `./benchcaddy.db`
 - `lock_cpu_affinity`: preserve the current CPU affinity set before benchmarking
 - `sync`: callable used to synchronize async device work after each invocation
-- `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`)
+- `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`, or 1D numeric vectors from list/tuple/numpy arrays)
 - `return_value_postprocessor`: map complex target return values to a supported type before storage
   - when multiple samples are collected, the first measured sample return value is stored for the run
 - `reporter`: custom reporter implementing the `SweepReporter` protocol
@@ -201,6 +201,7 @@ benchcaddy compare 2.3 3
 
 Direct run comparisons include **Return Value** and **Return Distance**:
 - numbers: absolute difference
+- 1D numeric vectors (`list` / `tuple` / `numpy.ndarray`): Euclidean distance
 - strings / booleans: equality (`equal` / `different`)
 
 For more detail in the inspection output, add `--verbose`:

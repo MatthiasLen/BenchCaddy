@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import contextmanager
-from numbers import Real
 from pathlib import Path
 from statistics import fmean
 from typing import Any
@@ -14,6 +13,7 @@ from sqlalchemy.sql.functions import now
 from sqlalchemy.types import JSON
 
 from .observability import summarize_observations
+from .return_values import StoredReturnValue, return_distance
 
 _ENGINES: dict[Path, Engine] = {}
 _INITIALIZED_DATABASES: set[Path] = set()
@@ -111,7 +111,7 @@ class BenchmarkRun(Base):
     min_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     std_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
-    target_return_value: Mapped[bool | int | float | str | None] = mapped_column(JSON, nullable=True)
+    target_return_value: Mapped[StoredReturnValue | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
     suite: Mapped[BenchmarkSuite] = relationship(back_populates="runs")
@@ -150,7 +150,7 @@ class BenchmarkRun(Base):
     def to_suite_comparison_row(
         self,
         reference_median_seconds: float,
-        reference_run_target_value: bool | int | float | str | None,
+        reference_run_target_value: StoredReturnValue | None,
     ) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -163,34 +163,12 @@ class BenchmarkRun(Base):
             "median_seconds": self.median_seconds,
             "std_seconds": self.std_seconds,
             "target_return_value": self.target_return_value,
-            "target_return_distance": _return_distance(reference_value=reference_run_target_value, candidate_value=self.target_return_value),
+            "target_return_distance": return_distance(reference_value=reference_run_target_value, candidate_value=self.target_return_value),
             "delta_seconds": self.median_seconds - reference_median_seconds,
             "slowdown_factor": None if reference_median_seconds <= 0 else self.median_seconds / reference_median_seconds,
             "sample_count": len(self.samples),
             "created_at": self.created_at,
         }
-
-
-def _return_distance(
-    *,
-    reference_value: bool | int | float | str | None,
-    candidate_value: bool | int | float | str | None,
-) -> float | bool | None:
-    if reference_value is None or candidate_value is None:
-        return None
-    if isinstance(reference_value, bool) and isinstance(candidate_value, bool):
-        return reference_value == candidate_value
-    if isinstance(reference_value, str) and isinstance(candidate_value, str):
-        return reference_value == candidate_value
-    if (
-        isinstance(reference_value, Real)
-        and isinstance(candidate_value, Real)
-        and not isinstance(reference_value, bool)
-        and not isinstance(candidate_value, bool)
-    ):
-        return float(abs(candidate_value - reference_value))
-    return None
-
 
 def _suite_query(suite_name: str):
     return select(BenchmarkSuite).where(BenchmarkSuite.name == suite_name)
@@ -289,7 +267,7 @@ def record_benchmark_run(
     min_seconds: float,
     max_seconds: float,
     std_seconds: float,
-    target_return_value: bool | int | float | str | None = None,
+    target_return_value: StoredReturnValue | None = None,
     environment: dict[str, Any],
     sweep_execution_id: int | None = None,
     run_index: int | None = None,
@@ -560,7 +538,7 @@ def compare_runs(
     baseline_observations = summarize_observations(baseline["observations"])
     candidate_observations = summarize_observations(candidate["observations"])
     labels = sorted(set(baseline_observations) | set(candidate_observations))
-    target_return_distance = _return_distance(
+    target_return_distance = return_distance(
         reference_value=baseline["target_return_value"],
         candidate_value=candidate["target_return_value"],
     )

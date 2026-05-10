@@ -15,7 +15,7 @@ def _seed_run(
     configuration: dict[str, object],
     median_seconds: float,
     environment_payload: dict[str, object],
-    target_return_value: bool | int | float | str | None = None,
+    target_return_value: bool | int | float | str | list[float] | None = None,
 ) -> None:
     record_benchmark_run(
         suite_name=suite_name,
@@ -56,7 +56,7 @@ def _seed_custom_run(
     median_seconds: float,
     observations: list[dict[str, object]],
     environment_payload: dict[str, object],
-    target_return_value: bool | int | float | str | None = None,
+    target_return_value: bool | int | float | str | list[float] | None = None,
 ) -> None:
     record_benchmark_run(
         suite_name=suite_name,
@@ -236,6 +236,39 @@ def test_cli_show_and_compare_include_return_values_and_distance(
 
     suite_compare_result = runner.invoke(app, ["compare", "return-compare", "1.1", "--database", str(database_path)])
     assert suite_compare_result.exit_code == 0
+
+
+def test_cli_compare_formats_vector_return_distance(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="vector-return-compare",
+        configuration={"variant": "baseline"},
+        median_seconds=0.1,
+        environment_payload=environment_payload,
+        target_return_value=[1.0, 2.0, 3.0],
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="vector-return-compare",
+        configuration={"variant": "candidate"},
+        median_seconds=0.11,
+        environment_payload=environment_payload,
+        target_return_value=[4.0, 6.0, 3.0],
+    )
+
+    compare_result = runner.invoke(app, ["compare", "1.1", "2.1", "--database", str(database_path)])
+    assert compare_result.exit_code == 0
+    assert "Return Value" in compare_result.stdout
+    assert "[1.0, 2.0, 3.0]" in compare_result.stdout
+    assert "[4.0, 6.0, 3.0]" in compare_result.stdout
+    assert "Return Distance" in compare_result.stdout
+    assert "5.000000" in compare_result.stdout
 
 
 def test_cli_show_renders_partial_git_environment(tmp_path: Path, environment_payload: dict[str, object]) -> None:
