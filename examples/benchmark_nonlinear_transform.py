@@ -84,6 +84,7 @@ def main() -> None:
         samples=args.samples,
         warmup_iterations=args.warmup_iterations,
         database_path=args.database,
+        store_target_return_value=True,
         verbose=args.verbose,
     )
     sweep.run()

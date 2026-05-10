@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from io import StringIO
 from pathlib import Path
 
 import benchcaddy.core as core_module
+import pytest
 from benchcaddy import Sweep, observe
 from benchcaddy.db import compare_runs, compare_suite_runs, db_session, get_run_details, initialize_database
 from benchcaddy.db import get_suite_details, list_suite_summaries, record_benchmark_run
 from benchcaddy.observability import summarize_observations
+from benchcaddy.reporting import RichSweepReporter
+from rich.console import Console
 
 
 def test_sweep_records_results_and_observations(
@@ -75,6 +79,265 @@ def test_sweep_records_results_and_observations(
     assert details["environment"]["total_memory_bytes"] == 17179869184
 
 
+def test_sweep_can_store_target_return_values_with_postprocessing(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda size: {"size": size, "ok": True},
+        params={"size": [3]},
+        suite_name="return-value-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+        return_value_postprocessor=lambda payload: f"{payload['size']}:{payload['ok']}",
+    )
+
+    results = sweep.run()
+    assert results[0].target_return_value == "3:True"
+
+    run = get_run_details((1, 1), database_path)
+    assert run is not None
+    assert run["target_return_value"] == "3:True"
+
+
+def test_sweep_can_store_vector_return_values(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda: (1, 2.5, 3),
+        params={},
+        suite_name="vector-return-value-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+    )
+
+    results = sweep.run()
+    assert results[0].target_return_value == [1.0, 2.5, 3.0]
+
+    run = get_run_details((1, 1), database_path)
+    assert run is not None
+    assert run["target_return_value"] == [1.0, 2.5, 3.0]
+
+
+def test_sweep_can_store_numpy_vector_values_via_postprocessor(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    import numpy as np
+
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda: {"values": [1, 2, 3]},
+        params={},
+        suite_name="numpy-return-value-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+        return_value_postprocessor=lambda payload: np.asarray(payload["values"], dtype=float),
+    )
+
+    results = sweep.run()
+    assert results[0].target_return_value == [1.0, 2.0, 3.0]
+
+
+def test_sweep_requires_supported_target_return_types_when_enabled(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda: {"complex": "payload"},
+        params={},
+        suite_name="unsupported-return-value-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+    )
+
+    with pytest.raises(TypeError, match="one-dimensional numeric array/list/tuple"):
+        sweep.run()
+
+
+def test_sweep_rejects_non_vector_array_shapes(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    import numpy as np
+
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda: np.asarray([[1.0, 2.0], [3.0, 4.0]]),
+        params={},
+        suite_name="invalid-vector-return-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+    )
+
+    with pytest.raises(TypeError, match="one-dimensional numeric array/list/tuple"):
+        sweep.run()
+
+
+def test_record_benchmark_run_normalizes_supported_return_values(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="direct-recording-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "vector"},
+        samples=[0.1, 0.1],
+        observations=[],
+        median_seconds=0.1,
+        min_seconds=0.1,
+        max_seconds=0.1,
+        std_seconds=0.0,
+        target_return_value=(1, 2.5, 3),
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    run = get_run_details((1, 1), database_path)
+    assert run is not None
+    assert run["target_return_value"] == [1.0, 2.5, 3.0]
+
+
+def test_record_benchmark_run_rejects_unsupported_return_values(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    with pytest.raises(TypeError, match="one-dimensional numeric array/list/tuple"):
+        record_benchmark_run(
+            suite_name="direct-recording-suite",
+            target_name="benchmark_target",
+            configuration={"variant": "invalid"},
+            samples=[0.1, 0.1],
+            observations=[],
+            median_seconds=0.1,
+            min_seconds=0.1,
+            max_seconds=0.1,
+            std_seconds=0.0,
+            target_return_value={"complex": "payload"},
+            environment=environment_payload,
+            database_path=database_path,
+        )
+
+
+def test_compare_runs_computes_vector_distance_and_handles_mismatched_lengths(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="vector-distance-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "baseline"},
+        samples=[0.1, 0.1],
+        observations=[],
+        median_seconds=0.1,
+        min_seconds=0.1,
+        max_seconds=0.1,
+        std_seconds=0.0,
+        target_return_value=[1.0, 2.0, 3.0],
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="vector-distance-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "candidate"},
+        samples=[0.11, 0.11],
+        observations=[],
+        median_seconds=0.11,
+        min_seconds=0.11,
+        max_seconds=0.11,
+        std_seconds=0.0,
+        target_return_value=[4.0, 6.0, 3.0],
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    comparison = compare_runs((1, 1), (2, 1), database_path)
+    assert comparison is not None
+    expected_distance = ((4.0 - 1.0) ** 2 + (6.0 - 2.0) ** 2 + (3.0 - 3.0) ** 2) ** 0.5
+    expected_relative_error = expected_distance / ((1.0**2 + 2.0**2 + 3.0**2) ** 0.5)
+    assert comparison["target_return_relative_error"] == expected_relative_error
+
+    record_benchmark_run(
+        suite_name="vector-distance-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "mismatched"},
+        samples=[0.12, 0.12],
+        observations=[],
+        median_seconds=0.12,
+        min_seconds=0.12,
+        max_seconds=0.12,
+        std_seconds=0.0,
+        target_return_value=[1.0, 2.0],
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    mismatched_comparison = compare_runs((1, 1), (3, 1), database_path)
+    assert mismatched_comparison is not None
+    assert mismatched_comparison["target_return_relative_error"] is None
+
+
 def test_verbose_sweep_uses_reporter(
     tmp_path: Path,
     monkeypatch,
@@ -133,6 +396,48 @@ def test_verbose_sweep_uses_reporter(
     assert event_names.count("sample-completed") == 2
     assert event_names.count("configuration-completed") == 1
     assert event_names.count("sweep-completed") == 1
+
+
+def test_verbose_sweep_prints_scientific_return_values(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    output = StringIO()
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+    monkeypatch.setattr(
+        core_module,
+        "RichSweepReporter",
+        lambda: RichSweepReporter(
+            console=Console(file=output, force_terminal=False, color_system=None, width=120)
+        ),
+    )
+
+    sweep = Sweep(
+        target=lambda: (1.0, 2.5, 3.0),
+        params={},
+        suite_name="verbose-return-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+        verbose=True,
+    )
+
+    sweep.run()
+
+    reporter_output = output.getvalue()
+    assert "Run ID" in reporter_output
+    assert "Record ID" in reporter_output
+    assert "1.1" in reporter_output
+    assert "Return Value" in reporter_output
+    assert "[1.000000e+00, 2.500000e+00, 3.000000e+00]" in reporter_output
 
 
 def test_sweep_supports_script_targets(

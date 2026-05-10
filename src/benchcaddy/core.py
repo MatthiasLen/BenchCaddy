@@ -16,6 +16,7 @@ import psutil
 from .db import create_sweep_execution, get_database_path, record_benchmark_run
 from .metadata import collect_environment_metadata, metadata_to_dict
 from .observability import collect_observations
+from .return_values import StoredReturnValue, normalize_return_value
 from .reporting import RichSweepReporter, SweepReporter
 
 _MAX_UNIX_PRIORITY = -20
@@ -78,6 +79,8 @@ def _report(reporter: SweepReporter | None, event: str, **payload: Any) -> None:
 
 @dataclass
 class BenchmarkResult:
+    run_id: str
+    record_id: int
     configuration: dict[str, Any]
     samples: list[float]
     observations: list[dict[str, Any]]
@@ -85,6 +88,7 @@ class BenchmarkResult:
     min_seconds: float
     max_seconds: float
     std_seconds: float
+    target_return_value: StoredReturnValue | None = None
 
 
 @dataclass
@@ -99,8 +103,33 @@ class Sweep:
     lock_cpu_affinity: bool = True
     database_path: str | Path | None = None
     sync: Callable[[], None] | None = None
+    store_target_return_value: bool = False
+    return_value_postprocessor: Callable[[Any], Any] | None = None
     verbose: bool = False
     reporter: SweepReporter | None = None
+
+    def _prepare_return_value(self, result: Any) -> StoredReturnValue | None:
+        if not self.store_target_return_value:
+            return None
+
+        transformed = (
+            self.return_value_postprocessor(result)
+            if self.return_value_postprocessor is not None
+            else result
+        )
+        try:
+            return normalize_return_value(transformed)
+        except TypeError as error:
+            if self.return_value_postprocessor is None:
+                raise TypeError(
+                    "Target returned an unsupported value type. "
+                    "Provide return_value_postprocessor to map it to one of: "
+                    "bool, int, float, str, or a one-dimensional numeric array/list/tuple."
+                ) from error
+            raise TypeError(
+                "return_value_postprocessor must return one of: "
+                "bool, int, float, str, or a one-dimensional numeric array/list/tuple."
+            ) from error
 
     def _configurations(self) -> list[dict[str, Any]]:
         if not self.params:
@@ -133,13 +162,14 @@ class Sweep:
         reporter: SweepReporter | None,
         sample_index: int,
         sample_total: int,
-    ) -> tuple[float, dict[str, Any]]:
+    ) -> tuple[float, dict[str, Any], StoredReturnValue | None]:
         gc.collect()
         with collect_observations() as collector:
             start = perf_counter()
             result = self._invoke_target(configuration)
             self._sync_if_needed(result)
             elapsed = perf_counter() - start
+            stored_return_value = self._prepare_return_value(result)
 
         _report(
             reporter,
@@ -149,7 +179,7 @@ class Sweep:
             elapsed_seconds=elapsed,
             observation_count=len(collector.records),
         )
-        return elapsed, {"sample": sample_index, "records": collector.records}
+        return elapsed, {"sample": sample_index, "records": collector.records}, stored_return_value
 
     def run(self, sync: Callable[[], None] | None = None) -> list[BenchmarkResult]:
         prepare_system(lock_cpu_affinity=self.lock_cpu_affinity)
@@ -193,16 +223,21 @@ class Sweep:
 
             samples: list[float] = []
             observations: list[dict[str, Any]] = []
+            target_return_value: StoredReturnValue | None = None
             for sample_index in range(1, sample_count + 1):
-                elapsed, observation = self._run_sample(configuration, reporter, sample_index, sample_count)
+                elapsed, observation, sample_return_value = self._run_sample(
+                    configuration, reporter, sample_index, sample_count
+                )
                 samples.append(elapsed)
                 observations.append(observation)
+                if target_return_value is None:
+                    target_return_value = sample_return_value
 
             median_seconds = float(median(samples))
             min_seconds, max_seconds = float(min(samples)), float(max(samples))
             std_seconds = float(stdev(samples)) if len(samples) > 1 else 0.0
 
-            record_benchmark_run(
+            benchmark_run = record_benchmark_run(
                 suite_name=self.suite_name,
                 target_name=_target_name(self.target),
                 configuration=configuration,
@@ -212,6 +247,7 @@ class Sweep:
                 min_seconds=min_seconds,
                 max_seconds=max_seconds,
                 std_seconds=std_seconds,
+                target_return_value=target_return_value,
                 environment=environment,
                 sweep_execution_id=sweep_execution.id,
                 run_index=configuration_index,
@@ -219,6 +255,8 @@ class Sweep:
             )
             results.append(
                 BenchmarkResult(
+                    run_id=benchmark_run.display_id,
+                    record_id=benchmark_run.id,
                     configuration=configuration,
                     samples=samples,
                     observations=observations,
@@ -226,6 +264,7 @@ class Sweep:
                     min_seconds=min_seconds,
                     max_seconds=max_seconds,
                     std_seconds=std_seconds,
+                    target_return_value=target_return_value,
                 )
             )
 
@@ -240,6 +279,7 @@ class Sweep:
                 max_seconds=max_seconds,
                 std_seconds=std_seconds,
                 sample_count=len(samples),
+                target_return_value=target_return_value,
             )
 
         _report(reporter, "on_sweep_completed", results=results)
