@@ -11,7 +11,7 @@ _VECTOR_TYPES = (list, tuple)
 
 try:
     import numpy as _np
-except Exception:  # pragma: no cover - numpy is optional
+except ModuleNotFoundError:  # pragma: no cover - numpy is optional
     _np = None
 else:  # pragma: no cover - exercised when numpy is available
     _VECTOR_TYPES = (list, tuple, _np.ndarray)
@@ -34,6 +34,10 @@ def _as_numeric_vector(value: object) -> list[float] | None:
             return None
         return [float(item) for item in array.tolist()]
 
+    return _as_numeric_vector_without_numpy(value)
+
+
+def _as_numeric_vector_without_numpy(value: Sequence[object]) -> list[float] | None:
     vector: list[float] = []
     for item in value:
         if not _is_numeric_scalar(item):
