@@ -112,6 +112,82 @@ def _render_observation_table(observations: list[dict[str, object]], title: str)
     )
 
 
+def _run_table_columns(*, include_suite: bool = False, include_target: bool = False) -> list[object]:
+    columns: list[object] = [("Run ID", "right"), ("Record ID", "right")]
+    if include_suite:
+        columns.append("Suite")
+    if include_target:
+        columns.append("Target")
+    columns.extend(
+        [
+            "Configuration",
+            ("Mean +- Std (s)", "right"),
+            "Return Value",
+            ("Samples", "right"),
+            "Recorded At",
+        ]
+    )
+    return columns
+
+
+def _run_table_row(
+    run: dict[str, object],
+    *,
+    include_suite: bool = False,
+    include_target: bool = False,
+) -> tuple[object, ...]:
+    row: list[object] = [run["display_id"], run.get("record_id", run["id"])]
+    if include_suite:
+        row.append(run["suite_name"])
+    if include_target:
+        row.append(run["target_name"])
+    row.extend(
+        [
+            dump_json(run["configuration"]),
+            _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+            format_return_value(run.get("target_return_value"), compact=True),
+            len(run["samples"]),
+            run["created_at"],
+        ]
+    )
+    return tuple(row)
+
+
+def _render_run_table(
+    title: str,
+    runs: list[dict[str, object]],
+    *,
+    include_suite: bool = False,
+    include_target: bool = False,
+) -> Table:
+    return render_table(
+        title,
+        _run_table_columns(include_suite=include_suite, include_target=include_target),
+        [
+            _run_table_row(run, include_suite=include_suite, include_target=include_target)
+            for run in runs
+        ],
+    )
+
+
+def _observed_timing_rows(
+    runs: list[dict[str, object]],
+    *,
+    include_record_id: bool = False,
+) -> list[tuple[object, ...]]:
+    return [
+        (
+            run["display_id"],
+            *([run.get("record_id", run["id"])] if include_record_id else []),
+            label,
+            stats.calls,
+            _format_time(stats.mean_seconds, stats.std_seconds),
+        )
+        for run in runs
+        for label, stats in summarize_observations(run["observations"]).items()
+    ]
+
+
 def _show_run(run: dict[str, object]) -> None:
     console.print(
         render_table(
@@ -139,36 +215,12 @@ def _show_run(run: dict[str, object]) -> None:
 
 
 def _show_suite(details: dict[str, object]) -> None:
-    console.print(render_table(
-        f"Suite: {details['suite_name']}",
-        [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), "Return Value", ("Samples", "right"), "Recorded At"],
-        [
-            (
-                run["display_id"],
-                run["id"],
-                dump_json(run["configuration"]),
-                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                format_return_value(run.get("target_return_value"), compact=True),
-                len(run["samples"]),
-                run["created_at"],
-            )
-            for run in details["runs"]
-        ],
-    ))
+    console.print(_render_run_table(f"Suite: {details['suite_name']}", details["runs"]))
     console.print(
         render_table(
             f"Observed Timings: {details['suite_name']}",
             [("Run ID", "right"), "Label", ("Calls", "right"), ("Mean +- Std (s)", "right")],
-            [
-                (
-                    run["display_id"],
-                    label,
-                    stats.calls,
-                    _format_time(stats.mean_seconds, stats.std_seconds),
-                )
-                for run in details["runs"]
-                for label, stats in summarize_observations(run["observations"]).items()
-            ],
+            _observed_timing_rows(details["runs"]),
         )
     )
     if details["environment"] is not None:
@@ -179,78 +231,18 @@ def _show_suite(details: dict[str, object]) -> None:
 
 
 def _show_selected_runs(runs: list[dict[str, object]]) -> None:
-    console.print(render_table(
-        "Selected Runs",
-        [
-            ("Run ID", "right"),
-            ("Record ID", "right"),
-            "Suite",
-            "Target",
-            "Configuration",
-            ("Mean +- Std (s)", "right"),
-            "Return Value",
-            ("Samples", "right"),
-            "Recorded At",
-        ],
-        [
-            (
-                run["display_id"],
-                run["id"],
-                run["suite_name"],
-                run["target_name"],
-                dump_json(run["configuration"]),
-                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                format_return_value(run.get("target_return_value"), compact=True),
-                len(run["samples"]),
-                run["created_at"],
-            )
-            for run in runs
-        ],
-    ))
+    console.print(_render_run_table("Selected Runs", runs, include_suite=True, include_target=True))
     console.print(
         render_table(
             "Observed Timings: Selected Runs",
             [("Run ID", "right"), ("Record ID", "right"), "Label", ("Calls", "right"), ("Mean +- Std (s)", "right")],
-            [
-                (
-                    run["display_id"],
-                    run["id"],
-                    label,
-                    stats.calls,
-                    _format_time(stats.mean_seconds, stats.std_seconds),
-                )
-                for run in runs
-                for label, stats in summarize_observations(run["observations"]).items()
-            ],
+            _observed_timing_rows(runs, include_record_id=True),
         )
     )
 
 
 def _show_all_runs(runs: list[dict[str, object]]) -> None:
-    console.print(render_table(
-        "All Runs",
-        [
-            ("Run ID", "right"),
-            ("Record ID", "right"),
-            "Configuration",
-            ("Mean +- Std (s)", "right"),
-            "Return Value",
-            ("Samples", "right"),
-            "Recorded At",
-        ],
-        [
-            (
-                run["display_id"],
-                run["record_id"],
-                dump_json(run["configuration"]),
-                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                format_return_value(run.get("target_return_value"), compact=True),
-                len(run["samples"]),
-                run["created_at"],
-            )
-            for run in runs
-        ],
-    ))
+    console.print(_render_run_table("All Runs", runs))
 
 
 def _print_run_comparison(

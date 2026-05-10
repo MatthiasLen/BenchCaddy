@@ -146,6 +146,12 @@ benchcaddy list
 
 `list` also shows the observation labels seen across runs in each suite.
 
+Show all recorded runs across the database:
+
+```bash
+benchcaddy show
+```
+
 Show the recorded runs and environment for a suite:
 
 ```bash
@@ -199,7 +205,7 @@ benchcaddy compare 12 15
 benchcaddy compare 2.3 3
 ```
 
-Direct run comparisons include **Return Value** and **Return Distance**:
+Direct run comparisons include **Return Value** and **Return Error**:
 - numbers: absolute difference
 - 1D numeric vectors (`list` / `tuple` / `numpy.ndarray`): Euclidean distance
 - strings / booleans: equality (`equal` / `different`)

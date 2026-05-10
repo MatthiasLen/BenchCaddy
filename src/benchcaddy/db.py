@@ -13,7 +13,7 @@ from sqlalchemy.sql.functions import now
 from sqlalchemy.types import JSON
 
 from .observability import summarize_observations
-from .return_values import StoredReturnValue, return_relative_error
+from .return_values import StoredReturnValue, normalize_return_value, return_relative_error
 
 _ENGINES: dict[Path, Engine] = {}
 _INITIALIZED_DATABASES: set[Path] = set()
@@ -147,6 +147,14 @@ class BenchmarkRun(Base):
             "created_at": self.created_at,
         }
 
+    def to_detail_payload(self) -> dict[str, Any]:
+        return {
+            **self.to_payload(),
+            "suite_name": self.suite.name,
+            "target_name": self.suite.target_name,
+            "environment": self.environment.to_payload(),
+        }
+
     def to_suite_comparison_row(
         self,
         reference_median_seconds: float,
@@ -275,6 +283,7 @@ def record_benchmark_run(
 ) -> BenchmarkRun:
     with db_session(database_path) as session:
         suite = _get_or_create_suite(session, suite_name, target_name)
+        stored_return_value = None if target_return_value is None else normalize_return_value(target_return_value)
 
         if sweep_execution_id is None:
             sweep_execution = BenchmarkSweepExecution(suite_id=suite.id)
@@ -300,7 +309,7 @@ def record_benchmark_run(
             min_seconds=min_seconds,
             max_seconds=max_seconds,
             std_seconds=std_seconds,
-            target_return_value=target_return_value,
+            target_return_value=stored_return_value,
         )
         session.add(benchmark_run)
         session.commit()
@@ -478,29 +487,7 @@ def get_run_details(
         run = _resolve_run(session, run_id)
         if run is None:
             return None
-
-        suite = run.suite
-        environment = run.environment
-
-    return {
-        "id": run.id,
-        "suite_name": suite.name,
-        "target_name": suite.target_name,
-        "display_id": run.display_id,
-        "sweep_id": run.sweep_execution_id or run.id,
-        "run_index": run.run_index or 1,
-        "configuration": run.configuration,
-        "samples": run.samples,
-        "observations": run.observations,
-        "mean_seconds": run.mean_seconds,
-        "median_seconds": run.median_seconds,
-        "min_seconds": run.min_seconds,
-        "max_seconds": run.max_seconds,
-        "std_seconds": run.std_seconds,
-        "target_return_value": run.target_return_value,
-        "created_at": run.created_at,
-        "environment": environment.to_payload(),
-    }
+        return run.to_detail_payload()
 
 
 def get_selected_run_details(

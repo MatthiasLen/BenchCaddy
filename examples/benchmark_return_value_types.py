@@ -64,19 +64,16 @@ def main() -> None:
         verbose=args.verbose,
     ).run()
 
-    try:
-        Sweep(
-            target=bool_vector_target,
-            params={"size": [2]},
-            suite_name="return-type-bool-vector",
-            samples=3,
-            warmup_iterations=2,
-            database_path=args.database,
-            store_target_return_value=True,
-            verbose=args.verbose,
-        ).run()
-    except TypeError as error:
-        print(f"Expected boolean-vector return failure: {error}")
+    Sweep(
+        target=bool_vector_target,
+        params={"size": [2]},
+        suite_name="return-type-bool-vector",
+        samples=3,
+        warmup_iterations=2,
+        database_path=args.database,
+        store_target_return_value=True,
+        verbose=args.verbose,
+    ).run()
 
 
 if __name__ == "__main__":
