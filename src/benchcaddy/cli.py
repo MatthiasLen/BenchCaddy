@@ -9,9 +9,9 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .db import compare_runs, compare_suite_runs, get_database_path, get_run_details, get_selected_run_details, get_suite_details, list_suite_summaries
+from .db import compare_runs, compare_suite_runs, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details, list_suite_summaries
 from .observability import summarize_observations
-from .presentation import dump_json, json_panel, render_table
+from .presentation import dump_json, format_return_error, format_return_value, json_panel, render_table
 
 app = typer.Typer(help="Inspect BenchCaddy benchmark suites.")
 console = Console()
@@ -112,6 +112,82 @@ def _render_observation_table(observations: list[dict[str, object]], title: str)
     )
 
 
+def _run_table_columns(*, include_suite: bool = False, include_target: bool = False) -> list[object]:
+    columns: list[object] = [("Run ID", "right"), ("Record ID", "right")]
+    if include_suite:
+        columns.append("Suite")
+    if include_target:
+        columns.append("Target")
+    columns.extend(
+        [
+            "Configuration",
+            ("Mean +- Std (s)", "right"),
+            "Return Value",
+            ("Samples", "right"),
+            "Recorded At",
+        ]
+    )
+    return columns
+
+
+def _run_table_row(
+    run: dict[str, object],
+    *,
+    include_suite: bool = False,
+    include_target: bool = False,
+) -> tuple[object, ...]:
+    row: list[object] = [run["display_id"], run.get("record_id", run["id"])]
+    if include_suite:
+        row.append(run["suite_name"])
+    if include_target:
+        row.append(run["target_name"])
+    row.extend(
+        [
+            dump_json(run["configuration"]),
+            _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+            format_return_value(run.get("target_return_value"), compact=True),
+            len(run["samples"]),
+            run["created_at"],
+        ]
+    )
+    return tuple(row)
+
+
+def _render_run_table(
+    title: str,
+    runs: list[dict[str, object]],
+    *,
+    include_suite: bool = False,
+    include_target: bool = False,
+) -> Table:
+    return render_table(
+        title,
+        _run_table_columns(include_suite=include_suite, include_target=include_target),
+        [
+            _run_table_row(run, include_suite=include_suite, include_target=include_target)
+            for run in runs
+        ],
+    )
+
+
+def _observed_timing_rows(
+    runs: list[dict[str, object]],
+    *,
+    include_record_id: bool = False,
+) -> list[tuple[object, ...]]:
+    return [
+        (
+            run["display_id"],
+            *([run.get("record_id", run["id"])] if include_record_id else []),
+            label,
+            stats.calls,
+            _format_time(stats.mean_seconds, stats.std_seconds),
+        )
+        for run in runs
+        for label, stats in summarize_observations(run["observations"]).items()
+    ]
+
+
 def _show_run(run: dict[str, object]) -> None:
     console.print(
         render_table(
@@ -128,6 +204,7 @@ def _show_run(run: dict[str, object]) -> None:
                 ("Mean +- Std (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
                 ("Min (s)", _format_optional_seconds(run.get("min_seconds"))),
                 ("Max (s)", _format_optional_seconds(run.get("max_seconds"))),
+                ("Return Value", format_return_value(run.get("target_return_value"), compact=True)),
                 ("Samples", len(run["samples"])),
                 ("Recorded At", run["created_at"]),
             ],
@@ -138,35 +215,12 @@ def _show_run(run: dict[str, object]) -> None:
 
 
 def _show_suite(details: dict[str, object]) -> None:
-    console.print(render_table(
-        f"Suite: {details['suite_name']}",
-        [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), ("Samples", "right"), "Recorded At"],
-        [
-            (
-                run["display_id"],
-                run["id"],
-                dump_json(run["configuration"]),
-                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                len(run["samples"]),
-                run["created_at"],
-            )
-            for run in details["runs"]
-        ],
-    ))
+    console.print(_render_run_table(f"Suite: {details['suite_name']}", details["runs"]))
     console.print(
         render_table(
             f"Observed Timings: {details['suite_name']}",
             [("Run ID", "right"), "Label", ("Calls", "right"), ("Mean +- Std (s)", "right")],
-            [
-                (
-                    run["display_id"],
-                    label,
-                    stats.calls,
-                    _format_time(stats.mean_seconds, stats.std_seconds),
-                )
-                for run in details["runs"]
-                for label, stats in summarize_observations(run["observations"]).items()
-            ],
+            _observed_timing_rows(details["runs"]),
         )
     )
     if details["environment"] is not None:
@@ -177,49 +231,18 @@ def _show_suite(details: dict[str, object]) -> None:
 
 
 def _show_selected_runs(runs: list[dict[str, object]]) -> None:
-    console.print(render_table(
-        "Selected Runs",
-        [
-            ("Run ID", "right"),
-            ("Record ID", "right"),
-            "Suite",
-            "Target",
-            "Configuration",
-            ("Mean +- Std (s)", "right"),
-            ("Samples", "right"),
-            "Recorded At",
-        ],
-        [
-            (
-                run["display_id"],
-                run["id"],
-                run["suite_name"],
-                run["target_name"],
-                dump_json(run["configuration"]),
-                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                len(run["samples"]),
-                run["created_at"],
-            )
-            for run in runs
-        ],
-    ))
+    console.print(_render_run_table("Selected Runs", runs, include_suite=True, include_target=True))
     console.print(
         render_table(
             "Observed Timings: Selected Runs",
             [("Run ID", "right"), ("Record ID", "right"), "Label", ("Calls", "right"), ("Mean +- Std (s)", "right")],
-            [
-                (
-                    run["display_id"],
-                    run["id"],
-                    label,
-                    stats.calls,
-                    _format_time(stats.mean_seconds, stats.std_seconds),
-                )
-                for run in runs
-                for label, stats in summarize_observations(run["observations"]).items()
-            ],
+            _observed_timing_rows(runs, include_record_id=True),
         )
     )
+
+
+def _show_all_runs(runs: list[dict[str, object]]) -> None:
+    console.print(_render_run_table("All Runs", runs))
 
 
 def _print_run_comparison(
@@ -234,6 +257,7 @@ def _print_run_comparison(
             f"Run Comparison: {baseline['display_id']} -> {candidate['display_id']}",
             ["Field", "Baseline", "Candidate"],
             [
+                ("Suite", _styled(baseline["suite_name"], baseline_style), _styled(candidate["suite_name"], candidate_style)),
                 ("Run ID", _styled(baseline["display_id"], baseline_style), _styled(candidate["display_id"], candidate_style)),
                 ("Record ID", _styled(baseline["id"], baseline_style), _styled(candidate["id"], candidate_style)),
                 *[
@@ -250,6 +274,8 @@ def _print_run_comparison(
                 ("Max (s)", _styled(_format_optional_seconds(baseline.get("max_seconds")), baseline_style), _styled(_format_optional_seconds(candidate.get("max_seconds")), candidate_style)),
                 ("Median Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
                 ("Median Percent Change", "", _style_delta(comparison["percent_change"])),
+                ("Return Value", _styled(format_return_value(baseline.get("target_return_value"), compact=True), baseline_style), _styled(format_return_value(candidate.get("target_return_value"), compact=True), candidate_style)),
+                ("Return Error", "", format_return_error(comparison.get("target_return_relative_error"))),
             ],
         )
     )
@@ -273,27 +299,38 @@ def _print_run_comparison(
 
 
 def _print_suite_comparison(comparison: dict[str, object]) -> None:
-    console.print(
-        render_table(
-            _comparison_title(comparison),
-            [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), (comparison["delta_column_label"], "right"), (comparison["ratio_column_label"], "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
-            [
-                _style_row(
-                    (
-                        run["display_id"],
-                        run["id"],
-                        dump_json(run["configuration"]),
-                        _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                        f"{run['delta_seconds']:.6f}",
-                        "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
-                        *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
-                    ),
-                    _suite_row_style(comparison, run),
-                )
-                for run in comparison["runs"]
-            ],
+    table = Table(title=_comparison_title(comparison), pad_edge=False, collapse_padding=True)
+    table.add_column("Run ID", justify="right", no_wrap=True, min_width=4, max_width=4)
+    table.add_column("Record ID", justify="right", no_wrap=True, min_width=7, max_width=7)
+    table.add_column("Configuration", overflow="ellipsis", max_width=16)
+    table.add_column("Mean +- Std (s)", justify="right", no_wrap=True, max_width=18)
+    table.add_column(str(comparison["delta_column_label"]), justify="right", no_wrap=True, max_width=12)
+    table.add_column(str(comparison["ratio_column_label"]), justify="right", no_wrap=True, max_width=6)
+    table.add_column("Return Value", overflow="ellipsis", no_wrap=True, max_width=16)
+    table.add_column("Return Error", justify="right", no_wrap=True, max_width=12)
+    if _STATE.verbose:
+        table.add_column("Samples", justify="right", no_wrap=True)
+        table.add_column("Recorded At", overflow="ellipsis", no_wrap=True, max_width=16)
+
+    for run in comparison["runs"]:
+        style = _suite_row_style(comparison, run)
+        row = _style_row(
+            (
+                run["display_id"],
+                run["id"],
+                dump_json(run["configuration"]),
+                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+                f"{run['delta_seconds']:.6f}",
+                "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
+                format_return_value(run.get("target_return_value"), compact=True),
+                format_return_error(run.get("target_return_relative_error")),
+                *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
+            ),
+            style,
         )
-    )
+        table.add_row(*(value if isinstance(value, Text) else str(value) for value in row))
+
+    console.print(table)
 
     if comparison["basis_median_seconds"] is not None:
         best_run = comparison["basis_run"]
@@ -305,6 +342,8 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
                         f"Record ID: {best_run['id']}",
                         f"{comparison['basis_metric_label']}: {best_run['median_seconds']:.6f}",
                         f"Mean +- Std (s): {_format_time(best_run.get('mean_seconds'), best_run.get('std_seconds'))}",
+                        f"Return Value: {format_return_value(best_run.get('target_return_value'), compact=True)}",
+                        "Return Error: relative to this basis run",
                     ]
                 ),
                 title="Comparison Basis",
@@ -363,7 +402,7 @@ def list_command(
 
 @app.command("show")
 def show_command(
-    identifiers: list[str] = typer.Argument(..., help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1)."),
+    identifiers: list[str] | None = typer.Argument(None, help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1)."),
     database: Path = typer.Option(
         None,
         "--database",
@@ -374,6 +413,10 @@ def show_command(
     ),
 ) -> None:
     database_path = get_database_path(database)
+
+    if not identifiers:
+        _show_all_runs(get_all_run_details(database_path))
+        return
 
     if len(identifiers) == 1:
         identifier = identifiers[0]

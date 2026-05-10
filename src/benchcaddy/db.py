@@ -13,6 +13,7 @@ from sqlalchemy.sql.functions import now
 from sqlalchemy.types import JSON
 
 from .observability import summarize_observations
+from .return_values import StoredReturnValue, normalize_return_value, return_relative_error
 
 _ENGINES: dict[Path, Engine] = {}
 _INITIALIZED_DATABASES: set[Path] = set()
@@ -110,6 +111,7 @@ class BenchmarkRun(Base):
     min_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     std_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_return_value: Mapped[StoredReturnValue | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
     suite: Mapped[BenchmarkSuite] = relationship(back_populates="runs")
@@ -141,10 +143,23 @@ class BenchmarkRun(Base):
             "min_seconds": self.min_seconds,
             "max_seconds": self.max_seconds,
             "std_seconds": self.std_seconds,
+            "target_return_value": self.target_return_value,
             "created_at": self.created_at,
         }
 
-    def to_suite_comparison_row(self, reference_median_seconds: float) -> dict[str, Any]:
+    def to_detail_payload(self) -> dict[str, Any]:
+        return {
+            **self.to_payload(),
+            "suite_name": self.suite.name,
+            "target_name": self.suite.target_name,
+            "environment": self.environment.to_payload(),
+        }
+
+    def to_suite_comparison_row(
+        self,
+        reference_median_seconds: float,
+        reference_run_target_value: StoredReturnValue | None,
+    ) -> dict[str, Any]:
         return {
             "id": self.id,
             "record_id": self.id,
@@ -155,12 +170,13 @@ class BenchmarkRun(Base):
             "mean_seconds": self.mean_seconds,
             "median_seconds": self.median_seconds,
             "std_seconds": self.std_seconds,
+            "target_return_value": self.target_return_value,
+            "target_return_relative_error": return_relative_error(reference_value=reference_run_target_value, candidate_value=self.target_return_value),
             "delta_seconds": self.median_seconds - reference_median_seconds,
             "slowdown_factor": None if reference_median_seconds <= 0 else self.median_seconds / reference_median_seconds,
             "sample_count": len(self.samples),
             "created_at": self.created_at,
         }
-
 
 def _suite_query(suite_name: str):
     return select(BenchmarkSuite).where(BenchmarkSuite.name == suite_name)
@@ -201,6 +217,8 @@ def _migrate_legacy_schema(engine: Engine) -> None:
         statements.append("ALTER TABLE benchmark_runs ADD COLUMN sweep_execution_id INTEGER")
     if "run_index" not in columns:
         statements.append("ALTER TABLE benchmark_runs ADD COLUMN run_index INTEGER")
+    if "target_return_value" not in columns:
+        statements.append("ALTER TABLE benchmark_runs ADD COLUMN target_return_value JSON")
 
     if inspector.has_table("environment_info"):
         environment_columns = {column["name"] for column in inspector.get_columns("environment_info")}
@@ -257,6 +275,7 @@ def record_benchmark_run(
     min_seconds: float,
     max_seconds: float,
     std_seconds: float,
+    target_return_value: StoredReturnValue | None = None,
     environment: dict[str, Any],
     sweep_execution_id: int | None = None,
     run_index: int | None = None,
@@ -264,6 +283,7 @@ def record_benchmark_run(
 ) -> BenchmarkRun:
     with db_session(database_path) as session:
         suite = _get_or_create_suite(session, suite_name, target_name)
+        stored_return_value = None if target_return_value is None else normalize_return_value(target_return_value)
 
         if sweep_execution_id is None:
             sweep_execution = BenchmarkSweepExecution(suite_id=suite.id)
@@ -289,6 +309,7 @@ def record_benchmark_run(
             min_seconds=min_seconds,
             max_seconds=max_seconds,
             std_seconds=std_seconds,
+            target_return_value=stored_return_value,
         )
         session.add(benchmark_run)
         session.commit()
@@ -439,13 +460,22 @@ def compare_suite_runs(
         "suite_name": suite.name,
         "target_name": suite.target_name,
         "basis_median_seconds": basis_median_seconds,
-        "basis_run": basis_run.to_suite_comparison_row(basis_median_seconds),
+        "basis_run": basis_run.to_suite_comparison_row(
+            basis_median_seconds,
+            basis_run.target_return_value,
+        ),
         "basis_metric_label": basis_metric_label,
         "delta_column_label": delta_column_label,
         "ratio_column_label": ratio_column_label,
         "strict_keys": list(strict_keys),
         "strict_config": strict_config,
-        "runs": [run.to_suite_comparison_row(basis_median_seconds) for run in runs],
+        "runs": [
+            run.to_suite_comparison_row(
+                basis_median_seconds,
+                basis_run.target_return_value,
+            )
+            for run in runs
+        ],
     }
 
 
@@ -457,28 +487,7 @@ def get_run_details(
         run = _resolve_run(session, run_id)
         if run is None:
             return None
-
-        suite = run.suite
-        environment = run.environment
-
-    return {
-        "id": run.id,
-        "suite_name": suite.name,
-        "target_name": suite.target_name,
-        "display_id": run.display_id,
-        "sweep_id": run.sweep_execution_id or run.id,
-        "run_index": run.run_index or 1,
-        "configuration": run.configuration,
-        "samples": run.samples,
-        "observations": run.observations,
-        "mean_seconds": run.mean_seconds,
-        "median_seconds": run.median_seconds,
-        "min_seconds": run.min_seconds,
-        "max_seconds": run.max_seconds,
-        "std_seconds": run.std_seconds,
-        "created_at": run.created_at,
-        "environment": environment.to_payload(),
-    }
+        return run.to_detail_payload()
 
 
 def get_selected_run_details(
@@ -494,6 +503,18 @@ def get_selected_run_details(
         [run for run in runs if run is not None],
         key=lambda run: -int(run["id"]),
     )
+
+
+def get_all_run_details(
+    database_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    with db_session(database_path) as session:
+        runs = session.execute(
+            select(BenchmarkRun)
+            .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
+        ).scalars().all()
+
+    return [run.to_payload() for run in runs]
 
 
 def compare_runs(
@@ -516,12 +537,17 @@ def compare_runs(
     baseline_observations = summarize_observations(baseline["observations"])
     candidate_observations = summarize_observations(candidate["observations"])
     labels = sorted(set(baseline_observations) | set(candidate_observations))
+    target_return_relative_error = return_relative_error(
+        reference_value=baseline["target_return_value"],
+        candidate_value=candidate["target_return_value"],
+    )
 
     return {
         "baseline": baseline,
         "candidate": candidate,
         "delta_seconds": candidate["median_seconds"] - baseline["median_seconds"],
         "percent_change": percent_change,
+        "target_return_relative_error": target_return_relative_error,
         "observation_rows": [
             {
                 "label": label,
