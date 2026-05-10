@@ -78,6 +78,29 @@ def _seed_custom_run(
     )
 
 
+def _seed_sampled_run(
+    *,
+    database_path: Path,
+    suite_name: str,
+    configuration: dict[str, object],
+    samples: list[float],
+    environment_payload: dict[str, object],
+) -> None:
+    record_benchmark_run(
+        suite_name=suite_name,
+        target_name="benchmark_target",
+        configuration=configuration,
+        samples=samples,
+        observations=[],
+        median_seconds=sorted(samples)[len(samples) // 2],
+        min_seconds=min(samples),
+        max_seconds=max(samples),
+        std_seconds=0.0,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+
 def _compact_output(output: str) -> str:
     return "".join(output.split())
 
@@ -146,10 +169,15 @@ def test_cli_lists_shows_and_compares_runs(
     )
     assert suite_reference_compare_result.exit_code == 0
     assert "Comparison: nonlinear-transform" in suite_reference_compare_result.stdout
-    assert "Reference Median (s): 0.150000" in suite_reference_compare_result.stdout
+    assert "Comparison Basis" in suite_reference_compare_result.stdout
+    assert "Reference Median (s)" in suite_reference_compare_result.stdout
+    assert "0.150000" in suite_reference_compare_result.stdout
     assert "Reference" in suite_reference_compare_result.stdout
     assert "0.67x" in suite_reference_compare_result.stdout
     assert "2.1" in suite_reference_compare_result.stdout
+    assert "Best Run vs Reference" in suite_reference_compare_result.stdout
+    assert "Improvement Probability" in suite_reference_compare_result.stdout
+    assert "p-value" in suite_reference_compare_result.stdout
 
     verbose_compare_result = runner.invoke(
         app,
@@ -158,10 +186,13 @@ def test_cli_lists_shows_and_compares_runs(
     assert verbose_compare_result.exit_code == 0
     assert verbose_compare_result.stdout != compare_result.stdout
     assert "Comparison Basis" in verbose_compare_result.stdout
-    assert "Best Median (s): 0.100000" in verbose_compare_result.stdout
-    assert "Run ID: 1.1" in verbose_compare_result.stdout
-    assert "Record ID: 1" in verbose_compare_result.stdout
-    assert "Mean +- Std (s):" in verbose_compare_result.stdout
+    assert "Best Median (s)" in verbose_compare_result.stdout
+    assert "0.100000" in verbose_compare_result.stdout
+    assert "Run ID" in verbose_compare_result.stdout
+    assert "Record ID" in verbose_compare_result.stdout
+    assert "1.1" in verbose_compare_result.stdout
+    assert "1" in verbose_compare_result.stdout
+    assert "Mean +- Std (s)" in verbose_compare_result.stdout
     assert "0.100000 +- 0.000000" in verbose_compare_result.stdout
     assert "+- 0.000000" in verbose_compare_result.stdout
 
@@ -725,10 +756,13 @@ def test_suite_compare_basis_matches_best_run_time_and_std(
     assert compare_result.exit_code == 0
     assert "0.126667" in compare_result.stdout
     assert "0.064291" in compare_result.stdout
-    assert "Run ID: 1.1" in compare_result.stdout
-    assert "Record ID: 1" in compare_result.stdout
-    assert "Best Median (s): 0.100000" in compare_result.stdout
-    assert "Mean +- Std (s):" in compare_result.stdout
+    assert "Run ID" in compare_result.stdout
+    assert "Record ID" in compare_result.stdout
+    assert "1.1" in compare_result.stdout
+    assert "1" in compare_result.stdout
+    assert "Best Median (s)" in compare_result.stdout
+    assert "0.100000" in compare_result.stdout
+    assert "Mean +- Std (s)" in compare_result.stdout
     assert "0.126667 +- 0.064291" in compare_result.stdout
 
 
@@ -758,3 +792,151 @@ def test_suite_row_style_keeps_reference_green_when_it_is_best() -> None:
 
     assert _suite_row_style(comparison, comparison["runs"][1]) == "green"
     assert _suite_row_style(comparison, comparison["runs"][0]) is None
+
+
+def test_cli_compare_can_pin_and_use_baseline(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-suite",
+        configuration={"variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    pin_result = runner.invoke(
+        app,
+        ["compare", "baseline-suite", "2.1", "--pin-baseline", "--database", str(database_path)],
+    )
+
+    assert pin_result.exit_code == 0
+    assert "Baseline Updated" in pin_result.stdout
+    assert "Pinned baseline for baseline-suite: 2.1 (2)" in pin_result.stdout
+
+    use_result = runner.invoke(
+        app,
+        ["compare", "baseline-suite", "--use-baseline", "--database", str(database_path)],
+    )
+
+    assert use_result.exit_code == 0
+    assert "Statistical Findings" in use_result.stdout
+    assert "Basis Source" in use_result.stdout
+    assert "pinned" in use_result.stdout
+    assert "2.1" in use_result.stdout
+
+
+def test_cli_verbose_trend_preserves_warning_categories(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="warning-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.100, 0.105, 0.110, 0.115, 0.500],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="warning-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.200, 0.210, 0.205],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["--verbose", "trend", "warning-trend-suite", "--baseline", "1.1", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "baseline outliers detected" in result.stdout
+    assert "candidate low sample count" in result.stdout
+
+
+def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
+    test_runner = CliRunner()
+
+    show_result = test_runner.invoke(app, ["show", "--help"])
+    compare_result = test_runner.invoke(app, ["compare", "--help"])
+
+    assert show_result.exit_code == 0
+    assert "Inspect all recorded runs, a suite, or specific run IDs." in show_result.stdout
+    assert "Omit" in show_result.stdout
+    assert "identifiers to list all recorded runs." in show_result.stdout
+    assert "pinned baseline" in show_result.stdout
+
+    assert compare_result.exit_code == 0
+    assert "Compare two runs directly" in compare_result.stdout
+    assert "suite comparison" in compare_result.stdout
+    assert "direct run-to-run" in compare_result.stdout
+    assert "show," in compare_result.stdout
+    assert "compare, and trend" in compare_result.stdout
+
+
+def test_cli_trend_shows_time_series_for_matching_configuration(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.139, 0.140, 0.141, 0.142, 0.140, 0.139, 0.141],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="trend-suite",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.199, 0.200, 0.201, 0.200, 0.199],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["trend", "trend-suite", "--baseline", "1.1", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Trend Basis: trend-suite" in result.stdout
+    assert "Trend: trend-suite" in result.stdout
+    assert "Delta" in result.stdout
+    assert "Drift" in result.stdout
+    assert "Status" in result.stdout
+    assert "1.1" in result.stdout
+    assert "2.1" in result.stdout
+    assert "3.1" in result.stdout
+    assert "4.1" not in result.stdout

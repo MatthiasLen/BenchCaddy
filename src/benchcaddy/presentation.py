@@ -77,8 +77,8 @@ def json_panel(title: str, value: object, *, indent: int | None = None, fit: boo
     return (Panel.fit if fit else Panel)(dump_json(value, indent=indent), title=title)
 
 
-def summary_panel(title: str, rows: Sequence[tuple[str, str]]) -> Panel:
+def summary_panel(title: str, rows: Sequence[tuple[str, object]]) -> Panel:
     summary = Table.grid(padding=(0, 2))
     for label, value in rows:
-        summary.add_row(label, value)
+        summary.add_row(label, value if isinstance(value, Text) else str(value))
     return Panel.fit(summary, title=title)

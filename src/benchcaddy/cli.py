@@ -9,9 +9,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .db import compare_runs, compare_suite_runs, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details, list_suite_summaries
+from .db import compare_runs, compare_suite_runs, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details, get_suite_trend, list_suite_summaries, set_suite_baseline
 from .observability import summarize_observations
-from .presentation import dump_json, format_return_error, format_return_value, json_panel, render_table
+from .presentation import dump_json, format_return_error, format_return_value, json_panel, render_table, summary_panel
+from .stats import AnalysisOptions
 
 app = typer.Typer(help="Inspect BenchCaddy benchmark suites.")
 console = Console()
@@ -67,6 +68,53 @@ def _format_time(mean_seconds: float | None, std_seconds: float | None) -> str:
     return f"{mean_value:.6f} +- {std_value:.6f}"
 
 
+def _format_interval(lower_seconds: float | None, upper_seconds: float | None) -> str:
+    if lower_seconds is None or upper_seconds is None:
+        return "-"
+    return f"[{lower_seconds:.6f}, {upper_seconds:.6f}]"
+
+
+def _format_ratio(value: float | None) -> str:
+    return "-" if value is None else f"{value * 100.0:.2f}%"
+
+
+def _format_probability(value: float | None) -> str:
+    return "-" if value is None else f"{value * 100.0:.1f}%"
+
+
+def _format_warning_list(value: list[str] | tuple[str, ...] | None) -> str:
+    if not value:
+        return "-"
+    return ", ".join(str(item).replace("_", " ") for item in value)
+
+
+def _combine_warning_lists(*values: object) -> tuple[str, ...]:
+    combined: list[str] = []
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            combined.extend(str(item) for item in value)
+    return tuple(dict.fromkeys(combined))
+
+
+def _analysis_options(
+    *,
+    confidence_level: float,
+    bootstrap_resamples: int,
+    noise_threshold: float,
+    significance_level: float,
+    regression_threshold: float,
+    window_size: int = 5,
+) -> AnalysisOptions:
+    return AnalysisOptions(
+        confidence_level=confidence_level,
+        bootstrap_resamples=bootstrap_resamples,
+        noise_cv_threshold=noise_threshold,
+        significance_level=significance_level,
+        regression_threshold_percent=regression_threshold,
+        drift_window_size=window_size,
+    )
+
+
 def _styled(value: object, style: str | None = None) -> Text:
     return Text(str(value), style=style)
 
@@ -92,6 +140,77 @@ def _suite_row_style(comparison: dict[str, object], run: dict[str, object]) -> s
 
 def _format_optional_seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.6f}"
+
+
+def _styled_run_label(run: dict[str, object], style: str | None) -> Text:
+    return _styled(f"{run['display_id']} ({run['id']})", style)
+
+
+def _run_analysis_panel(run: dict[str, object], title: str = "Statistical Summary") -> Panel:
+    analysis = run.get("analysis") or {}
+    return summary_panel(
+        title,
+        [
+            ("Median CI (s)", _format_interval(run.get("ci_lower_seconds"), run.get("ci_upper_seconds"))),
+            ("MAD (s)", _format_optional_seconds(run.get("mad_seconds"))),
+            ("CV", _format_ratio(run.get("coefficient_of_variation"))),
+            ("Warnings", _format_warning_list(run.get("noise_warnings"))),
+            ("Sample Count", str(analysis.get("sample_count", len(run.get("samples", []))))),
+        ],
+    )
+
+
+def _comparison_analysis_panel(comparison_analysis: dict[str, object], title: str = "Statistical Assessment") -> Panel:
+    return summary_panel(
+        title,
+        [
+            ("Delta CI (s)", _format_interval(comparison_analysis.get("delta_ci_lower_seconds"), comparison_analysis.get("delta_ci_upper_seconds"))),
+            ("Regression Probability", _format_probability(comparison_analysis.get("regression_probability"))),
+            ("Improvement Probability", _format_probability(comparison_analysis.get("improvement_probability"))),
+            ("p-value", f"{float(comparison_analysis.get('significance_p_value', 0.0)):.4f}"),
+            ("Practical Threshold (s)", _format_optional_seconds(comparison_analysis.get("practical_threshold_seconds"))),
+            ("Classification", str(comparison_analysis.get("classification", "-"))),
+            ("Warnings", _format_warning_list(comparison_analysis.get("warnings"))),
+        ],
+    )
+
+
+def _best_vs_reference_panel(comparison: dict[str, object]) -> Panel | None:
+    if comparison.get("basis_metric_label") != "Reference Median (s)":
+        return None
+
+    best_run = min(comparison["runs"], key=lambda candidate: (candidate["median_seconds"], candidate["id"]))
+    basis_run = comparison.get("basis_run")
+    if basis_run is None or best_run["id"] == basis_run["id"]:
+        return None
+
+    best_analysis = best_run.get("comparison_analysis") or {}
+    return summary_panel(
+        "Best Run vs Reference",
+        [
+            ("Reference Run", _styled_run_label(basis_run, "yellow")),
+            ("Best Run", _styled_run_label(best_run, "green")),
+            ("Delta CI (s)", _format_interval(best_analysis.get("delta_ci_lower_seconds"), best_analysis.get("delta_ci_upper_seconds"))),
+            ("Improvement Probability", _format_probability(best_analysis.get("improvement_probability"))),
+            ("Regression Probability", _format_probability(best_analysis.get("regression_probability"))),
+            ("p-value", f"{float(best_analysis.get('significance_p_value', 0.0)):.4f}"),
+            ("Classification", str(best_analysis.get("classification", "-"))),
+            ("Warnings", _format_warning_list(best_analysis.get("warnings"))),
+        ],
+    )
+
+
+def _suite_findings_panel(comparison: dict[str, object]) -> Panel:
+    regressing = [run["display_id"] for run in comparison["runs"] if (run.get("comparison_analysis") or {}).get("regression_detected")]
+    noisy = [run["display_id"] for run in comparison["runs"] if run.get("noise_warnings")]
+    return summary_panel(
+        "Statistical Findings",
+        [
+            ("Regressing Runs", ", ".join(regressing) if regressing else "-"),
+            ("Noisy Runs", ", ".join(noisy) if noisy else "-"),
+            ("Basis Source", str(comparison.get("basis_source", "best"))),
+        ],
+    )
 
 
 def _render_observation_table(observations: list[dict[str, object]], title: str) -> Table:
@@ -204,18 +323,36 @@ def _show_run(run: dict[str, object]) -> None:
                 ("Mean +- Std (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
                 ("Min (s)", _format_optional_seconds(run.get("min_seconds"))),
                 ("Max (s)", _format_optional_seconds(run.get("max_seconds"))),
+                ("Median CI (s)", _format_interval(run.get("ci_lower_seconds"), run.get("ci_upper_seconds"))),
+                ("MAD (s)", _format_optional_seconds(run.get("mad_seconds"))),
+                ("CV", _format_ratio(run.get("coefficient_of_variation"))),
+                ("Warnings", _format_warning_list(run.get("noise_warnings"))),
                 ("Return Value", format_return_value(run.get("target_return_value"), compact=True)),
                 ("Samples", len(run["samples"])),
                 ("Recorded At", run["created_at"]),
             ],
         )
     )
+    console.print(_run_analysis_panel(run))
     console.print(_render_observation_table(run["observations"], title="Observed Timings"))
     console.print(json_panel("Environment", run["environment"], indent=2))
 
 
 def _show_suite(details: dict[str, object]) -> None:
     console.print(_render_run_table(f"Suite: {details['suite_name']}", details["runs"]))
+    if details.get("baseline_run") is not None:
+        baseline_run = details["baseline_run"]
+        console.print(
+            summary_panel(
+                "Pinned Baseline",
+                [
+                    ("Run ID", _styled(baseline_run["display_id"], "yellow")),
+                    ("Record ID", _styled(baseline_run["id"], "yellow")),
+                    ("Median CI (s)", _format_interval(baseline_run.get("ci_lower_seconds"), baseline_run.get("ci_upper_seconds"))),
+                    ("Configuration", dump_json(baseline_run["configuration"])),
+                ],
+            )
+        )
     console.print(
         render_table(
             f"Observed Timings: {details['suite_name']}",
@@ -279,6 +416,7 @@ def _print_run_comparison(
             ],
         )
     )
+    console.print(_comparison_analysis_panel(comparison["comparison_analysis"]))
 
     if comparison["observation_rows"]:
         console.print(
@@ -309,6 +447,9 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
     table.add_column("Return Value", overflow="ellipsis", no_wrap=True, max_width=16)
     table.add_column("Return Error", justify="right", no_wrap=True, max_width=12)
     if _STATE.verbose:
+        table.add_column("Status", no_wrap=True, max_width=10)
+        table.add_column("Median CI (s)", justify="right", no_wrap=True, max_width=24)
+        table.add_column("p-value", justify="right", no_wrap=True, max_width=8)
         table.add_column("Samples", justify="right", no_wrap=True)
         table.add_column("Recorded At", overflow="ellipsis", no_wrap=True, max_width=16)
 
@@ -324,31 +465,134 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
                 "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
                 format_return_value(run.get("target_return_value"), compact=True),
                 format_return_error(run.get("target_return_relative_error")),
-                *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
+                *(
+                    [
+                        str((run.get("comparison_analysis") or {}).get("classification", "-")),
+                        _format_interval(run.get("ci_lower_seconds"), run.get("ci_upper_seconds")),
+                        f"{float((run.get('comparison_analysis') or {}).get('significance_p_value', 0.0)):.4f}",
+                        run["sample_count"],
+                        run["created_at"],
+                    ]
+                    if _STATE.verbose
+                    else []
+                ),
             ),
             style,
         )
         table.add_row(*(value if isinstance(value, Text) else str(value) for value in row))
 
     console.print(table)
+    console.print(_suite_findings_panel(comparison))
+    best_vs_reference = _best_vs_reference_panel(comparison)
+    if best_vs_reference is not None:
+        console.print(best_vs_reference)
+    if any(run.get("target_return_value") is not None for run in comparison["runs"]):
+        console.print(
+            summary_panel(
+                "Stored Return Metrics",
+                [
+                    ("Return Value", "shown per run"),
+                    ("Return Error", "relative to the comparison basis"),
+                ],
+            )
+        )
 
     if comparison["basis_median_seconds"] is not None:
         best_run = comparison["basis_run"]
+        basis_style = "yellow" if comparison.get("basis_metric_label") == "Reference Median (s)" else "green"
         console.print(
-            Panel.fit(
-                " | ".join(
-                    [
-                        f"Run ID: {best_run['display_id']}",
-                        f"Record ID: {best_run['id']}",
-                        f"{comparison['basis_metric_label']}: {best_run['median_seconds']:.6f}",
-                        f"Mean +- Std (s): {_format_time(best_run.get('mean_seconds'), best_run.get('std_seconds'))}",
-                        f"Return Value: {format_return_value(best_run.get('target_return_value'), compact=True)}",
-                        "Return Error: relative to this basis run",
-                    ]
-                ),
-                title="Comparison Basis",
+            summary_panel(
+                "Comparison Basis",
+                [
+                    ("Run ID", _styled(best_run["display_id"], basis_style)),
+                    ("Record ID", _styled(best_run["id"], basis_style)),
+                    (str(comparison["basis_metric_label"]), f"{best_run['median_seconds']:.6f}"),
+                    ("Mean +- Std (s)", _format_time(best_run.get("mean_seconds"), best_run.get("std_seconds"))),
+                    ("Median CI (s)", _format_interval(best_run.get("ci_lower_seconds"), best_run.get("ci_upper_seconds"))),
+                    ("Return Value", format_return_value(best_run.get("target_return_value"), compact=True)),
+                    ("Return Error", "relative to this basis run"),
+                ],
             )
         )
+
+
+def _print_trend(trend: dict[str, object]) -> None:
+    basis_run = trend["basis_run"]
+    console.print(
+        summary_panel(
+            f"Trend Basis: {trend['suite_name']}",
+            [
+                ("Source", str(trend.get("basis_source", "latest"))),
+                ("Run ID", _styled(basis_run["display_id"], "yellow")),
+                ("Record ID", _styled(basis_run["id"], "yellow")),
+                ("Configuration", dump_json(trend.get("config_filter"))),
+                ("Median CI (s)", _format_interval(basis_run.get("ci_lower_seconds"), basis_run.get("ci_upper_seconds"))),
+            ],
+        )
+    )
+
+    table = Table(title=f"Trend: {trend['suite_name']}", pad_edge=False, collapse_padding=True)
+    table.add_column("Run ID", justify="right", no_wrap=True, min_width=4, max_width=4)
+    table.add_column("Median (s)", justify="right", no_wrap=True, max_width=12)
+    table.add_column("Median CI (s)", justify="right", no_wrap=True, max_width=24)
+    table.add_column("Delta", justify="right", no_wrap=True, max_width=18)
+    table.add_column("Drift", no_wrap=True, max_width=10)
+    table.add_column("Status", no_wrap=True, max_width=10)
+    table.add_column("Recorded At", overflow="ellipsis", no_wrap=True, max_width=16)
+    if _STATE.verbose:
+        table.add_column("Record ID", justify="right", no_wrap=True, min_width=7, max_width=7)
+        table.add_column("Warnings", overflow="fold")
+
+    for run in trend["runs"]:
+        vs_baseline = run["vs_baseline"]
+        delta_value = f"{vs_baseline['delta_seconds']:+.6f}"
+        if vs_baseline.get("percent_change") is not None:
+            delta_value = f"{delta_value} ({vs_baseline['percent_change']:+.2f}%)"
+        status = "basis" if run.get("is_basis") else str(vs_baseline.get("classification", "stable"))
+        row = [
+            run["display_id"],
+            f"{run['median_seconds']:.6f}",
+            _format_interval(run.get("ci_lower_seconds"), run.get("ci_upper_seconds")),
+            delta_value,
+            str(run.get("drift_status", "stable")),
+            status,
+            run["created_at"],
+        ]
+        if _STATE.verbose:
+            row.append(run["id"])
+            row.append(
+                _format_warning_list(
+                    _combine_warning_lists(
+                        run.get("noise_warnings"),
+                        (run.get("vs_baseline") or {}).get("warnings"),
+                        (run.get("drift_analysis") or {}).get("warnings") if run.get("drift_analysis") is not None else (),
+                    )
+                )
+            )
+        table.add_row(*(str(value) for value in row))
+
+    console.print(table)
+    if _STATE.verbose:
+        warning_rows = [
+            (
+                run["display_id"],
+                _format_warning_list(
+                    _combine_warning_lists(
+                        run.get("noise_warnings"),
+                        (run.get("vs_baseline") or {}).get("warnings"),
+                        (run.get("drift_analysis") or {}).get("warnings") if run.get("drift_analysis") is not None else (),
+                    )
+                ),
+            )
+            for run in trend["runs"]
+            if _combine_warning_lists(
+                run.get("noise_warnings"),
+                (run.get("vs_baseline") or {}).get("warnings"),
+                (run.get("drift_analysis") or {}).get("warnings") if run.get("drift_analysis") is not None else (),
+            )
+        ]
+        if warning_rows:
+            console.print(render_table("Trend Warning Details", [("Run ID", "right"), "Warnings"], warning_rows))
 
 
 @app.callback()
@@ -400,9 +644,9 @@ def list_command(
         console.print(Panel.fit(str(database_path), title="Database"))
 
 
-@app.command("show")
+@app.command("show", help="Inspect all recorded runs, a suite, or specific run IDs. When a suite has a pinned baseline, it is shown in the suite view.")
 def show_command(
-    identifiers: list[str] | None = typer.Argument(None, help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1)."),
+    identifiers: list[str] | None = typer.Argument(None, help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1). Omit identifiers to list all recorded runs."),
     database: Path = typer.Option(
         None,
         "--database",
@@ -451,16 +695,31 @@ def show_command(
     _show_selected_runs(runs)
 
 
-@app.command("compare")
+@app.command("compare", help="Compare two runs directly, compare a suite to its best run, or compare a suite to a selected or pinned reference run.")
 def compare_command(
-    left: str = typer.Argument(..., help="Suite name or baseline run ID."),
-    operands: list[str] = typer.Argument(None, help="Optional reference run ID followed by strict config keys."),
+    left: str = typer.Argument(..., help="Suite name for suite comparison, or the baseline run ID for a direct run-to-run comparison."),
+    operands: list[str] = typer.Argument(None, help="For suite comparison: optional reference run ID, then strict config keys when --strict is used. For direct run comparison: the candidate run ID."),
     strict: bool = typer.Option(
         False,
         "--strict",
         "-s",
         help="Restrict suite comparison to runs whose configuration matches the reference run for the given trailing config keys.",
     ),
+    use_baseline: bool = typer.Option(
+        False,
+        "--use-baseline",
+        help="Use the pinned suite baseline as the comparison reference instead of the suite's best run.",
+    ),
+    pin_baseline: bool = typer.Option(
+        False,
+        "--pin-baseline",
+        help="Persist the supplied suite reference run as the suite baseline for future show, compare, and trend commands.",
+    ),
+    confidence_level: float = typer.Option(0.95, "--confidence-level", min=0.5, max=0.99, help="Bootstrap confidence level used for median and delta confidence intervals."),
+    bootstrap_resamples: int = typer.Option(2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."),
+    noise_threshold: float = typer.Option(0.05, "--noise-threshold", min=0.0, help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs."),
+    significance_level: float = typer.Option(0.05, "--significance-level", min=0.001, max=0.5, help="p-value threshold used when classifying regressions and improvements."),
+    regression_threshold: float = typer.Option(5.0, "--regression-threshold", min=0.0, help="Practical regression threshold in percent relative to the baseline median."),
     database: Path = typer.Option(
         None,
         "--database",
@@ -472,13 +731,20 @@ def compare_command(
 ) -> None:
     right, strict_keys = _parse_compare_operands(operands, strict)
     database_path = get_database_path(database)
+    analysis_options = _analysis_options(
+        confidence_level=confidence_level,
+        bootstrap_resamples=bootstrap_resamples,
+        noise_threshold=noise_threshold,
+        significance_level=significance_level,
+        regression_threshold=regression_threshold,
+    )
     left_run_id = _as_run_id(left)
     right_run_id = _as_run_id(right) if right is not None else None
     if left_run_id is not None and right_run_id is not None:
-        if strict_keys:
-            console.print("--strict is only supported for suite comparisons with a reference run.")
+        if strict_keys or use_baseline or pin_baseline:
+            console.print("--strict, --use-baseline, and --pin-baseline are only supported for suite comparisons.")
             raise typer.Exit(code=2)
-        comparison = compare_runs(left_run_id, right_run_id, database_path)
+        comparison = compare_runs(left_run_id, right_run_id, database_path, analysis_options=analysis_options)
         if comparison is None:
             console.print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
             raise typer.Exit(code=1)
@@ -488,8 +754,21 @@ def compare_command(
     if strict_keys and right_run_id is None:
         console.print("--strict requires a suite comparison with a reference run ID.")
         raise typer.Exit(code=2)
+    if use_baseline and right_run_id is not None:
+        console.print("--use-baseline cannot be combined with an explicit reference run ID.")
+        raise typer.Exit(code=2)
+    if pin_baseline and right_run_id is None:
+        console.print("--pin-baseline requires a suite comparison with a reference run ID.")
+        raise typer.Exit(code=2)
 
-    comparison = compare_suite_runs(left, right_run_id, strict_keys, database_path)
+    comparison = compare_suite_runs(
+        left,
+        right_run_id,
+        strict_keys,
+        database_path,
+        analysis_options=analysis_options,
+        use_pinned_baseline=use_baseline,
+    )
     if comparison is None:
         console.print(f"Suite '{left}' was not found in {database_path}.")
         raise typer.Exit(code=1)
@@ -510,7 +789,82 @@ def compare_command(
             f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}."
         )
         raise typer.Exit(code=1)
+    if comparison.get("error") == "baseline_not_found":
+        console.print(f"Suite '{left}' does not have a pinned baseline in {database_path}.")
+        raise typer.Exit(code=1)
+
+    if pin_baseline:
+        pinned = set_suite_baseline(left, right_run_id, database_path, analysis_options=analysis_options)
+        if pinned is not None and not pinned.get("error"):
+            console.print(
+                Panel.fit(
+                    f"Pinned baseline for {left}: {pinned['display_id']} ({pinned['id']})",
+                    title="Baseline Updated",
+                )
+            )
+
     _print_suite_comparison(comparison)
+
+
+@app.command("trend", help="Inspect one suite configuration over time. Uses the explicit baseline when provided, otherwise the pinned suite baseline, otherwise the latest matching run.")
+def trend_command(
+    suite_name: str = typer.Argument(..., help="Suite name to inspect as a time-series trend."),
+    baseline: str | None = typer.Option(None, "--baseline", help="Optional baseline run ID to anchor the trend output. If omitted, trend uses the pinned suite baseline when set, otherwise the latest matching run."),
+    limit: int | None = typer.Option(None, "--limit", min=1, help="Limit the trend output to the most recent matching runs."),
+    window: int = typer.Option(5, "--window", min=2, help="Rolling window size used for drift analysis."),
+    confidence_level: float = typer.Option(0.95, "--confidence-level", min=0.5, max=0.99, help="Bootstrap confidence level used for median and delta confidence intervals."),
+    bootstrap_resamples: int = typer.Option(2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."),
+    noise_threshold: float = typer.Option(0.05, "--noise-threshold", min=0.0, help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs."),
+    significance_level: float = typer.Option(0.05, "--significance-level", min=0.001, max=0.5, help="p-value threshold used when classifying regressions and improvements."),
+    regression_threshold: float = typer.Option(5.0, "--regression-threshold", min=0.0, help="Practical regression threshold in percent relative to the baseline median."),
+    database: Path = typer.Option(
+        None,
+        "--database",
+        "-d",
+        exists=False,
+        dir_okay=False,
+        help="Path to the BenchCaddy SQLite database.",
+    ),
+) -> None:
+    database_path = get_database_path(database)
+    baseline_run_id = None
+    if baseline is not None:
+        baseline_run_id = _as_run_id(baseline)
+        if baseline_run_id is None:
+            console.print(f"'{baseline}' is not a valid run ID.")
+            raise typer.Exit(code=1)
+
+    analysis_options = _analysis_options(
+        confidence_level=confidence_level,
+        bootstrap_resamples=bootstrap_resamples,
+        noise_threshold=noise_threshold,
+        significance_level=significance_level,
+        regression_threshold=regression_threshold,
+        window_size=window,
+    )
+    trend = get_suite_trend(
+        suite_name,
+        database_path,
+        analysis_options=analysis_options,
+        baseline_run_id=baseline_run_id,
+        limit=limit,
+    )
+    if trend is None:
+        console.print(f"Suite '{suite_name}' was not found in {database_path}.")
+        raise typer.Exit(code=1)
+    if trend.get("error") == "reference_run_not_found":
+        console.print(f"Reference run '{baseline}' was not found in {database_path}.")
+        raise typer.Exit(code=1)
+    if trend.get("error") == "reference_run_wrong_suite":
+        console.print(
+            f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'."
+        )
+        raise typer.Exit(code=1)
+    if trend.get("basis_run") is None:
+        console.print(f"Suite '{suite_name}' does not have any recorded runs in {database_path}.")
+        raise typer.Exit(code=1)
+
+    _print_trend(trend)
 
 
 main = app

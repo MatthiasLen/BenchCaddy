@@ -14,6 +14,7 @@ from sqlalchemy.types import JSON
 
 from .observability import summarize_observations
 from .return_values import StoredReturnValue, normalize_return_value, return_relative_error
+from .stats import AnalysisOptions, analyze_samples, compare_sample_sets
 
 _ENGINES: dict[Path, Engine] = {}
 _INITIALIZED_DATABASES: set[Path] = set()
@@ -31,8 +32,21 @@ class BenchmarkSuite(Base):
     target_name: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
+    baseline: Mapped["BenchmarkSuiteBaseline | None"] = relationship(back_populates="suite")
     sweep_executions: Mapped[list["BenchmarkSweepExecution"]] = relationship(back_populates="suite")
     runs: Mapped[list["BenchmarkRun"]] = relationship(back_populates="suite")
+
+
+class BenchmarkSuiteBaseline(Base):
+    __tablename__ = "benchmark_suite_baselines"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    suite_id: Mapped[int] = mapped_column(ForeignKey("benchmark_suites.id"), unique=True, index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("benchmark_runs.id"), index=True)
+    created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
+
+    suite: Mapped[BenchmarkSuite] = relationship(back_populates="baseline")
+    run: Mapped["BenchmarkRun"] = relationship()
 
 
 class BenchmarkSweepExecution(Base):
@@ -128,7 +142,12 @@ class BenchmarkRun(Base):
     def mean_seconds(self) -> float:
         return float(fmean(self.samples)) if self.samples else 0.0
 
-    def to_payload(self) -> dict[str, Any]:
+    def analysis_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, object]:
+        analysis = analyze_samples(self.samples, analysis_options)
+        return analysis.to_payload()
+
+    def to_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, Any]:
+        analysis = self.analysis_payload(analysis_options)
         return {
             "id": self.id,
             "record_id": self.id,
@@ -145,11 +164,18 @@ class BenchmarkRun(Base):
             "std_seconds": self.std_seconds,
             "target_return_value": self.target_return_value,
             "created_at": self.created_at,
+            "analysis": analysis,
+            "mad_seconds": analysis["mad_seconds"],
+            "coefficient_of_variation": analysis["coefficient_of_variation"],
+            "ci_lower_seconds": analysis["ci_lower_seconds"],
+            "ci_upper_seconds": analysis["ci_upper_seconds"],
+            "noise_warnings": list(analysis["warnings"]),
+            "is_noisy": analysis["is_noisy"],
         }
 
-    def to_detail_payload(self) -> dict[str, Any]:
+    def to_detail_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, Any]:
         return {
-            **self.to_payload(),
+            **self.to_payload(analysis_options),
             "suite_name": self.suite.name,
             "target_name": self.suite.target_name,
             "environment": self.environment.to_payload(),
@@ -159,7 +185,11 @@ class BenchmarkRun(Base):
         self,
         reference_median_seconds: float,
         reference_run_target_value: StoredReturnValue | None,
+        reference_samples: Sequence[float],
+        analysis_options: AnalysisOptions | None = None,
     ) -> dict[str, Any]:
+        analysis = self.analysis_payload(analysis_options)
+        comparison_analysis = compare_sample_sets(reference_samples, self.samples, analysis_options).to_payload()
         return {
             "id": self.id,
             "record_id": self.id,
@@ -176,6 +206,15 @@ class BenchmarkRun(Base):
             "slowdown_factor": None if reference_median_seconds <= 0 else self.median_seconds / reference_median_seconds,
             "sample_count": len(self.samples),
             "created_at": self.created_at,
+            "analysis": analysis,
+            "mad_seconds": analysis["mad_seconds"],
+            "coefficient_of_variation": analysis["coefficient_of_variation"],
+            "ci_lower_seconds": analysis["ci_lower_seconds"],
+            "ci_upper_seconds": analysis["ci_upper_seconds"],
+            "comparison_analysis": comparison_analysis,
+            "status": comparison_analysis["classification"],
+            "noise_warnings": list(analysis["warnings"]),
+            "is_noisy": analysis["is_noisy"],
         }
 
 def _suite_query(suite_name: str):
@@ -231,6 +270,19 @@ def _migrate_legacy_schema(engine: Engine) -> None:
     with engine.begin() as connection:
         for statement in statements:
             connection.execute(text(statement))
+
+
+def _get_suite_baseline_record(session: Session, suite_id: int) -> BenchmarkSuiteBaseline | None:
+    return session.scalar(
+        select(BenchmarkSuiteBaseline).where(BenchmarkSuiteBaseline.suite_id == suite_id)
+    )
+
+
+def _resolve_suite_baseline_run(session: Session, suite: BenchmarkSuite) -> BenchmarkRun | None:
+    baseline_record = _get_suite_baseline_record(session, suite.id)
+    if baseline_record is None:
+        return None
+    return session.get(BenchmarkRun, baseline_record.run_id)
 
 
 @contextmanager
@@ -345,6 +397,7 @@ def list_suite_summaries(database_path: str | Path | None = None) -> list[dict[s
 def get_suite_details(
     suite_name: str,
     database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         suite = session.scalar(_suite_query(suite_name))
@@ -359,8 +412,9 @@ def get_suite_details(
         environment = None
         if runs:
             environment = runs[0].environment
+        baseline_run = _resolve_suite_baseline_run(session, suite)
 
-    run_payloads = [run.to_payload() for run in runs]
+    run_payloads = [run.to_payload(analysis_options) for run in runs]
     run_payloads.sort(key=lambda run: (-(run["sweep_id"]), -(run["run_index"]), -run["record_id"]))
 
     return {
@@ -368,7 +422,72 @@ def get_suite_details(
         "target_name": suite.target_name,
         "runs": run_payloads,
         "environment": None if environment is None else environment.to_payload(),
+        "baseline_run": None if baseline_run is None else baseline_run.to_payload(analysis_options),
     }
+
+
+def set_suite_baseline(
+    suite_name: str,
+    run_id: int | tuple[int, int],
+    database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
+) -> dict[str, Any] | None:
+    with db_session(database_path) as session:
+        suite = session.scalar(_suite_query(suite_name))
+        if suite is None:
+            return None
+        run = _resolve_run(session, run_id)
+        if run is None:
+            return {"error": "reference_run_not_found", "suite_name": suite.name}
+        if run.suite_id != suite.id:
+            return {
+                "error": "reference_run_wrong_suite",
+                "suite_name": suite.name,
+                "reference_run_display_id": run.display_id,
+                "reference_run_record_id": run.id,
+                "reference_run_suite_name": run.suite.name,
+            }
+
+        baseline = _get_suite_baseline_record(session, suite.id)
+        if baseline is None:
+            baseline = BenchmarkSuiteBaseline(suite_id=suite.id, run_id=run.id)
+            session.add(baseline)
+        else:
+            baseline.run_id = run.id
+        session.commit()
+        session.refresh(run)
+        return run.to_detail_payload(analysis_options)
+
+
+def get_suite_baseline(
+    suite_name: str,
+    database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
+) -> dict[str, Any] | None:
+    with db_session(database_path) as session:
+        suite = session.scalar(_suite_query(suite_name))
+        if suite is None:
+            return None
+        run = _resolve_suite_baseline_run(session, suite)
+        if run is None:
+            return None
+        return run.to_detail_payload(analysis_options)
+
+
+def clear_suite_baseline(
+    suite_name: str,
+    database_path: str | Path | None = None,
+) -> bool | None:
+    with db_session(database_path) as session:
+        suite = session.scalar(_suite_query(suite_name))
+        if suite is None:
+            return None
+        baseline = _get_suite_baseline_record(session, suite.id)
+        if baseline is None:
+            return False
+        session.delete(baseline)
+        session.commit()
+        return True
 
 
 def compare_suite_runs(
@@ -376,6 +495,8 @@ def compare_suite_runs(
     reference_run_id: int | tuple[int, int] | None = None,
     strict_keys: Sequence[str] = (),
     database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
+    use_pinned_baseline: bool = False,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         suite = session.scalar(_suite_query(suite_name))
@@ -383,11 +504,23 @@ def compare_suite_runs(
             return None
 
         reference_run = None
+        reference_from_pinned = False
         reference_run_suite_name = None
+        pinned_baseline_run = _resolve_suite_baseline_run(session, suite)
         if reference_run_id is not None:
             reference_run = _resolve_run(session, reference_run_id)
             if reference_run is not None:
                 reference_run_suite_name = reference_run.suite.name
+        elif use_pinned_baseline:
+            reference_run = pinned_baseline_run
+            if reference_run is None:
+                return {
+                    "error": "baseline_not_found",
+                    "suite_name": suite.name,
+                }
+            reference_from_pinned = True
+            reference_run_id = reference_run.id
+            reference_run_suite_name = reference_run.suite.name
 
         runs = session.execute(
             select(BenchmarkRun)
@@ -405,6 +538,7 @@ def compare_suite_runs(
             "delta_column_label": "Delta vs Best (s)",
             "ratio_column_label": "Slowdown",
             "runs": [],
+            "pinned_baseline": None,
         }
 
     if reference_run_id is None:
@@ -463,16 +597,22 @@ def compare_suite_runs(
         "basis_run": basis_run.to_suite_comparison_row(
             basis_median_seconds,
             basis_run.target_return_value,
+            basis_run.samples,
+            analysis_options,
         ),
         "basis_metric_label": basis_metric_label,
         "delta_column_label": delta_column_label,
         "ratio_column_label": ratio_column_label,
         "strict_keys": list(strict_keys),
         "strict_config": strict_config,
+        "basis_source": "pinned" if reference_from_pinned else "reference" if reference_run_id is not None else "best",
+        "pinned_baseline": None if pinned_baseline_run is None else pinned_baseline_run.to_payload(analysis_options),
         "runs": [
             run.to_suite_comparison_row(
                 basis_median_seconds,
                 basis_run.target_return_value,
+                basis_run.samples,
+                analysis_options,
             )
             for run in runs
         ],
@@ -482,20 +622,22 @@ def compare_suite_runs(
 def get_run_details(
     run_id: int | tuple[int, int],
     database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         run = _resolve_run(session, run_id)
         if run is None:
             return None
-        return run.to_detail_payload()
+        return run.to_detail_payload(analysis_options)
 
 
 def get_selected_run_details(
     run_ids: Sequence[int | tuple[int, int]],
     database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
 ) -> list[dict[str, Any]] | None:
     unique_run_ids = list(dict.fromkeys(run_ids))
-    runs = [get_run_details(run_id, database_path) for run_id in unique_run_ids]
+    runs = [get_run_details(run_id, database_path, analysis_options=analysis_options) for run_id in unique_run_ids]
     if any(run is None for run in runs):
         return None
 
@@ -507,6 +649,7 @@ def get_selected_run_details(
 
 def get_all_run_details(
     database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
 ) -> list[dict[str, Any]]:
     with db_session(database_path) as session:
         runs = session.execute(
@@ -514,16 +657,17 @@ def get_all_run_details(
             .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
         ).scalars().all()
 
-    return [run.to_payload() for run in runs]
+    return [run.to_payload(analysis_options) for run in runs]
 
 
 def compare_runs(
     baseline_run_id: int | tuple[int, int],
     candidate_run_id: int | tuple[int, int],
     database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
 ) -> dict[str, Any] | None:
-    baseline = get_run_details(baseline_run_id, database_path)
-    candidate = get_run_details(candidate_run_id, database_path)
+    baseline = get_run_details(baseline_run_id, database_path, analysis_options=analysis_options)
+    candidate = get_run_details(candidate_run_id, database_path, analysis_options=analysis_options)
     if baseline is None or candidate is None:
         return None
 
@@ -548,6 +692,11 @@ def compare_runs(
         "delta_seconds": candidate["median_seconds"] - baseline["median_seconds"],
         "percent_change": percent_change,
         "target_return_relative_error": target_return_relative_error,
+        "comparison_analysis": compare_sample_sets(
+            baseline["samples"],
+            candidate["samples"],
+            analysis_options,
+        ).to_payload(),
         "observation_rows": [
             {
                 "label": label,
@@ -563,6 +712,101 @@ def compare_runs(
             }
             for label in labels
         ],
+    }
+
+
+def get_suite_trend(
+    suite_name: str,
+    database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
+    baseline_run_id: int | tuple[int, int] | None = None,
+    limit: int | None = None,
+) -> dict[str, Any] | None:
+    chosen_options = analysis_options or AnalysisOptions()
+    with db_session(database_path) as session:
+        suite = session.scalar(_suite_query(suite_name))
+        if suite is None:
+            return None
+
+        runs = session.execute(
+            select(BenchmarkRun)
+            .where(BenchmarkRun.suite_id == suite.id)
+            .order_by(BenchmarkRun.sweep_execution_id.asc(), BenchmarkRun.run_index.asc(), BenchmarkRun.id.asc())
+        ).scalars().all()
+        if not runs:
+            return {
+                "suite_name": suite.name,
+                "target_name": suite.target_name,
+                "basis_run": None,
+                "basis_source": "empty",
+                "config_filter": None,
+                "runs": [],
+            }
+
+        if baseline_run_id is not None:
+            basis_run = _resolve_run(session, baseline_run_id)
+            if basis_run is None:
+                return {"error": "reference_run_not_found", "suite_name": suite.name}
+            if basis_run.suite_id != suite.id:
+                return {
+                    "error": "reference_run_wrong_suite",
+                    "suite_name": suite.name,
+                    "reference_run_display_id": basis_run.display_id,
+                    "reference_run_record_id": basis_run.id,
+                    "reference_run_suite_name": basis_run.suite.name,
+                }
+            basis_source = "explicit"
+        else:
+            basis_run = _resolve_suite_baseline_run(session, suite)
+            if basis_run is not None:
+                basis_source = "pinned"
+            else:
+                basis_run = runs[-1]
+                basis_source = "latest"
+
+        config_filter = dict(basis_run.configuration)
+        filtered_runs = [run for run in runs if run.configuration == config_filter]
+        if limit is not None:
+            filtered_runs = filtered_runs[-limit:]
+        basis_payload = basis_run.to_detail_payload(chosen_options)
+        basis_samples = list(basis_run.samples)
+        basis_run_id = basis_run.id
+        filtered_payloads = [run.to_payload(chosen_options) for run in filtered_runs]
+        filtered_samples = [list(run.samples) for run in filtered_runs]
+        filtered_ids = [run.id for run in filtered_runs]
+
+    trend_rows: list[dict[str, Any]] = []
+    for index, payload in enumerate(filtered_payloads):
+        run_samples = filtered_samples[index]
+        vs_basis = compare_sample_sets(basis_samples, run_samples, chosen_options).to_payload()
+        trailing_samples = [
+            sample
+            for prior_samples in filtered_samples[max(0, index - chosen_options.drift_window_size) : index]
+            for sample in prior_samples
+        ]
+        drift_analysis = None
+        drift_status_label = "baseline" if payload["id"] == basis_run_id else "stable"
+        if trailing_samples:
+            drift_analysis = compare_sample_sets(trailing_samples, run_samples, chosen_options).to_payload()
+            drift_status_label = str(drift_analysis["classification"])
+
+        trend_rows.append(
+            {
+                **payload,
+                "vs_baseline": vs_basis,
+                "drift_analysis": drift_analysis,
+                "drift_status": drift_status_label,
+                "is_basis": filtered_ids[index] == basis_run_id,
+            }
+        )
+
+    return {
+        "suite_name": suite_name,
+        "target_name": basis_payload["target_name"],
+        "basis_run": basis_payload,
+        "basis_source": basis_source,
+        "config_filter": config_filter,
+        "runs": trend_rows,
     }
 
 
