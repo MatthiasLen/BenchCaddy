@@ -134,9 +134,20 @@ class RichSweepReporter:
         self.console.print(
             render_table(
                 "BenchCaddy Summary",
-                ["Configuration", ("Median (s)", "right"), ("Min (s)", "right"), ("Max (s)", "right"), ("Std (s)", "right"), "Return Value"],
+                [
+                    "Run ID",
+                    ("Record ID", "right"),
+                    "Configuration",
+                    ("Median (s)", "right"),
+                    ("Min (s)", "right"),
+                    ("Max (s)", "right"),
+                    ("Std (s)", "right"),
+                    "Return Value",
+                ],
                 [
                     (
+                        result.run_id,
+                        result.record_id,
                         dump_json(result.configuration),
                         f"{result.median_seconds:.6f}",
                         f"{result.min_seconds:.6f}",

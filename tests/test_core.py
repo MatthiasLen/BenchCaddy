@@ -382,6 +382,9 @@ def test_verbose_sweep_prints_scientific_return_values(
     sweep.run()
 
     reporter_output = output.getvalue()
+    assert "Run ID" in reporter_output
+    assert "Record ID" in reporter_output
+    assert "1.1" in reporter_output
     assert "Return Value" in reporter_output
     assert "[1.000000e+00, 2.500000e+00, 3.000000e+00]" in reporter_output
 

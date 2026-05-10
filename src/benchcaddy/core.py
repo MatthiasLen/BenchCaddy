@@ -79,6 +79,8 @@ def _report(reporter: SweepReporter | None, event: str, **payload: Any) -> None:
 
 @dataclass
 class BenchmarkResult:
+    run_id: str
+    record_id: int
     configuration: dict[str, Any]
     samples: list[float]
     observations: list[dict[str, Any]]
@@ -235,7 +237,7 @@ class Sweep:
             min_seconds, max_seconds = float(min(samples)), float(max(samples))
             std_seconds = float(stdev(samples)) if len(samples) > 1 else 0.0
 
-            record_benchmark_run(
+            benchmark_run = record_benchmark_run(
                 suite_name=self.suite_name,
                 target_name=_target_name(self.target),
                 configuration=configuration,
@@ -253,6 +255,8 @@ class Sweep:
             )
             results.append(
                 BenchmarkResult(
+                    run_id=benchmark_run.display_id,
+                    record_id=benchmark_run.id,
                     configuration=configuration,
                     samples=samples,
                     observations=observations,
