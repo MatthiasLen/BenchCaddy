@@ -20,7 +20,6 @@ from .reporting import RichSweepReporter, SweepReporter
 
 _MAX_UNIX_PRIORITY = -20
 _DEFAULT_SAMPLE_COUNT = 7
-_SUPPORTED_RETURN_VALUE_TYPES = (bool, int, float, str)
 
 
 def _as_script_path(target: Callable[..., Any] | str | Path) -> Path | None:
@@ -117,7 +116,7 @@ class Sweep:
         )
         if isinstance(transformed, bool):
             return transformed
-        if isinstance(transformed, _SUPPORTED_RETURN_VALUE_TYPES[1:]):
+        if isinstance(transformed, (int, float, str)):
             return transformed
         if self.return_value_postprocessor is None:
             raise TypeError(
@@ -227,7 +226,8 @@ class Sweep:
                 )
                 samples.append(elapsed)
                 observations.append(observation)
-                target_return_value = sample_return_value
+                if target_return_value is None:
+                    target_return_value = sample_return_value
 
             median_seconds = float(median(samples))
             min_seconds, max_seconds = float(min(samples)), float(max(samples))

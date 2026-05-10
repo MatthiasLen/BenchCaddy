@@ -103,6 +103,7 @@ The main public `Sweep(...)` options are:
 - `sync`: callable used to synchronize async device work after each invocation
 - `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`)
 - `return_value_postprocessor`: map complex target return values to a supported type before storage
+  - when multiple samples are collected, the first measured sample return value is stored for the run
 - `reporter`: custom reporter implementing the `SweepReporter` protocol
 - `verbose=True`: use the built-in Rich reporter during execution
 
