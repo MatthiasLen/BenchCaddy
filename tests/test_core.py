@@ -260,7 +260,7 @@ def test_compare_runs_computes_vector_distance_and_handles_mismatched_lengths(
 
     comparison = compare_runs((1, 1), (2, 1), database_path)
     assert comparison is not None
-    expected_distance = 5.0
+    expected_distance = ((4.0 - 1.0) ** 2 + (6.0 - 2.0) ** 2 + (3.0 - 3.0) ** 2) ** 0.5
     assert comparison["target_return_distance"] == expected_distance
 
     record_benchmark_run(
