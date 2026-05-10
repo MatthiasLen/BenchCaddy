@@ -206,9 +206,11 @@ benchcaddy compare 2.3 3
 ```
 
 Direct run comparisons include **Return Value** and **Return Error**:
-- numbers: absolute difference
-- 1D numeric vectors (`list` / `tuple` / `numpy.ndarray`): Euclidean distance
+- numbers: relative error percentage (`abs(candidate - reference) / abs(reference) * 100`)
+- 1D numeric vectors (`list` / `tuple` / `numpy.ndarray`): relative error percentage based on Euclidean distance (`||candidate - reference|| / ||reference|| * 100`)
 - strings / booleans: equality (`equal` / `different`)
+
+In other words, numeric return errors are reported relative to the reference run's return value (or reference vector magnitude), not as a raw absolute distance.
 
 For more detail in the inspection output, add `--verbose`:
 
