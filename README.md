@@ -186,8 +186,8 @@ benchcaddy compare nonlinear-transform 2.4 --strict size variant
 benchcaddy compare nonlinear-transform 2.4 --strict variant
 ```
 
-Compare two specific runs directly. Improvements greater than 5% are shown in
-green and regressions greater than 5% are shown in red:
+Compare two specific runs directly:
+
 
 ```bash
 benchcaddy compare 12 15
