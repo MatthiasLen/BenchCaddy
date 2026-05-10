@@ -78,6 +78,8 @@ def return_distance(
         return reference_value == candidate_value
     if _is_numeric_scalar(reference_value) and _is_numeric_scalar(candidate_value):
         return float(abs(candidate_value - reference_value))
+    if isinstance(reference_value, _VECTOR_TYPES) != isinstance(candidate_value, _VECTOR_TYPES):
+        return None
 
     reference_vector = _as_numeric_vector(reference_value)
     candidate_vector = _as_numeric_vector(candidate_value)
