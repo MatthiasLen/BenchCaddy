@@ -95,7 +95,13 @@ def _format_optional_seconds(value: float | None) -> str:
 
 
 def _format_return_value(value: object) -> str:
-    return "-" if value is None else dump_json(value)
+    if value is None:
+        return "-"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (bool, int, float)):
+        return str(value)
+    return dump_json(value)
 
 
 def _format_return_distance(value: object) -> str:

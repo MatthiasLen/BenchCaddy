@@ -178,15 +178,16 @@ def _return_distance(
 ) -> float | bool | None:
     if reference_value is None or candidate_value is None:
         return None
-    if isinstance(reference_value, bool) or isinstance(candidate_value, bool):
-        if not isinstance(reference_value, bool) or not isinstance(candidate_value, bool):
-            return None
+    if isinstance(reference_value, bool) and isinstance(candidate_value, bool):
         return reference_value == candidate_value
-    if isinstance(reference_value, str) or isinstance(candidate_value, str):
-        if not isinstance(reference_value, str) or not isinstance(candidate_value, str):
-            return None
+    if isinstance(reference_value, str) and isinstance(candidate_value, str):
         return reference_value == candidate_value
-    if isinstance(reference_value, Real) and isinstance(candidate_value, Real):
+    if (
+        isinstance(reference_value, Real)
+        and isinstance(candidate_value, Real)
+        and not isinstance(reference_value, bool)
+        and not isinstance(candidate_value, bool)
+    ):
         return float(abs(candidate_value - reference_value))
     return None
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import benchcaddy.core as core_module
+import pytest
 from benchcaddy import Sweep, observe
 from benchcaddy.db import compare_runs, compare_suite_runs, db_session, get_run_details, initialize_database
 from benchcaddy.db import get_suite_details, list_suite_summaries, record_benchmark_run
@@ -130,12 +131,8 @@ def test_sweep_requires_supported_target_return_types_when_enabled(
         store_target_return_value=True,
     )
 
-    try:
+    with pytest.raises(TypeError, match="return_value_postprocessor"):
         sweep.run()
-    except TypeError as exc:
-        assert "return_value_postprocessor" in str(exc)
-    else:
-        raise AssertionError("Expected TypeError for unsupported return type without postprocessor.")
 
 
 def test_verbose_sweep_uses_reporter(
