@@ -101,6 +101,8 @@ The main public `Sweep(...)` options are:
 - `database_path`: store results in a specific SQLite file instead of `./benchcaddy.db`
 - `lock_cpu_affinity`: preserve the current CPU affinity set before benchmarking
 - `sync`: callable used to synchronize async device work after each invocation
+- `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`)
+- `return_value_postprocessor`: map complex target return values to a supported type before storage
 - `reporter`: custom reporter implementing the `SweepReporter` protocol
 - `verbose=True`: use the built-in Rich reporter during execution
 
@@ -165,6 +167,8 @@ Show multiple runs side by side in a suite-style view:
 benchcaddy show 4 2.3 1.2
 ```
 
+When stored, `show` includes a **Return Value** field/column and displays `-` for missing values.
+
 Compare configurations within a suite by median runtime:
 
 ```bash
@@ -193,6 +197,10 @@ Compare two specific runs directly:
 benchcaddy compare 12 15
 benchcaddy compare 2.3 3
 ```
+
+Direct run comparisons include **Return Value** and **Return Distance**:
+- numbers: absolute difference
+- strings / booleans: equality (`equal` / `different`)
 
 For more detail in the inspection output, add `--verbose`:
 
