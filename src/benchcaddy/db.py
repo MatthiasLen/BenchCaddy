@@ -13,7 +13,7 @@ from sqlalchemy.sql.functions import now
 from sqlalchemy.types import JSON
 
 from .observability import summarize_observations
-from .return_values import StoredReturnValue, return_distance
+from .return_values import StoredReturnValue, return_relative_error
 
 _ENGINES: dict[Path, Engine] = {}
 _INITIALIZED_DATABASES: set[Path] = set()
@@ -163,7 +163,7 @@ class BenchmarkRun(Base):
             "median_seconds": self.median_seconds,
             "std_seconds": self.std_seconds,
             "target_return_value": self.target_return_value,
-            "target_return_distance": return_distance(reference_value=reference_run_target_value, candidate_value=self.target_return_value),
+            "target_return_relative_error": return_relative_error(reference_value=reference_run_target_value, candidate_value=self.target_return_value),
             "delta_seconds": self.median_seconds - reference_median_seconds,
             "slowdown_factor": None if reference_median_seconds <= 0 else self.median_seconds / reference_median_seconds,
             "sample_count": len(self.samples),
@@ -538,7 +538,7 @@ def compare_runs(
     baseline_observations = summarize_observations(baseline["observations"])
     candidate_observations = summarize_observations(candidate["observations"])
     labels = sorted(set(baseline_observations) | set(candidate_observations))
-    target_return_distance = return_distance(
+    target_return_relative_error = return_relative_error(
         reference_value=baseline["target_return_value"],
         candidate_value=candidate["target_return_value"],
     )
@@ -548,7 +548,7 @@ def compare_runs(
         "candidate": candidate,
         "delta_seconds": candidate["median_seconds"] - baseline["median_seconds"],
         "percent_change": percent_change,
-        "target_return_distance": target_return_distance,
+        "target_return_relative_error": target_return_relative_error,
         "observation_rows": [
             {
                 "label": label,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import StringIO
 from pathlib import Path
 
 import benchcaddy.core as core_module
@@ -8,6 +9,8 @@ from benchcaddy import Sweep, observe
 from benchcaddy.db import compare_runs, compare_suite_runs, db_session, get_run_details, initialize_database
 from benchcaddy.db import get_suite_details, list_suite_summaries, record_benchmark_run
 from benchcaddy.observability import summarize_observations
+from benchcaddy.reporting import RichSweepReporter
+from rich.console import Console
 
 
 def test_sweep_records_results_and_observations(
@@ -261,7 +264,8 @@ def test_compare_runs_computes_vector_distance_and_handles_mismatched_lengths(
     comparison = compare_runs((1, 1), (2, 1), database_path)
     assert comparison is not None
     expected_distance = ((4.0 - 1.0) ** 2 + (6.0 - 2.0) ** 2 + (3.0 - 3.0) ** 2) ** 0.5
-    assert comparison["target_return_distance"] == expected_distance
+    expected_relative_error = expected_distance / ((1.0**2 + 2.0**2 + 3.0**2) ** 0.5)
+    assert comparison["target_return_relative_error"] == expected_relative_error
 
     record_benchmark_run(
         suite_name="vector-distance-suite",
@@ -280,7 +284,7 @@ def test_compare_runs_computes_vector_distance_and_handles_mismatched_lengths(
 
     mismatched_comparison = compare_runs((1, 1), (3, 1), database_path)
     assert mismatched_comparison is not None
-    assert mismatched_comparison["target_return_distance"] is None
+    assert mismatched_comparison["target_return_relative_error"] is None
 
 
 def test_verbose_sweep_uses_reporter(
@@ -341,6 +345,45 @@ def test_verbose_sweep_uses_reporter(
     assert event_names.count("sample-completed") == 2
     assert event_names.count("configuration-completed") == 1
     assert event_names.count("sweep-completed") == 1
+
+
+def test_verbose_sweep_prints_scientific_return_values(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    output = StringIO()
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+    monkeypatch.setattr(
+        core_module,
+        "RichSweepReporter",
+        lambda: RichSweepReporter(
+            console=Console(file=output, force_terminal=False, color_system=None, width=120)
+        ),
+    )
+
+    sweep = Sweep(
+        target=lambda: (1.0, 2.5, 3.0),
+        params={},
+        suite_name="verbose-return-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+        verbose=True,
+    )
+
+    sweep.run()
+
+    reporter_output = output.getvalue()
+    assert "Return Value" in reporter_output
+    assert "[1.000000e+00, 2.500000e+00, 3.000000e+00]" in reporter_output
 
 
 def test_sweep_supports_script_targets(

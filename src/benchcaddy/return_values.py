@@ -92,3 +92,29 @@ def return_distance(
         for reference, candidate in zip(reference_vector, candidate_vector, strict=True)
     )
     return sqrt(sum(squared_differences))
+
+
+def return_relative_error(
+    *,
+    reference_value: StoredReturnValue | None,
+    candidate_value: StoredReturnValue | None,
+) -> float | bool | None:
+    distance = return_distance(
+        reference_value=reference_value,
+        candidate_value=candidate_value,
+    )
+    if distance is None or isinstance(distance, bool):
+        return distance
+
+    if _is_numeric_scalar(reference_value):
+        reference_magnitude = abs(float(reference_value))
+    else:
+        reference_vector = _as_numeric_vector(reference_value)
+        if reference_vector is None:
+            return None
+        reference_magnitude = sqrt(sum(item * item for item in reference_vector))
+
+    if reference_magnitude == 0.0:
+        return 0.0 if distance == 0.0 else None
+
+    return float(distance / reference_magnitude)
