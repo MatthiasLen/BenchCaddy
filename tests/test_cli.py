@@ -4,8 +4,10 @@ from pathlib import Path
 import subprocess
 import sys
 
+from rich.console import Console
 from typer.testing import CliRunner
 
+import benchcaddy.cli as cli_module
 from benchcaddy.cli import _suite_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 
@@ -345,6 +347,54 @@ def test_example_script_persists_and_displays_return_values(tmp_path: Path) -> N
     assert compare_result.exit_code == 0
     assert "Return Error" in compare_result.stdout
     assert f"{comparison['target_return_relative_error'] * 100.0:.6f}%" in compare_result.stdout
+
+
+def test_show_without_arguments_lists_all_runs(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli_module,
+        "console",
+        Console(force_terminal=False, color_system=None, width=160),
+    )
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-a",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+        target_return_value=1.0,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-b",
+        configuration={"size": 34, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+        target_return_value=2.0,
+    )
+
+    show_result = runner.invoke(app, ["show", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "All Runs" in show_result.stdout
+    assert "Run ID" in show_result.stdout
+    assert "Record ID" in show_result.stdout
+    assert "Configuration" in show_result.stdout
+    assert "Mean +- Std (s)" in show_result.stdout
+    assert "Return Value" in show_result.stdout
+    assert "Samples" in show_result.stdout
+    assert "Recorded At" in show_result.stdout
+    assert "2.1" in show_result.stdout
+    assert "1.1" in show_result.stdout
+    assert "candidate" in show_result.stdout
+    assert "baseline" in show_result.stdout
 
 
 def test_return_value_type_example_runs_supported_cases(tmp_path: Path) -> None:

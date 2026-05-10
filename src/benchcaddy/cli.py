@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .db import compare_runs, compare_suite_runs, get_database_path, get_run_details, get_selected_run_details, get_suite_details, list_suite_summaries
+from .db import compare_runs, compare_suite_runs, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details, list_suite_summaries
 from .observability import summarize_observations
 from .presentation import dump_json, format_return_error, format_return_value, json_panel, render_table
 
@@ -226,6 +226,33 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
     )
 
 
+def _show_all_runs(runs: list[dict[str, object]]) -> None:
+    console.print(render_table(
+        "All Runs",
+        [
+            ("Run ID", "right"),
+            ("Record ID", "right"),
+            "Configuration",
+            ("Mean +- Std (s)", "right"),
+            "Return Value",
+            ("Samples", "right"),
+            "Recorded At",
+        ],
+        [
+            (
+                run["display_id"],
+                run["record_id"],
+                dump_json(run["configuration"]),
+                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+                format_return_value(run.get("target_return_value"), compact=True),
+                len(run["samples"]),
+                run["created_at"],
+            )
+            for run in runs
+        ],
+    ))
+
+
 def _print_run_comparison(
     comparison: dict[str, object],
 ) -> None:
@@ -383,7 +410,7 @@ def list_command(
 
 @app.command("show")
 def show_command(
-    identifiers: list[str] = typer.Argument(..., help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1)."),
+    identifiers: list[str] | None = typer.Argument(None, help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1)."),
     database: Path = typer.Option(
         None,
         "--database",
@@ -394,6 +421,10 @@ def show_command(
     ),
 ) -> None:
     database_path = get_database_path(database)
+
+    if not identifiers:
+        _show_all_runs(get_all_run_details(database_path))
+        return
 
     if len(identifiers) == 1:
         identifier = identifiers[0]
