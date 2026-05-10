@@ -82,6 +82,10 @@ Sweep(
 BenchCaddy writes samples, medians, observations, and environment metadata to
 `benchcaddy.db` in the current working directory.
 
+Those persisted raw samples now also drive richer analysis during inspection,
+including bootstrap confidence intervals, MAD, coefficient of variation,
+outlier diagnostics, noise warnings, and regression classification.
+
 The full runnable example lives in the repository and source distribution at
 [`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py)
 and supports `--verbose`, `--database`, `--samples`, and `--warmup-iterations`.
@@ -188,6 +192,13 @@ Compare a suite against a selected recorded run instead of the best run:
 benchcaddy compare nonlinear-transform 2.4
 ```
 
+Pin a suite baseline and reuse it later without repeating the run ID:
+
+```bash
+benchcaddy compare nonlinear-transform 2.4 --pin-baseline
+benchcaddy compare nonlinear-transform --use-baseline
+```
+
 Restrict a suite comparison to runs that match selected configuration keys from
 the reference run:
 
@@ -212,11 +223,29 @@ Direct run comparisons include **Return Value** and **Return Error**:
 
 In other words, numeric return errors are reported relative to the reference run's return value (or reference vector magnitude), not as a raw absolute distance.
 
+`compare` now also prints an additive statistical assessment panel for direct
+run comparisons and a compact findings panel for suite comparisons. These are
+derived from the stored samples and include bootstrap delta confidence
+intervals, significance estimates, and regression probabilities.
+
+Inspect the historical drift of a suite configuration over time:
+
+```bash
+benchcaddy trend nonlinear-transform
+benchcaddy trend nonlinear-transform --baseline 2.4
+benchcaddy trend nonlinear-transform --limit 8 --window 4
+```
+
+`trend` follows the selected baseline configuration over time, shows median
+confidence intervals, compares each run to the baseline, and labels rolling
+drift as stable, noisy, improving, or regressing.
+
 For more detail in the inspection output, add `--verbose`:
 
 ```bash
 benchcaddy --verbose show nonlinear-transform
 benchcaddy --verbose compare nonlinear-transform
+benchcaddy --verbose trend nonlinear-transform
 ```
 
 ## How to read the output
@@ -224,6 +253,11 @@ benchcaddy --verbose compare nonlinear-transform
 - `Mean +- Std (s)` is the arithmetic mean and sample standard deviation across benchmark samples
 - suite comparisons are ranked by median runtime, not by the mean column
 - `Best Median (s)`, `Delta vs Best`, and direct-run `Median Delta` / `Median Percent Change` all use median runtime
+- `Median CI (s)` is a bootstrap confidence interval around the median runtime
+- `MAD (s)` is the median absolute deviation, a robust spread estimate less sensitive to outliers than standard deviation
+- `CV` is the coefficient of variation (`std / mean`) and is used as one of the noise-warning signals
+- `Warnings` surface low sample counts, wide confidence intervals, high relative variance, and detected outliers
+- direct and trend comparisons combine practical thresholds with significance estimates before labeling a run as regressing
 - observation tables report per-label timing aggregated across samples
 - `Total (s)` in observation tables is the sum across all samples for that label
 

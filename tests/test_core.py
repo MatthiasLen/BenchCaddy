@@ -6,8 +6,8 @@ from pathlib import Path
 import benchcaddy.core as core_module
 import pytest
 from benchcaddy import Sweep, observe
-from benchcaddy.db import compare_runs, compare_suite_runs, db_session, get_run_details, initialize_database
-from benchcaddy.db import get_suite_details, list_suite_summaries, record_benchmark_run
+from benchcaddy.db import clear_suite_baseline, compare_runs, compare_suite_runs, db_session, get_run_details, get_suite_baseline, get_suite_trend, initialize_database
+from benchcaddy.db import get_suite_details, list_suite_summaries, record_benchmark_run, set_suite_baseline
 from benchcaddy.observability import summarize_observations
 from benchcaddy.reporting import RichSweepReporter
 from rich.console import Console
@@ -140,6 +140,89 @@ def test_sweep_can_store_vector_return_values(
     run = get_run_details((1, 1), database_path)
     assert run is not None
     assert run["target_return_value"] == [1.0, 2.5, 3.0]
+
+
+def test_suite_baseline_persistence_and_trend_filtering(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="trend-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        observations=[],
+        median_seconds=0.100,
+        min_seconds=0.099,
+        max_seconds=0.102,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="trend-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        observations=[],
+        median_seconds=0.110,
+        min_seconds=0.109,
+        max_seconds=0.112,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="trend-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.139, 0.140, 0.141, 0.142, 0.140, 0.139, 0.141],
+        observations=[],
+        median_seconds=0.140,
+        min_seconds=0.139,
+        max_seconds=0.142,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="trend-suite",
+        target_name="benchmark_target",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.199, 0.200, 0.201, 0.200, 0.199],
+        observations=[],
+        median_seconds=0.200,
+        min_seconds=0.199,
+        max_seconds=0.201,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    pinned = set_suite_baseline("trend-suite", 1, database_path)
+    assert pinned is not None
+    assert pinned["display_id"] == "1.1"
+
+    baseline = get_suite_baseline("trend-suite", database_path)
+    assert baseline is not None
+    assert baseline["display_id"] == "1.1"
+
+    comparison = compare_suite_runs("trend-suite", database_path=database_path, use_pinned_baseline=True)
+    assert comparison is not None
+    assert comparison["basis_source"] == "pinned"
+    assert comparison["basis_run"]["display_id"] == "1.1"
+
+    trend = get_suite_trend("trend-suite", database_path, baseline_run_id=1)
+    assert trend is not None
+    assert trend["basis_source"] == "explicit"
+    assert trend["config_filter"] == {"size": 512, "variant": "baseline"}
+    assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1", "3.1"]
+    assert trend["runs"][-1]["vs_baseline"]["classification"] == "regressing"
+
+    assert clear_suite_baseline("trend-suite", database_path) is True
+    assert get_suite_baseline("trend-suite", database_path) is None
 
 
 def test_sweep_can_store_numpy_vector_values_via_postprocessor(

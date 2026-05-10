@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--samples",
         type=int,
-        default=5,
+        default=20,
         help="Number of timed samples per configuration.",
     )
     parser.add_argument(
