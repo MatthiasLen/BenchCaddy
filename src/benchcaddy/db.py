@@ -518,6 +518,18 @@ def get_selected_run_details(
     )
 
 
+def get_all_run_details(
+    database_path: str | Path | None = None,
+) -> list[dict[str, Any]]:
+    with db_session(database_path) as session:
+        runs = session.execute(
+            select(BenchmarkRun)
+            .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
+        ).scalars().all()
+
+    return [run.to_payload() for run in runs]
+
+
 def compare_runs(
     baseline_run_id: int | tuple[int, int],
     candidate_run_id: int | tuple[int, int],
