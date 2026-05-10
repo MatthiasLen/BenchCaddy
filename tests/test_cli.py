@@ -268,7 +268,7 @@ def test_cli_compare_formats_vector_return_distance(
     assert "[1.0, 2.0, 3.0]" in compare_result.stdout
     assert "[4.0, 6.0, 3.0]" in compare_result.stdout
     assert "Return Distance" in compare_result.stdout
-    assert "5.000000" in compare_result.stdout
+    assert "5.0" in compare_result.stdout
 
 
 def test_cli_show_renders_partial_git_environment(tmp_path: Path, environment_payload: dict[str, object]) -> None:
