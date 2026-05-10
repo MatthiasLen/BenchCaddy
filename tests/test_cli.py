@@ -452,6 +452,8 @@ def test_cli_renders_missing_min_max_as_dash(tmp_path: Path, environment_payload
     compare_result = runner.invoke(app, ["compare", "1.1", "2.1", "--database", str(database_path)])
     assert compare_result.exit_code == 0
     assert "Run Comparison: 1.1 -> 2.1" in compare_result.stdout
+    assert "Suite" in compare_result.stdout
+    assert "nullable-times" in compare_result.stdout
     assert "Min (s)" in compare_result.stdout
     assert "Max (s)" in compare_result.stdout
     assert "-" in compare_result.stdout

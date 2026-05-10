@@ -238,6 +238,7 @@ def _print_run_comparison(
             f"Run Comparison: {baseline['display_id']} -> {candidate['display_id']}",
             ["Field", "Baseline", "Candidate"],
             [
+                ("Suite", _styled(baseline["suite_name"], baseline_style), _styled(candidate["suite_name"], candidate_style)),
                 ("Run ID", _styled(baseline["display_id"], baseline_style), _styled(candidate["display_id"], candidate_style)),
                 ("Record ID", _styled(baseline["id"], baseline_style), _styled(candidate["id"], candidate_style)),
                 *[
