@@ -94,6 +94,20 @@ def _format_optional_seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.6f}"
 
 
+def _format_return_value(value: object) -> str:
+    return "-" if value is None else dump_json(value)
+
+
+def _format_return_distance(value: object) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "equal" if value else "different"
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    return str(value)
+
+
 def _render_observation_table(observations: list[dict[str, object]], title: str) -> Table:
     summary = summarize_observations(observations)
 
@@ -128,6 +142,7 @@ def _show_run(run: dict[str, object]) -> None:
                 ("Mean +- Std (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
                 ("Min (s)", _format_optional_seconds(run.get("min_seconds"))),
                 ("Max (s)", _format_optional_seconds(run.get("max_seconds"))),
+                ("Return Value", _format_return_value(run.get("target_return_value"))),
                 ("Samples", len(run["samples"])),
                 ("Recorded At", run["created_at"]),
             ],
@@ -140,13 +155,14 @@ def _show_run(run: dict[str, object]) -> None:
 def _show_suite(details: dict[str, object]) -> None:
     console.print(render_table(
         f"Suite: {details['suite_name']}",
-        [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), ("Samples", "right"), "Recorded At"],
+        [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), "Return Value", ("Samples", "right"), "Recorded At"],
         [
             (
                 run["display_id"],
                 run["id"],
                 dump_json(run["configuration"]),
                 _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+                _format_return_value(run.get("target_return_value")),
                 len(run["samples"]),
                 run["created_at"],
             )
@@ -186,6 +202,7 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
             "Target",
             "Configuration",
             ("Mean +- Std (s)", "right"),
+            "Return Value",
             ("Samples", "right"),
             "Recorded At",
         ],
@@ -197,6 +214,7 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
                 run["target_name"],
                 dump_json(run["configuration"]),
                 _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+                _format_return_value(run.get("target_return_value")),
                 len(run["samples"]),
                 run["created_at"],
             )
@@ -248,6 +266,8 @@ def _print_run_comparison(
                 ("Mean +- Std (s)", _styled(_format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), baseline_style), _styled(_format_time(candidate.get("mean_seconds"), candidate.get("std_seconds")), candidate_style)),
                 ("Min (s)", _styled(_format_optional_seconds(baseline.get("min_seconds")), baseline_style), _styled(_format_optional_seconds(candidate.get("min_seconds")), candidate_style)),
                 ("Max (s)", _styled(_format_optional_seconds(baseline.get("max_seconds")), baseline_style), _styled(_format_optional_seconds(candidate.get("max_seconds")), candidate_style)),
+                ("Return Value", _styled(_format_return_value(baseline.get("target_return_value")), baseline_style), _styled(_format_return_value(candidate.get("target_return_value")), candidate_style)),
+                ("Return Distance", "", _format_return_distance(comparison.get("target_return_distance"))),
                 ("Median Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
                 ("Median Percent Change", "", _style_delta(comparison["percent_change"])),
             ],

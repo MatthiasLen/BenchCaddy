@@ -75,6 +75,69 @@ def test_sweep_records_results_and_observations(
     assert details["environment"]["total_memory_bytes"] == 17179869184
 
 
+def test_sweep_can_store_target_return_values_with_postprocessing(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda size: {"size": size, "ok": True},
+        params={"size": [3]},
+        suite_name="return-value-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+        return_value_postprocessor=lambda payload: f"{payload['size']}:{payload['ok']}",
+    )
+
+    results = sweep.run()
+    assert results[0].target_return_value == "3:True"
+
+    run = get_run_details((1, 1), database_path)
+    assert run is not None
+    assert run["target_return_value"] == "3:True"
+
+
+def test_sweep_requires_supported_target_return_types_when_enabled(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    metadata_marker = object()
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
+    monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
+    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+
+    sweep = Sweep(
+        target=lambda: {"complex": "payload"},
+        params={},
+        suite_name="unsupported-return-value-suite",
+        samples=1,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+        store_target_return_value=True,
+    )
+
+    try:
+        sweep.run()
+    except TypeError as exc:
+        assert "return_value_postprocessor" in str(exc)
+    else:
+        raise AssertionError("Expected TypeError for unsupported return type without postprocessor.")
+
+
 def test_verbose_sweep_uses_reporter(
     tmp_path: Path,
     monkeypatch,

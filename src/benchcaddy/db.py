@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import contextmanager
+from numbers import Real
 from pathlib import Path
 from statistics import fmean
 from typing import Any
@@ -110,6 +111,7 @@ class BenchmarkRun(Base):
     min_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     std_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_return_value: Mapped[bool | int | float | str | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
     suite: Mapped[BenchmarkSuite] = relationship(back_populates="runs")
@@ -141,10 +143,15 @@ class BenchmarkRun(Base):
             "min_seconds": self.min_seconds,
             "max_seconds": self.max_seconds,
             "std_seconds": self.std_seconds,
+            "target_return_value": self.target_return_value,
             "created_at": self.created_at,
         }
 
-    def to_suite_comparison_row(self, reference_median_seconds: float) -> dict[str, Any]:
+    def to_suite_comparison_row(
+        self,
+        reference_median_seconds: float,
+        reference_run_target_value: bool | int | float | str | None,
+    ) -> dict[str, Any]:
         return {
             "id": self.id,
             "record_id": self.id,
@@ -155,11 +162,33 @@ class BenchmarkRun(Base):
             "mean_seconds": self.mean_seconds,
             "median_seconds": self.median_seconds,
             "std_seconds": self.std_seconds,
+            "target_return_value": self.target_return_value,
+            "target_return_distance": _return_distance(reference_value=reference_run_target_value, candidate_value=self.target_return_value),
             "delta_seconds": self.median_seconds - reference_median_seconds,
             "slowdown_factor": None if reference_median_seconds <= 0 else self.median_seconds / reference_median_seconds,
             "sample_count": len(self.samples),
             "created_at": self.created_at,
         }
+
+
+def _return_distance(
+    *,
+    reference_value: bool | int | float | str | None,
+    candidate_value: bool | int | float | str | None,
+) -> float | bool | None:
+    if reference_value is None or candidate_value is None:
+        return None
+    if isinstance(reference_value, bool) or isinstance(candidate_value, bool):
+        if not isinstance(reference_value, bool) or not isinstance(candidate_value, bool):
+            return None
+        return reference_value == candidate_value
+    if isinstance(reference_value, str) or isinstance(candidate_value, str):
+        if not isinstance(reference_value, str) or not isinstance(candidate_value, str):
+            return None
+        return reference_value == candidate_value
+    if isinstance(reference_value, Real) and isinstance(candidate_value, Real):
+        return float(abs(candidate_value - reference_value))
+    return None
 
 
 def _suite_query(suite_name: str):
@@ -201,6 +230,8 @@ def _migrate_legacy_schema(engine: Engine) -> None:
         statements.append("ALTER TABLE benchmark_runs ADD COLUMN sweep_execution_id INTEGER")
     if "run_index" not in columns:
         statements.append("ALTER TABLE benchmark_runs ADD COLUMN run_index INTEGER")
+    if "target_return_value" not in columns:
+        statements.append("ALTER TABLE benchmark_runs ADD COLUMN target_return_value JSON")
 
     if inspector.has_table("environment_info"):
         environment_columns = {column["name"] for column in inspector.get_columns("environment_info")}
@@ -257,6 +288,7 @@ def record_benchmark_run(
     min_seconds: float,
     max_seconds: float,
     std_seconds: float,
+    target_return_value: bool | int | float | str | None = None,
     environment: dict[str, Any],
     sweep_execution_id: int | None = None,
     run_index: int | None = None,
@@ -289,6 +321,7 @@ def record_benchmark_run(
             min_seconds=min_seconds,
             max_seconds=max_seconds,
             std_seconds=std_seconds,
+            target_return_value=target_return_value,
         )
         session.add(benchmark_run)
         session.commit()
@@ -439,13 +472,22 @@ def compare_suite_runs(
         "suite_name": suite.name,
         "target_name": suite.target_name,
         "basis_median_seconds": basis_median_seconds,
-        "basis_run": basis_run.to_suite_comparison_row(basis_median_seconds),
+        "basis_run": basis_run.to_suite_comparison_row(
+            basis_median_seconds,
+            basis_run.target_return_value,
+        ),
         "basis_metric_label": basis_metric_label,
         "delta_column_label": delta_column_label,
         "ratio_column_label": ratio_column_label,
         "strict_keys": list(strict_keys),
         "strict_config": strict_config,
-        "runs": [run.to_suite_comparison_row(basis_median_seconds) for run in runs],
+        "runs": [
+            run.to_suite_comparison_row(
+                basis_median_seconds,
+                basis_run.target_return_value,
+            )
+            for run in runs
+        ],
     }
 
 
@@ -476,6 +518,7 @@ def get_run_details(
         "min_seconds": run.min_seconds,
         "max_seconds": run.max_seconds,
         "std_seconds": run.std_seconds,
+        "target_return_value": run.target_return_value,
         "created_at": run.created_at,
         "environment": environment.to_payload(),
     }
@@ -516,12 +559,17 @@ def compare_runs(
     baseline_observations = summarize_observations(baseline["observations"])
     candidate_observations = summarize_observations(candidate["observations"])
     labels = sorted(set(baseline_observations) | set(candidate_observations))
+    target_return_distance = _return_distance(
+        reference_value=baseline["target_return_value"],
+        candidate_value=candidate["target_return_value"],
+    )
 
     return {
         "baseline": baseline,
         "candidate": candidate,
         "delta_seconds": candidate["median_seconds"] - baseline["median_seconds"],
         "percent_change": percent_change,
+        "target_return_distance": target_return_distance,
         "observation_rows": [
             {
                 "label": label,
