@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import sys
 
 from typer.testing import CliRunner
 
 from benchcaddy.cli import _suite_row_style, app
-from benchcaddy.db import record_benchmark_run
+from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 
 
 def _seed_run(
@@ -73,6 +75,11 @@ def _seed_custom_run(
         database_path=database_path,
     )
 
+
+def _compact_output(output: str) -> str:
+    return "".join(output.split())
+
+
 def test_cli_lists_shows_and_compares_runs(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -139,7 +146,6 @@ def test_cli_lists_shows_and_compares_runs(
     assert "Comparison: nonlinear-transform" in suite_reference_compare_result.stdout
     assert "Reference Median (s): 0.150000" in suite_reference_compare_result.stdout
     assert "Reference" in suite_reference_compare_result.stdout
-    assert "Relative" in suite_reference_compare_result.stdout
     assert "0.67x" in suite_reference_compare_result.stdout
     assert "2.1" in suite_reference_compare_result.stdout
 
@@ -148,7 +154,6 @@ def test_cli_lists_shows_and_compares_runs(
         ["--verbose", "compare", "nonlinear-transform", "--database", str(database_path)],
     )
     assert verbose_compare_result.exit_code == 0
-    assert "Samples" in verbose_compare_result.stdout
     assert verbose_compare_result.stdout != compare_result.stdout
     assert "Comparison Basis" in verbose_compare_result.stdout
     assert "Best Median (s): 0.100000" in verbose_compare_result.stdout
@@ -226,19 +231,38 @@ def test_cli_show_and_compare_include_return_values_and_distance(
     show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
     assert show_result.exit_code == 0
     assert "Return Value" in show_result.stdout
-    assert "10" in show_result.stdout
+    assert "1.000000e+01" in show_result.stdout
 
     compare_result = runner.invoke(app, ["compare", "1.1", "2.1", "--database", str(database_path)])
     assert compare_result.exit_code == 0
     assert "Return Value" in compare_result.stdout
-    assert "Return Distance" in compare_result.stdout
-    assert "3.500000" in compare_result.stdout
+    assert "Return Error" in compare_result.stdout
+    assert "1.000000e+01" in compare_result.stdout
+    assert "1.350000e+01" in compare_result.stdout
+    assert "35.000000%" in compare_result.stdout
 
     suite_compare_result = runner.invoke(app, ["compare", "return-compare", "1.1", "--database", str(database_path)])
     assert suite_compare_result.exit_code == 0
+    assert "Return Value" in suite_compare_result.stdout
+    assert "Return Error" in suite_compare_result.stdout
+    compact_suite_compare_output = _compact_output(suite_compare_result.stdout)
+    assert "1.000000e+01" in compact_suite_compare_output
+    assert "1.35000" in compact_suite_compare_output
+    assert "0e+01" in compact_suite_compare_output
+    assert "35.000000" in compact_suite_compare_output
+
+    suite_best_compare_result = runner.invoke(app, ["compare", "return-compare", "--database", str(database_path)])
+    assert suite_best_compare_result.exit_code == 0
+    assert "Return Value" in suite_best_compare_result.stdout
+    assert "Return Error" in suite_best_compare_result.stdout
+    compact_suite_best_compare_output = _compact_output(suite_best_compare_result.stdout)
+    assert "1.000000e+01" in compact_suite_best_compare_output
+    assert "1.35000" in compact_suite_best_compare_output
+    assert "0e+01" in compact_suite_best_compare_output
+    assert "35.000000" in compact_suite_best_compare_output
 
 
-def test_cli_compare_formats_vector_return_distance(
+def test_cli_compare_formats_vector_return_error(
     tmp_path: Path,
     environment_payload: dict[str, object],
 ) -> None:
@@ -265,10 +289,89 @@ def test_cli_compare_formats_vector_return_distance(
     compare_result = runner.invoke(app, ["compare", "1.1", "2.1", "--database", str(database_path)])
     assert compare_result.exit_code == 0
     assert "Return Value" in compare_result.stdout
-    assert "[1.0, 2.0, 3.0]" in compare_result.stdout
-    assert "[4.0, 6.0, 3.0]" in compare_result.stdout
-    assert "Return Distance" in compare_result.stdout
-    assert "5.0" in compare_result.stdout
+    compact_compare_output = _compact_output(compare_result.stdout)
+    assert "[1.000000e+00,...]" in compact_compare_output
+    assert "[4.000000e+00,...]" in compact_compare_output
+    assert "ReturnError" in compact_compare_output
+    assert "133.630621%" in compact_compare_output
+
+    suite_compare_result = runner.invoke(app, ["compare", "vector-return-compare", "--database", str(database_path)])
+    assert suite_compare_result.exit_code == 0
+    assert "Return Value" in suite_compare_result.stdout
+    assert "Return Error" in suite_compare_result.stdout
+    compact_suite_compare_output = _compact_output(suite_compare_result.stdout)
+    assert "[1.000000e+00,...]" in compact_suite_compare_output
+    assert "[4.000000e+00" in compact_suite_compare_output
+    assert "133.630" in compact_suite_compare_output
+
+
+def test_example_script_persists_and_displays_return_values(tmp_path: Path) -> None:
+    database_path = tmp_path / "example.db"
+    runner = CliRunner()
+    repository_root = Path(__file__).resolve().parents[1]
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "examples" / "benchmark_nonlinear_transform.py"),
+            "--database",
+            str(database_path),
+            "--samples",
+            "1",
+            "--warmup-iterations",
+            "0",
+        ],
+        cwd=repository_root,
+        check=True,
+    )
+
+    baseline_run = get_run_details((1, 1), database_path)
+    candidate_run = get_run_details((1, 2), database_path)
+    comparison = compare_runs((1, 1), (1, 2), database_path)
+
+    assert baseline_run is not None
+    assert candidate_run is not None
+    assert isinstance(baseline_run["target_return_value"], float)
+    assert isinstance(candidate_run["target_return_value"], float)
+    assert comparison is not None
+    assert isinstance(comparison["target_return_relative_error"], float)
+
+    show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
+    assert show_result.exit_code == 0
+    assert "Return Value" in show_result.stdout
+    assert f"{baseline_run['target_return_value']:.6e}" in show_result.stdout
+
+    compare_result = runner.invoke(app, ["compare", "1.1", "1.2", "--database", str(database_path)])
+    assert compare_result.exit_code == 0
+    assert "Return Error" in compare_result.stdout
+    assert f"{comparison['target_return_relative_error'] * 100.0:.6f}%" in compare_result.stdout
+
+
+def test_return_value_type_example_runs_supported_cases(tmp_path: Path) -> None:
+    database_path = tmp_path / "return-types.db"
+    repository_root = Path(__file__).resolve().parents[1]
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(repository_root / "examples" / "benchmark_return_value_types.py"),
+            "--database",
+            str(database_path),
+        ],
+        cwd=repository_root,
+        check=True,
+    )
+
+    bool_details = get_suite_details("return-type-bool", database_path)
+    vector_details = get_suite_details("return-type-float-vector", database_path)
+    bool_vector_details = get_suite_details("return-type-bool-vector", database_path)
+
+    assert bool_details is not None
+    assert vector_details is not None
+    assert bool_vector_details is not None
+    assert isinstance(bool_details["runs"][-1]["target_return_value"], bool)
+    assert vector_details["runs"][-1]["target_return_value"] == [2.0, 1.0, 0.5]
+    assert bool_vector_details["runs"][-1]["target_return_value"] == [1.0, 0.0, 1.0]
 
 
 def test_cli_show_renders_partial_git_environment(tmp_path: Path, environment_payload: dict[str, object]) -> None:

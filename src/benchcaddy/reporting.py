@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Sequence
 
 from rich.console import Console
-from .presentation import dump_json, json_panel, render_table, summary_panel
+from .presentation import dump_json, format_return_value, json_panel, render_table, summary_panel
 
 if TYPE_CHECKING:
     from .core import BenchmarkResult
@@ -49,6 +49,7 @@ class SweepReporter(Protocol):
         max_seconds: float,
         std_seconds: float,
         sample_count: int,
+        target_return_value: object | None,
     ) -> None: ...
 
     def on_sweep_completed(self, *, results: Sequence[BenchmarkResult]) -> None: ...
@@ -113,6 +114,7 @@ class RichSweepReporter:
         max_seconds: float,
         std_seconds: float,
         sample_count: int,
+        target_return_value: object | None,
     ) -> None:
         self.console.print(
             summary_panel(
@@ -123,6 +125,7 @@ class RichSweepReporter:
                     ("Median", f"{median_seconds:.6f}s"),
                     ("Min / Max", f"{min_seconds:.6f}s / {max_seconds:.6f}s"),
                     ("Std Dev", f"{std_seconds:.6f}s"),
+                    ("Return Value", format_return_value(target_return_value)),
                 ],
             )
         )
@@ -131,7 +134,17 @@ class RichSweepReporter:
         self.console.print(
             render_table(
                 "BenchCaddy Summary",
-                ["Configuration", ("Median (s)", "right"), ("Min (s)", "right"), ("Max (s)", "right"), ("Std (s)", "right")],
-                [(dump_json(result.configuration), f"{result.median_seconds:.6f}", f"{result.min_seconds:.6f}", f"{result.max_seconds:.6f}", f"{result.std_seconds:.6f}") for result in results],
+                ["Configuration", ("Median (s)", "right"), ("Min (s)", "right"), ("Max (s)", "right"), ("Std (s)", "right"), "Return Value"],
+                [
+                    (
+                        dump_json(result.configuration),
+                        f"{result.median_seconds:.6f}",
+                        f"{result.min_seconds:.6f}",
+                        f"{result.max_seconds:.6f}",
+                        f"{result.std_seconds:.6f}",
+                        format_return_value(result.target_return_value),
+                    )
+                    for result in results
+                ],
             )
         )

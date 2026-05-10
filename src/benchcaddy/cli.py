@@ -11,7 +11,7 @@ from rich.text import Text
 
 from .db import compare_runs, compare_suite_runs, get_database_path, get_run_details, get_selected_run_details, get_suite_details, list_suite_summaries
 from .observability import summarize_observations
-from .presentation import dump_json, json_panel, render_table
+from .presentation import dump_json, format_return_error, format_return_value, json_panel, render_table
 
 app = typer.Typer(help="Inspect BenchCaddy benchmark suites.")
 console = Console()
@@ -94,26 +94,6 @@ def _format_optional_seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.6f}"
 
 
-def _format_return_value(value: object) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (bool, int, float)):
-        return str(value)
-    return dump_json(value)
-
-
-def _format_return_distance(value: object) -> str:
-    if value is None:
-        return "-"
-    if isinstance(value, bool):
-        return "equal" if value else "different"
-    if isinstance(value, float):
-        return f"{value:.6f}"
-    return str(value)
-
-
 def _render_observation_table(observations: list[dict[str, object]], title: str) -> Table:
     summary = summarize_observations(observations)
 
@@ -148,7 +128,7 @@ def _show_run(run: dict[str, object]) -> None:
                 ("Mean +- Std (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
                 ("Min (s)", _format_optional_seconds(run.get("min_seconds"))),
                 ("Max (s)", _format_optional_seconds(run.get("max_seconds"))),
-                ("Return Value", _format_return_value(run.get("target_return_value"))),
+                ("Return Value", format_return_value(run.get("target_return_value"), compact=True)),
                 ("Samples", len(run["samples"])),
                 ("Recorded At", run["created_at"]),
             ],
@@ -168,7 +148,7 @@ def _show_suite(details: dict[str, object]) -> None:
                 run["id"],
                 dump_json(run["configuration"]),
                 _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                _format_return_value(run.get("target_return_value")),
+                format_return_value(run.get("target_return_value"), compact=True),
                 len(run["samples"]),
                 run["created_at"],
             )
@@ -220,7 +200,7 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
                 run["target_name"],
                 dump_json(run["configuration"]),
                 _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                _format_return_value(run.get("target_return_value")),
+                format_return_value(run.get("target_return_value"), compact=True),
                 len(run["samples"]),
                 run["created_at"],
             )
@@ -272,10 +252,10 @@ def _print_run_comparison(
                 ("Mean +- Std (s)", _styled(_format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), baseline_style), _styled(_format_time(candidate.get("mean_seconds"), candidate.get("std_seconds")), candidate_style)),
                 ("Min (s)", _styled(_format_optional_seconds(baseline.get("min_seconds")), baseline_style), _styled(_format_optional_seconds(candidate.get("min_seconds")), candidate_style)),
                 ("Max (s)", _styled(_format_optional_seconds(baseline.get("max_seconds")), baseline_style), _styled(_format_optional_seconds(candidate.get("max_seconds")), candidate_style)),
-                ("Return Value", _styled(_format_return_value(baseline.get("target_return_value")), baseline_style), _styled(_format_return_value(candidate.get("target_return_value")), candidate_style)),
-                ("Return Distance", "", _format_return_distance(comparison.get("target_return_distance"))),
                 ("Median Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
                 ("Median Percent Change", "", _style_delta(comparison["percent_change"])),
+                ("Return Value", _styled(format_return_value(baseline.get("target_return_value"), compact=True), baseline_style), _styled(format_return_value(candidate.get("target_return_value"), compact=True), candidate_style)),
+                ("Return Error", "", format_return_error(comparison.get("target_return_relative_error"))),
             ],
         )
     )
@@ -299,27 +279,38 @@ def _print_run_comparison(
 
 
 def _print_suite_comparison(comparison: dict[str, object]) -> None:
-    console.print(
-        render_table(
-            _comparison_title(comparison),
-            [("Run ID", "right"), ("Record ID", "right"), "Configuration", ("Mean +- Std (s)", "right"), (comparison["delta_column_label"], "right"), (comparison["ratio_column_label"], "right"), *([("Samples", "right"), "Recorded At"] if _STATE.verbose else [])],
-            [
-                _style_row(
-                    (
-                        run["display_id"],
-                        run["id"],
-                        dump_json(run["configuration"]),
-                        _format_time(run.get("mean_seconds"), run.get("std_seconds")),
-                        f"{run['delta_seconds']:.6f}",
-                        "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
-                        *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
-                    ),
-                    _suite_row_style(comparison, run),
-                )
-                for run in comparison["runs"]
-            ],
+    table = Table(title=_comparison_title(comparison), pad_edge=False, collapse_padding=True)
+    table.add_column("Run ID", justify="right", no_wrap=True, min_width=4, max_width=4)
+    table.add_column("Record ID", justify="right", no_wrap=True, min_width=7, max_width=7)
+    table.add_column("Configuration", overflow="ellipsis", max_width=16)
+    table.add_column("Mean +- Std (s)", justify="right", no_wrap=True, max_width=18)
+    table.add_column(str(comparison["delta_column_label"]), justify="right", no_wrap=True, max_width=12)
+    table.add_column(str(comparison["ratio_column_label"]), justify="right", no_wrap=True, max_width=6)
+    table.add_column("Return Value", overflow="ellipsis", no_wrap=True, max_width=16)
+    table.add_column("Return Error", justify="right", no_wrap=True, max_width=12)
+    if _STATE.verbose:
+        table.add_column("Samples", justify="right", no_wrap=True)
+        table.add_column("Recorded At", overflow="ellipsis", no_wrap=True, max_width=16)
+
+    for run in comparison["runs"]:
+        style = _suite_row_style(comparison, run)
+        row = _style_row(
+            (
+                run["display_id"],
+                run["id"],
+                dump_json(run["configuration"]),
+                _format_time(run.get("mean_seconds"), run.get("std_seconds")),
+                f"{run['delta_seconds']:.6f}",
+                "n/a" if run["slowdown_factor"] is None else f"{run['slowdown_factor']:.2f}x",
+                format_return_value(run.get("target_return_value"), compact=True),
+                format_return_error(run.get("target_return_relative_error")),
+                *([run["sample_count"], run["created_at"]] if _STATE.verbose else []),
+            ),
+            style,
         )
-    )
+        table.add_row(*(value if isinstance(value, Text) else str(value) for value in row))
+
+    console.print(table)
 
     if comparison["basis_median_seconds"] is not None:
         best_run = comparison["basis_run"]
@@ -331,6 +322,8 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
                         f"Record ID: {best_run['id']}",
                         f"{comparison['basis_metric_label']}: {best_run['median_seconds']:.6f}",
                         f"Mean +- Std (s): {_format_time(best_run.get('mean_seconds'), best_run.get('std_seconds'))}",
+                        f"Return Value: {format_return_value(best_run.get('target_return_value'), compact=True)}",
+                        "Return Error: relative to this basis run",
                     ]
                 ),
                 title="Comparison Basis",

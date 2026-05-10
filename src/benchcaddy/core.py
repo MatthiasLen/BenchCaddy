@@ -275,6 +275,7 @@ class Sweep:
                 max_seconds=max_seconds,
                 std_seconds=std_seconds,
                 sample_count=len(samples),
+                target_return_value=target_return_value,
             )
 
         _report(reporter, "on_sweep_completed", results=results)
