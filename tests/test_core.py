@@ -147,7 +147,8 @@ def test_sweep_can_store_numpy_vector_values_via_postprocessor(
     monkeypatch,
     environment_payload: dict[str, object],
 ) -> None:
-    np = pytest.importorskip("numpy")
+    import numpy as np
+
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
 
@@ -203,7 +204,8 @@ def test_sweep_rejects_non_vector_array_shapes(
     monkeypatch,
     environment_payload: dict[str, object],
 ) -> None:
-    np = pytest.importorskip("numpy")
+    import numpy as np
+
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
 
@@ -224,6 +226,55 @@ def test_sweep_rejects_non_vector_array_shapes(
 
     with pytest.raises(TypeError, match="one-dimensional numeric array/list/tuple"):
         sweep.run()
+
+
+def test_record_benchmark_run_normalizes_supported_return_values(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="direct-recording-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "vector"},
+        samples=[0.1, 0.1],
+        observations=[],
+        median_seconds=0.1,
+        min_seconds=0.1,
+        max_seconds=0.1,
+        std_seconds=0.0,
+        target_return_value=(1, 2.5, 3),
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    run = get_run_details((1, 1), database_path)
+    assert run is not None
+    assert run["target_return_value"] == [1.0, 2.5, 3.0]
+
+
+def test_record_benchmark_run_rejects_unsupported_return_values(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    with pytest.raises(TypeError, match="one-dimensional numeric array/list/tuple"):
+        record_benchmark_run(
+            suite_name="direct-recording-suite",
+            target_name="benchmark_target",
+            configuration={"variant": "invalid"},
+            samples=[0.1, 0.1],
+            observations=[],
+            median_seconds=0.1,
+            min_seconds=0.1,
+            max_seconds=0.1,
+            std_seconds=0.0,
+            target_return_value={"complex": "payload"},
+            environment=environment_payload,
+            database_path=database_path,
+        )
 
 
 def test_compare_runs_computes_vector_distance_and_handles_mismatched_lengths(

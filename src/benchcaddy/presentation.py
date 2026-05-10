@@ -10,15 +10,14 @@ from rich.text import Text
 Column = str | tuple[str, str]
 Row = Sequence[object]
 
-def rec_format(x: object, *, ind: int | None = 0) -> str:
-    return "\n" + dump_json(x, indent=ind) if isinstance(x, dict) else str(x)
-
 def dump_json(value: object, *, indent: int | None = 0) -> str:
     n_ind = (0 if indent is None else indent)
     if isinstance(value, dict):
-        return "\n".join(n_ind * " " + f"{k}: {rec_format(v, ind=n_ind + 2)}" for k, v in value.items())
-    else:
-        return str(value)
+        return "\n".join(
+            n_ind * " " + f"{k}: {('\\n' + dump_json(v, indent=n_ind + 2)) if isinstance(v, dict) else str(v)}"
+            for k, v in value.items()
+        )
+    return str(value)
 
 
 def format_scientific_number(value: Real) -> str:
@@ -60,6 +59,7 @@ def format_return_error(value: object) -> str:
     if isinstance(value, Real):
         return f"{float(value) * 100.0:.6f}%"
     return str(value)
+
 
 def render_table(title: str, columns: Sequence[Column], rows: Iterable[Row]) -> Table:
     table = Table(title=title)
