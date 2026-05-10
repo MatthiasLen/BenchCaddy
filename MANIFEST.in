@@ -1,4 +1,5 @@
 include README.md
+include statistics.md
 include LICENSE
 include benchcaddy_logo.png
 include examples/benchmark_nonlinear_transform.py
