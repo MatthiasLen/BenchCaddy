@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
 import benchcaddy.db as db_module
-from benchcaddy.cli import _suite_row_style, app
+from benchcaddy.cli import _suite_row_style, _trend_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 
 
@@ -923,6 +923,32 @@ def test_suite_row_style_keeps_reference_green_when_it_is_best() -> None:
     assert _suite_row_style(comparison, comparison["runs"][0]) is None
 
 
+def test_trend_row_style_uses_green_for_best_and_yellow_for_anchor() -> None:
+    trend = {
+        "basis_run": {"id": 2, "median_seconds": 0.20},
+        "runs": [
+            {"id": 1, "median_seconds": 0.10},
+            {"id": 2, "median_seconds": 0.20},
+        ],
+    }
+
+    assert _trend_row_style(trend, trend["runs"][0]) == "green"
+    assert _trend_row_style(trend, trend["runs"][1]) == "yellow"
+
+
+def test_trend_row_style_keeps_anchor_green_when_it_is_best() -> None:
+    trend = {
+        "basis_run": {"id": 2, "median_seconds": 0.10},
+        "runs": [
+            {"id": 1, "median_seconds": 0.12},
+            {"id": 2, "median_seconds": 0.10},
+        ],
+    }
+
+    assert _trend_row_style(trend, trend["runs"][1]) == "green"
+    assert _trend_row_style(trend, trend["runs"][0]) is None
+
+
 def test_cli_compare_can_pin_and_use_baseline(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -990,7 +1016,7 @@ def test_cli_verbose_trend_preserves_warning_categories(
 
     result = runner.invoke(
         app,
-        ["--verbose", "trend", "warning-trend-suite", "--baseline", "1.1", "--database", str(database_path)],
+        ["--verbose", "trend", "warning-trend-suite", "1.1", "--database", str(database_path)],
     )
 
     assert result.exit_code == 0
@@ -1056,7 +1082,7 @@ def test_cli_trend_shows_time_series_for_matching_configuration(
 
     result = runner.invoke(
         app,
-        ["trend", "trend-suite", "--baseline", "1.1", "--database", str(database_path)],
+        ["trend", "trend-suite", "1.1", "--database", str(database_path)],
     )
 
     assert result.exit_code == 0

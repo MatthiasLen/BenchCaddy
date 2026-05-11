@@ -232,7 +232,7 @@ Inspect the historical drift of a suite configuration over time:
 
 ```bash
 benchcaddy trend nonlinear-transform
-benchcaddy trend nonlinear-transform --baseline 2.4
+benchcaddy trend nonlinear-transform 2.4
 benchcaddy trend nonlinear-transform --limit 8 --window 4
 ```
 
