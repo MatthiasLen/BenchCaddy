@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from benchcaddy import Sweep
 from benchcaddy.db import record_benchmark_run
 
 
@@ -56,3 +57,31 @@ def record_simple_run(environment_payload: dict[str, object]):
         )
 
     return _record_simple_run
+
+
+@pytest.fixture
+def build_single_sample_sweep():
+    def _build_single_sample_sweep(
+        *,
+        target,
+        suite_name: str,
+        database_path,
+        params: dict[str, object] | None = None,
+        store_target_return_value: bool = False,
+        return_value_postprocessor=None,
+        verbose: bool = False,
+    ) -> Sweep:
+        return Sweep(
+            target=target,
+            params={} if params is None else params,
+            suite_name=suite_name,
+            samples=1,
+            warmup_iterations=0,
+            lock_cpu_affinity=False,
+            database_path=database_path,
+            store_target_return_value=store_target_return_value,
+            return_value_postprocessor=return_value_postprocessor,
+            verbose=verbose,
+        )
+
+    return _build_single_sample_sweep

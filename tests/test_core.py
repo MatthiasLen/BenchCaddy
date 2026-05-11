@@ -149,6 +149,7 @@ def test_sweep_persists_supported_return_value_shapes(
     tmp_path: Path,
     monkeypatch,
     environment_payload: dict[str, object],
+    build_single_sample_sweep,
     target,
     params: dict[str, list[int] | list[str]],
     suite_name: str,
@@ -162,13 +163,10 @@ def test_sweep_persists_supported_return_value_shapes(
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
-    sweep = Sweep(
+    sweep = build_single_sample_sweep(
         target=target,
         params=params,
         suite_name=suite_name,
-        samples=1,
-        warmup_iterations=0,
-        lock_cpu_affinity=False,
         database_path=database_path,
         store_target_return_value=True,
         return_value_postprocessor=return_value_postprocessor,
@@ -269,6 +267,7 @@ def test_sweep_requires_supported_target_return_types_when_enabled(
     tmp_path: Path,
     monkeypatch,
     environment_payload: dict[str, object],
+    build_single_sample_sweep,
 ) -> None:
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
@@ -277,13 +276,9 @@ def test_sweep_requires_supported_target_return_types_when_enabled(
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
-    sweep = Sweep(
+    sweep = build_single_sample_sweep(
         target=lambda: {"complex": "payload"},
-        params={},
         suite_name="unsupported-return-value-suite",
-        samples=1,
-        warmup_iterations=0,
-        lock_cpu_affinity=False,
         database_path=database_path,
         store_target_return_value=True,
     )
@@ -296,6 +291,7 @@ def test_sweep_rejects_non_vector_array_shapes(
     tmp_path: Path,
     monkeypatch,
     environment_payload: dict[str, object],
+    build_single_sample_sweep,
 ) -> None:
     import numpy as np
 
@@ -306,13 +302,9 @@ def test_sweep_rejects_non_vector_array_shapes(
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
-    sweep = Sweep(
+    sweep = build_single_sample_sweep(
         target=lambda: np.asarray([[1.0, 2.0], [3.0, 4.0]]),
-        params={},
         suite_name="invalid-vector-return-suite",
-        samples=1,
-        warmup_iterations=0,
-        lock_cpu_affinity=False,
         database_path=database_path,
         store_target_return_value=True,
     )
