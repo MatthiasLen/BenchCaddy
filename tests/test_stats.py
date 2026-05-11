@@ -63,3 +63,34 @@ def test_compare_sample_sets_handles_empty_samples_without_crashing() -> None:
     assert comparison.delta_ci_lower_seconds == 0.0
     assert comparison.delta_ci_upper_seconds == 0.0
     assert "baseline_empty_samples" in comparison.warnings
+
+
+def test_analyze_samples_handles_zero_baseline_without_false_noise() -> None:
+    stats = analyze_samples(
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+        AnalysisOptions(bootstrap_resamples=500, bootstrap_seed=5),
+    )
+
+    assert stats.sample_count == 5
+    assert stats.mean_seconds == 0.0
+    assert stats.median_seconds == 0.0
+    assert stats.std_seconds == 0.0
+    assert stats.coefficient_of_variation == 0.0
+    assert stats.ci_width_ratio is None
+    assert stats.warnings == ()
+    assert stats.is_noisy is False
+
+
+def test_compare_sample_sets_propagates_noisy_warnings_from_both_sides() -> None:
+    comparison = compare_sample_sets(
+        [0.100, 0.160, 0.120],
+        [0.110, 0.170, 0.130],
+        AnalysisOptions(bootstrap_resamples=500, bootstrap_seed=13),
+    )
+
+    assert comparison.classification == "noisy"
+    assert "low_sample_count" in comparison.warnings
+    assert "baseline_low_sample_count" in comparison.warnings
+    assert "candidate_low_sample_count" in comparison.warnings
+    assert "baseline_noisy" in comparison.warnings
+    assert "candidate_noisy" in comparison.warnings

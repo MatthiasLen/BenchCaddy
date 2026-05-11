@@ -188,3 +188,46 @@ def test_environment_round_trip_omits_git_payload_when_missing(tmp_path: Path, r
     assert run is not None
     assert "git" not in run["environment"]
     assert run["environment"]["process"] == environment_payload["process"]
+
+
+def test_run_command_returns_none_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def timed_out(*args: object, **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd=["fake"], timeout=1)
+
+    monkeypatch.setattr(metadata_module.subprocess, "run", timed_out)
+
+    assert metadata_module._run_command(["fake"]) is None
+
+
+def test_read_gpu_model_uses_first_windows_wmic_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(metadata_module.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        metadata_module,
+        "_run_command",
+        lambda command: "Name\nNVIDIA RTX 6000\nIntegrated GPU\n" if command[:2] == ["wmic", "path"] else None,
+    )
+
+    assert metadata_module._read_gpu_model() == "NVIDIA RTX 6000"
+
+
+def test_collect_process_state_handles_access_denied(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeProcess:
+        pid = 321
+
+        def cpu_affinity(self):
+            raise metadata_module.psutil.AccessDenied()
+
+        def nice(self):
+            raise metadata_module.psutil.AccessDenied()
+
+        def memory_info(self):
+            raise metadata_module.psutil.AccessDenied()
+
+    monkeypatch.setattr(metadata_module.psutil, "Process", lambda: FakeProcess())
+
+    process_state = metadata_module.collect_process_state()
+
+    assert process_state.pid == 321
+    assert process_state.affinity == []
+    assert process_state.priority is None
+    assert process_state.rss_bytes is None

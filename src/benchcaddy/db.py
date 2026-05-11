@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, String, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 from sqlalchemy.sql.functions import now
 from sqlalchemy.types import JSON
@@ -18,6 +20,8 @@ from .stats import AnalysisOptions, analyze_samples, compare_sample_sets
 
 _ENGINES: dict[Path, Engine] = {}
 _INITIALIZED_DATABASES: set[Path] = set()
+_ENGINE_LOCK = threading.Lock()
+_INITIALIZATION_LOCKS: dict[Path, threading.Lock] = {}
 
 
 class Base(DeclarativeBase):
@@ -246,20 +250,31 @@ def get_database_path(database_path: str | Path | None = None) -> Path:
 def get_engine(database_path: str | Path | None = None) -> Engine:
     path = get_database_path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    engine = _ENGINES.get(path)
-    if engine is None:
-        engine = create_engine(f"sqlite:///{path}", future=True)
-        _ENGINES[path] = engine
-    return engine
+    with _ENGINE_LOCK:
+        engine = _ENGINES.get(path)
+        if engine is None:
+            engine = create_engine(f"sqlite:///{path}", future=True)
+            _ENGINES[path] = engine
+        return engine
+
+
+def _get_initialization_lock(path: Path) -> threading.Lock:
+    with _ENGINE_LOCK:
+        lock = _INITIALIZATION_LOCKS.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _INITIALIZATION_LOCKS[path] = lock
+        return lock
 
 
 def initialize_database(database_path: str | Path | None = None) -> Engine:
     path = get_database_path(database_path)
     engine = get_engine(path)
-    if path not in _INITIALIZED_DATABASES:
-        Base.metadata.create_all(engine)
-        _migrate_legacy_schema(engine)
-        _INITIALIZED_DATABASES.add(path)
+    with _get_initialization_lock(path):
+        if path not in _INITIALIZED_DATABASES:
+            Base.metadata.create_all(engine)
+            _migrate_legacy_schema(engine)
+            _INITIALIZED_DATABASES.add(path)
     return engine
 
 
@@ -483,7 +498,13 @@ def _get_or_create_suite(session: Session, suite_name: str, target_name: str) ->
     if suite is None:
         suite = BenchmarkSuite(name=suite_name, target_name=target_name)
         session.add(suite)
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            suite = session.scalar(_suite_query(suite_name))
+            if suite is None:
+                raise
     return suite
 
 
