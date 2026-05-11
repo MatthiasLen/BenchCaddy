@@ -13,6 +13,20 @@ from benchcaddy.cli import _suite_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 
 
+def _uniform_run_kwargs(
+    median_seconds: float,
+    *,
+    target_return_value: bool | int | float | str | list[float] | None = None,
+) -> dict[str, object]:
+    return {
+        "median_seconds": median_seconds,
+        "min_seconds": median_seconds,
+        "max_seconds": median_seconds,
+        "std_seconds": 0.0,
+        "target_return_value": target_return_value,
+    }
+
+
 def _seed_run(
     *,
     database_path: Path,
@@ -43,11 +57,7 @@ def _seed_run(
                 ],
             },
         ],
-        median_seconds=median_seconds,
-        min_seconds=median_seconds,
-        max_seconds=median_seconds,
-        std_seconds=0.0,
-        target_return_value=target_return_value,
+        **_uniform_run_kwargs(median_seconds, target_return_value=target_return_value),
         environment=environment_payload,
         database_path=database_path,
     )
@@ -69,11 +79,7 @@ def _seed_custom_run(
         configuration=configuration,
         samples=[median_seconds, median_seconds],
         observations=observations,
-        median_seconds=median_seconds,
-        min_seconds=median_seconds,
-        max_seconds=median_seconds,
-        std_seconds=0.0,
-        target_return_value=target_return_value,
+        **_uniform_run_kwargs(median_seconds, target_return_value=target_return_value),
         environment=environment_payload,
         database_path=database_path,
     )
@@ -533,18 +539,13 @@ def test_cli_show_renders_partial_git_environment(tmp_path: Path, environment_pa
         },
     }
 
-    record_benchmark_run(
+    _seed_custom_run(
         suite_name="partial-git-suite",
-        target_name="benchmark_target",
-        configuration={"variant": "detached-head"},
-        samples=[0.1, 0.1],
-        observations=[],
-        median_seconds=0.1,
-        min_seconds=0.1,
-        max_seconds=0.1,
-        std_seconds=0.0,
-        environment=partial_git_environment,
         database_path=database_path,
+        configuration={"variant": "detached-head"},
+        median_seconds=0.1,
+        observations=[],
+        environment_payload=partial_git_environment,
     )
 
     show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])

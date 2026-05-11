@@ -326,23 +326,15 @@ def test_sweep_rejects_non_vector_array_shapes(
 
 def test_record_benchmark_run_normalizes_supported_return_values(
     tmp_path: Path,
-    environment_payload: dict[str, object],
+    record_simple_run,
 ) -> None:
     database_path = tmp_path / "benchcaddy.db"
 
-    record_benchmark_run(
+    record_simple_run(
         suite_name="direct-recording-suite",
-        target_name="benchmark_target",
-        configuration={"variant": "vector"},
-        samples=[0.1, 0.1],
-        observations=[],
-        median_seconds=0.1,
-        min_seconds=0.1,
-        max_seconds=0.1,
-        std_seconds=0.0,
-        target_return_value=(1, 2.5, 3),
-        environment=environment_payload,
         database_path=database_path,
+        configuration={"variant": "vector"},
+        target_return_value=(1, 2.5, 3),
     )
 
     run = get_run_details((1, 1), database_path)
@@ -352,60 +344,38 @@ def test_record_benchmark_run_normalizes_supported_return_values(
 
 def test_record_benchmark_run_rejects_unsupported_return_values(
     tmp_path: Path,
-    environment_payload: dict[str, object],
+    record_simple_run,
 ) -> None:
     database_path = tmp_path / "benchcaddy.db"
 
     with pytest.raises(TypeError, match="one-dimensional numeric array/list/tuple"):
-        record_benchmark_run(
+        record_simple_run(
             suite_name="direct-recording-suite",
-            target_name="benchmark_target",
-            configuration={"variant": "invalid"},
-            samples=[0.1, 0.1],
-            observations=[],
-            median_seconds=0.1,
-            min_seconds=0.1,
-            max_seconds=0.1,
-            std_seconds=0.0,
-            target_return_value={"complex": "payload"},
-            environment=environment_payload,
             database_path=database_path,
+            configuration={"variant": "invalid"},
+            target_return_value={"complex": "payload"},
         )
 
 
 def test_compare_runs_computes_vector_distance_and_handles_mismatched_lengths(
     tmp_path: Path,
     environment_payload: dict[str, object],
+    record_simple_run,
 ) -> None:
     database_path = tmp_path / "benchcaddy.db"
 
-    record_benchmark_run(
+    record_simple_run(
         suite_name="vector-distance-suite",
-        target_name="benchmark_target",
+        database_path=database_path,
         configuration={"variant": "baseline"},
-        samples=[0.1, 0.1],
-        observations=[],
-        median_seconds=0.1,
-        min_seconds=0.1,
-        max_seconds=0.1,
-        std_seconds=0.0,
         target_return_value=[1.0, 2.0, 3.0],
-        environment=environment_payload,
-        database_path=database_path,
     )
-    record_benchmark_run(
+    record_simple_run(
         suite_name="vector-distance-suite",
-        target_name="benchmark_target",
-        configuration={"variant": "candidate"},
-        samples=[0.11, 0.11],
-        observations=[],
-        median_seconds=0.11,
-        min_seconds=0.11,
-        max_seconds=0.11,
-        std_seconds=0.0,
-        target_return_value=[4.0, 6.0, 3.0],
-        environment=environment_payload,
         database_path=database_path,
+        configuration={"variant": "candidate"},
+        median_seconds=0.11,
+        target_return_value=[4.0, 6.0, 3.0],
     )
 
     comparison = compare_runs((1, 1), (2, 1), database_path)
@@ -414,19 +384,12 @@ def test_compare_runs_computes_vector_distance_and_handles_mismatched_lengths(
     expected_relative_error = expected_distance / ((1.0**2 + 2.0**2 + 3.0**2) ** 0.5)
     assert comparison["target_return_relative_error"] == expected_relative_error
 
-    record_benchmark_run(
+    record_simple_run(
         suite_name="vector-distance-suite",
-        target_name="benchmark_target",
-        configuration={"variant": "mismatched"},
-        samples=[0.12, 0.12],
-        observations=[],
-        median_seconds=0.12,
-        min_seconds=0.12,
-        max_seconds=0.12,
-        std_seconds=0.0,
-        target_return_value=[1.0, 2.0],
-        environment=environment_payload,
         database_path=database_path,
+        configuration={"variant": "mismatched"},
+        median_seconds=0.12,
+        target_return_value=[1.0, 2.0],
     )
 
     mismatched_comparison = compare_runs((1, 1), (3, 1), database_path)
@@ -740,6 +703,7 @@ def test_database_initialization_runs_once(tmp_path: Path, monkeypatch) -> None:
 def test_compare_suite_runs_can_filter_to_matching_reference_config(
     tmp_path: Path,
     environment_payload: dict[str, object],
+    record_simple_run,
 ) -> None:
     database_path = tmp_path / "benchcaddy.db"
 
@@ -749,18 +713,12 @@ def test_compare_suite_runs_can_filter_to_matching_reference_config(
         ({"size": 34, "variant": "candidate"}, 0.09),
         ({"size": 33, "variant": "candidate", "mode": "extra"}, 0.11),
     ]:
-        record_benchmark_run(
+        record_simple_run(
             suite_name="strict-suite",
-            target_name="benchmark_target",
-            configuration=configuration,
-            samples=[median_seconds, median_seconds],
-            observations=[],
-            median_seconds=median_seconds,
-            min_seconds=median_seconds,
-            max_seconds=median_seconds,
-            std_seconds=0.0,
-            environment=environment_payload,
             database_path=database_path,
+            configuration=configuration,
+            median_seconds=median_seconds,
+            environment=environment_payload,
         )
 
     comparison = compare_suite_runs("strict-suite", (2, 1), ["size"], database_path)

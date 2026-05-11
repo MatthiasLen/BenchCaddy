@@ -51,6 +51,113 @@ def _parse_compare_operands(values: list[str], strict: bool) -> tuple[str | None
     return right, list(dict.fromkeys(extra)) if strict else []
 
 
+def _run_direct_compare(
+    left_run_id: int | tuple[int, int],
+    right_run_id: int | tuple[int, int],
+    database_path: Path,
+    analysis_options: AnalysisOptions,
+    *,
+    strict_keys: list[str],
+    use_baseline: bool,
+    pin_baseline: bool,
+) -> None:
+    if strict_keys or use_baseline or pin_baseline:
+        console.print("--strict, --use-baseline, and --pin-baseline are only supported for suite comparisons.")
+        raise typer.Exit(code=2)
+
+    comparison = compare_runs(left_run_id, right_run_id, database_path, analysis_options=analysis_options)
+    if comparison is None:
+        console.print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
+        raise typer.Exit(code=1)
+    _print_run_comparison(comparison)
+
+
+def _resolve_compare_strict_keys(
+    strict_keys: list[str],
+    *,
+    strict: bool,
+    right: str | None,
+    right_run_id: int | tuple[int, int] | None,
+    database_path: Path,
+) -> list[str]:
+    if strict_keys and right_run_id is None:
+        console.print("--strict requires a suite comparison with a reference run ID.")
+        raise typer.Exit(code=2)
+    if strict and right_run_id is not None and not strict_keys:
+        reference_run = get_run_details(right_run_id, database_path, include_analysis=False)
+        if reference_run is None:
+            console.print(f"Reference run '{right}' was not found in {database_path}.")
+            raise typer.Exit(code=1)
+        return list(reference_run["configuration"].keys())
+    return strict_keys
+
+
+def _validate_suite_compare_options(
+    *,
+    right_run_id: int | tuple[int, int] | None,
+    use_baseline: bool,
+    pin_baseline: bool,
+) -> None:
+    if use_baseline and right_run_id is not None:
+        console.print("--use-baseline cannot be combined with an explicit reference run ID.")
+        raise typer.Exit(code=2)
+    if pin_baseline and right_run_id is None:
+        console.print("--pin-baseline requires a suite comparison with a reference run ID.")
+        raise typer.Exit(code=2)
+
+
+def _raise_for_suite_compare_error(
+    comparison: dict[str, object] | None,
+    *,
+    left: str,
+    right: str | None,
+    database_path: Path,
+) -> dict[str, object]:
+    if comparison is None:
+        console.print(f"Suite '{left}' was not found in {database_path}.")
+        raise typer.Exit(code=1)
+
+    error = comparison.get("error")
+    if error == "reference_run_not_found":
+        console.print(f"Reference run '{right}' was not found in {database_path}.")
+        raise typer.Exit(code=1)
+    if error == "reference_run_wrong_suite":
+        console.print(f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'.")
+        raise typer.Exit(code=1)
+    if error == "strict_requires_reference_run":
+        console.print("--strict requires a suite comparison with a reference run ID.")
+        raise typer.Exit(code=2)
+    if error == "strict_keys_not_found":
+        missing_keys = ", ".join(comparison["missing_strict_keys"])
+        console.print(f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}.")
+        raise typer.Exit(code=1)
+    if error == "baseline_not_found":
+        console.print(f"Suite '{left}' does not have a pinned baseline in {database_path}.")
+        raise typer.Exit(code=1)
+    return comparison
+
+
+def _pin_suite_baseline_if_requested(
+    *,
+    suite_name: str,
+    right_run_id: int | tuple[int, int] | None,
+    database_path: Path,
+    analysis_options: AnalysisOptions,
+    pin_baseline: bool,
+) -> None:
+    if not pin_baseline:
+        return
+
+    pinned = set_suite_baseline(suite_name, right_run_id, database_path, analysis_options=analysis_options)
+    if pinned is not None and not pinned.get("error"):
+        console.print(
+            Panel.fit(
+                f"Pinned baseline for {suite_name}: {pinned['display_id']} ({pinned['id']})",
+                title="Baseline Updated",
+            )
+        )
+
+
 def _comparison_title(comparison: dict[str, object]) -> str:
     strict_keys = comparison.get("strict_keys") or []
     if not strict_keys:
@@ -901,69 +1008,50 @@ def compare_command(
     left_run_id = _as_run_id(left)
     right_run_id = _as_run_id(right) if right is not None else None
     if left_run_id is not None and right_run_id is not None:
-        if strict_keys or use_baseline or pin_baseline:
-            console.print("--strict, --use-baseline, and --pin-baseline are only supported for suite comparisons.")
-            raise typer.Exit(code=2)
-        comparison = compare_runs(left_run_id, right_run_id, database_path, analysis_options=analysis_options)
-        if comparison is None:
-            console.print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
-            raise typer.Exit(code=1)
-        _print_run_comparison(comparison)
+        _run_direct_compare(
+            left_run_id,
+            right_run_id,
+            database_path,
+            analysis_options,
+            strict_keys=strict_keys,
+            use_baseline=use_baseline,
+            pin_baseline=pin_baseline,
+        )
         return
 
-    if strict_keys and right_run_id is None:
-        console.print("--strict requires a suite comparison with a reference run ID.")
-        raise typer.Exit(code=2)
-    if use_baseline and right_run_id is not None:
-        console.print("--use-baseline cannot be combined with an explicit reference run ID.")
-        raise typer.Exit(code=2)
-    if pin_baseline and right_run_id is None:
-        console.print("--pin-baseline requires a suite comparison with a reference run ID.")
-        raise typer.Exit(code=2)
-    if strict and right_run_id is not None and not strict_keys:
-        reference_run = get_run_details(right_run_id, database_path, include_analysis=False)
-        if reference_run is None:
-            console.print(f"Reference run '{right}' was not found in {database_path}.")
-            raise typer.Exit(code=1)
-        strict_keys = list(reference_run["configuration"].keys())
-
-    comparison = compare_suite_runs(
-        left,
-        right_run_id,
-        strict_keys,
-        database_path,
-        analysis_options=analysis_options,
-        use_pinned_baseline=use_baseline,
+    _validate_suite_compare_options(
+        right_run_id=right_run_id,
+        use_baseline=use_baseline,
+        pin_baseline=pin_baseline,
     )
-    if comparison is None:
-        console.print(f"Suite '{left}' was not found in {database_path}.")
-        raise typer.Exit(code=1)
-    if comparison.get("error") == "reference_run_not_found":
-        console.print(f"Reference run '{right}' was not found in {database_path}.")
-        raise typer.Exit(code=1)
-    if comparison.get("error") == "reference_run_wrong_suite":
-        console.print(f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'.")
-        raise typer.Exit(code=1)
-    if comparison.get("error") == "strict_requires_reference_run":
-        console.print("--strict requires a suite comparison with a reference run ID.")
-        raise typer.Exit(code=2)
-    if comparison.get("error") == "strict_keys_not_found":
-        missing_keys = ", ".join(comparison["missing_strict_keys"])
-        console.print(f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}.")
-        raise typer.Exit(code=1)
-    if comparison.get("error") == "baseline_not_found":
-        console.print(f"Suite '{left}' does not have a pinned baseline in {database_path}.")
-        raise typer.Exit(code=1)
+    strict_keys = _resolve_compare_strict_keys(
+        strict_keys,
+        strict=strict,
+        right=right,
+        right_run_id=right_run_id,
+        database_path=database_path,
+    )
 
-    if pin_baseline:
-        pinned = set_suite_baseline(left, right_run_id, database_path, analysis_options=analysis_options)
-        if pinned is not None and not pinned.get("error"):
-            console.print(
-                Panel.fit(
-                    f"Pinned baseline for {left}: {pinned['display_id']} ({pinned['id']})",
-                    title="Baseline Updated",
-                )
-            )
+    comparison = _raise_for_suite_compare_error(
+        compare_suite_runs(
+            left,
+            right_run_id,
+            strict_keys,
+            database_path,
+            analysis_options=analysis_options,
+            use_pinned_baseline=use_baseline,
+        ),
+        left=left,
+        right=right,
+        database_path=database_path,
+    )
+    _pin_suite_baseline_if_requested(
+        suite_name=left,
+        right_run_id=right_run_id,
+        database_path=database_path,
+        analysis_options=analysis_options,
+        pin_baseline=pin_baseline,
+    )
 
     _print_suite_comparison(comparison)
 
