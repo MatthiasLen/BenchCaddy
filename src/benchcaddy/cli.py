@@ -115,6 +115,10 @@ def _analysis_options(
     )
 
 
+def _has_analysis(run: dict[str, object]) -> bool:
+    return bool(run.get("analysis"))
+
+
 def _styled(value: object, style: str | None = None) -> Text:
     return Text(str(value), style=style)
 
@@ -308,32 +312,43 @@ def _observed_timing_rows(
 
 
 def _show_run(run: dict[str, object]) -> None:
-    console.print(
-        render_table(
-            f"Run: {run['display_id']}",
-            ["Field", "Value"],
+    detail_rows: list[tuple[object, object]] = [
+        ("Run ID", run["display_id"]),
+        ("Record ID", run["id"]),
+        ("Sweep ID", run["sweep_id"]),
+        ("Run Index", run["run_index"]),
+        ("Suite", run["suite_name"]),
+        ("Target", run["target_name"]),
+        ("Configuration", dump_json(run["configuration"])),
+        ("Mean +- Std (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
+        ("Min (s)", _format_optional_seconds(run.get("min_seconds"))),
+        ("Max (s)", _format_optional_seconds(run.get("max_seconds"))),
+    ]
+    if _has_analysis(run):
+        detail_rows.extend(
             [
-                ("Run ID", run["display_id"]),
-                ("Record ID", run["id"]),
-                ("Sweep ID", run["sweep_id"]),
-                ("Run Index", run["run_index"]),
-                ("Suite", run["suite_name"]),
-                ("Target", run["target_name"]),
-                ("Configuration", dump_json(run["configuration"])),
-                ("Mean +- Std (s)", _format_time(run.get("mean_seconds"), run.get("std_seconds"))),
-                ("Min (s)", _format_optional_seconds(run.get("min_seconds"))),
-                ("Max (s)", _format_optional_seconds(run.get("max_seconds"))),
                 ("Median CI (s)", _format_interval(run.get("ci_lower_seconds"), run.get("ci_upper_seconds"))),
                 ("MAD (s)", _format_optional_seconds(run.get("mad_seconds"))),
                 ("CV", _format_ratio(run.get("coefficient_of_variation"))),
                 ("Warnings", _format_warning_list(run.get("noise_warnings"))),
-                ("Return Value", format_return_value(run.get("target_return_value"), compact=True)),
-                ("Samples", len(run["samples"])),
-                ("Recorded At", run["created_at"]),
-            ],
+            ]
+        )
+    detail_rows.extend(
+        [
+            ("Return Value", format_return_value(run.get("target_return_value"), compact=True)),
+            ("Samples", len(run["samples"])),
+            ("Recorded At", run["created_at"]),
+        ]
+    )
+    console.print(
+        render_table(
+            f"Run: {run['display_id']}",
+            ["Field", "Value"],
+            detail_rows,
         )
     )
-    console.print(_run_analysis_panel(run))
+    if _has_analysis(run):
+        console.print(_run_analysis_panel(run))
     console.print(_render_observation_table(run["observations"], title="Observed Timings"))
     console.print(json_panel("Environment", run["environment"], indent=2))
 
@@ -342,15 +357,19 @@ def _show_suite(details: dict[str, object]) -> None:
     console.print(_render_run_table(f"Suite: {details['suite_name']}", details["runs"]))
     if details.get("baseline_run") is not None:
         baseline_run = details["baseline_run"]
+        rows: list[tuple[object, object]] = [
+            ("Run ID", _styled(baseline_run["display_id"], "yellow")),
+            ("Record ID", _styled(baseline_run["id"], "yellow")),
+        ]
+        if _has_analysis(baseline_run):
+            rows.append(
+                ("Median CI (s)", _format_interval(baseline_run.get("ci_lower_seconds"), baseline_run.get("ci_upper_seconds")))
+            )
+        rows.append(("Configuration", dump_json(baseline_run["configuration"])))
         console.print(
             summary_panel(
                 "Pinned Baseline",
-                [
-                    ("Run ID", _styled(baseline_run["display_id"], "yellow")),
-                    ("Record ID", _styled(baseline_run["id"], "yellow")),
-                    ("Median CI (s)", _format_interval(baseline_run.get("ci_lower_seconds"), baseline_run.get("ci_upper_seconds"))),
-                    ("Configuration", dump_json(baseline_run["configuration"])),
-                ],
+                rows,
             )
         )
     console.print(
@@ -647,6 +666,24 @@ def list_command(
 @app.command("show", help="Inspect all recorded runs, a suite, or specific run IDs. When a suite has a pinned baseline, it is shown in the suite view.")
 def show_command(
     identifiers: list[str] | None = typer.Argument(None, help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1). Omit identifiers to list all recorded runs."),
+    no_stats: bool = typer.Option(
+        False,
+        "--no-stats",
+        help="Skip per-run statistical analysis when showing run or suite details.",
+    ),
+    confidence_level: float = typer.Option(
+        0.95,
+        "--confidence-level",
+        min=0.5,
+        max=0.99,
+        help="Bootstrap confidence level used for per-run median confidence intervals.",
+    ),
+    bootstrap_resamples: int = typer.Option(
+        2000,
+        "--bootstrap-resamples",
+        min=100,
+        help="Bootstrap resample count used for per-run median confidence intervals.",
+    ),
     database: Path = typer.Option(
         None,
         "--database",
@@ -657,6 +694,10 @@ def show_command(
     ),
 ) -> None:
     database_path = get_database_path(database)
+    analysis_options = None if no_stats else AnalysisOptions(
+        confidence_level=confidence_level,
+        bootstrap_resamples=bootstrap_resamples,
+    )
 
     if not identifiers:
         _show_all_runs(get_all_run_details(database_path))
@@ -666,14 +707,24 @@ def show_command(
         identifier = identifiers[0]
         run_id = _as_run_id(identifier)
         if run_id is not None:
-            run = get_run_details(run_id, database_path)
+            run = get_run_details(
+                run_id,
+                database_path,
+                analysis_options=analysis_options,
+                include_analysis=not no_stats,
+            )
             if run is None:
                 console.print(f"Run '{identifier}' was not found in {database_path}.")
                 raise typer.Exit(code=1)
             _show_run(run)
             return
 
-        details = get_suite_details(identifier, database_path)
+        details = get_suite_details(
+            identifier,
+            database_path,
+            analysis_options=analysis_options,
+            include_analysis=not no_stats,
+        )
         if details is None:
             console.print(f"Suite '{identifier}' was not found in {database_path}.")
             raise typer.Exit(code=1)

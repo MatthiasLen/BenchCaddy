@@ -8,6 +8,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
+import benchcaddy.db as db_module
 from benchcaddy.cli import _suite_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 
@@ -426,6 +427,64 @@ def test_show_without_arguments_lists_all_runs(
     assert "1.1" in show_result.stdout
     assert "candidate" in show_result.stdout
     assert "baseline" in show_result.stdout
+
+
+def test_show_without_arguments_skips_statistical_analysis(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-a",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    monkeypatch.setattr(
+        db_module,
+        "analyze_samples",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected analysis")),
+    )
+
+    show_result = runner.invoke(app, ["show", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "All Runs" in show_result.stdout
+
+
+def test_show_run_supports_no_stats_fast_path(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-a",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    monkeypatch.setattr(
+        db_module,
+        "analyze_samples",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected analysis")),
+    )
+
+    show_result = runner.invoke(app, ["show", "1.1", "--no-stats", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "Run: 1.1" in show_result.stdout
+    assert "Statistical Summary" not in show_result.stdout
+    assert "Median CI (s)" not in show_result.stdout
 
 
 def test_return_value_type_example_runs_supported_cases(tmp_path: Path) -> None:

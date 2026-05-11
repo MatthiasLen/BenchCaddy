@@ -143,12 +143,21 @@ class BenchmarkRun(Base):
         return float(fmean(self.samples)) if self.samples else 0.0
 
     def analysis_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, object]:
-        analysis = analyze_samples(self.samples, analysis_options)
+        analysis = analyze_samples(self.samples, analysis_options or AnalysisOptions())
         return analysis.to_payload()
 
-    def to_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, Any]:
-        analysis = self.analysis_payload(analysis_options)
-        return {
+    def to_payload(
+        self,
+        analysis_options: AnalysisOptions | None = None,
+        *,
+        include_analysis: bool = False,
+    ) -> dict[str, Any]:
+        analysis = (
+            self.analysis_payload(analysis_options)
+            if include_analysis or analysis_options is not None
+            else None
+        )
+        payload = {
             "id": self.id,
             "record_id": self.id,
             "display_id": self.display_id,
@@ -164,18 +173,28 @@ class BenchmarkRun(Base):
             "std_seconds": self.std_seconds,
             "target_return_value": self.target_return_value,
             "created_at": self.created_at,
-            "analysis": analysis,
-            "mad_seconds": analysis["mad_seconds"],
-            "coefficient_of_variation": analysis["coefficient_of_variation"],
-            "ci_lower_seconds": analysis["ci_lower_seconds"],
-            "ci_upper_seconds": analysis["ci_upper_seconds"],
-            "noise_warnings": list(analysis["warnings"]),
-            "is_noisy": analysis["is_noisy"],
         }
+        payload.update(
+            {
+                "analysis": analysis,
+                "mad_seconds": None if analysis is None else analysis["mad_seconds"],
+                "coefficient_of_variation": None if analysis is None else analysis["coefficient_of_variation"],
+                "ci_lower_seconds": None if analysis is None else analysis["ci_lower_seconds"],
+                "ci_upper_seconds": None if analysis is None else analysis["ci_upper_seconds"],
+                "noise_warnings": [] if analysis is None else list(analysis["warnings"]),
+                "is_noisy": False if analysis is None else analysis["is_noisy"],
+            }
+        )
+        return payload
 
-    def to_detail_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, Any]:
+    def to_detail_payload(
+        self,
+        analysis_options: AnalysisOptions | None = None,
+        *,
+        include_analysis: bool = False,
+    ) -> dict[str, Any]:
         return {
-            **self.to_payload(analysis_options),
+            **self.to_payload(analysis_options, include_analysis=include_analysis),
             "suite_name": self.suite.name,
             "target_name": self.suite.target_name,
             "environment": self.environment.to_payload(),
@@ -398,6 +417,8 @@ def get_suite_details(
     suite_name: str,
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
+    *,
+    include_analysis: bool = False,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         suite = session.scalar(_suite_query(suite_name))
@@ -414,7 +435,7 @@ def get_suite_details(
             environment = runs[0].environment
         baseline_run = _resolve_suite_baseline_run(session, suite)
 
-    run_payloads = [run.to_payload(analysis_options) for run in runs]
+    run_payloads = [run.to_payload(analysis_options, include_analysis=include_analysis) for run in runs]
     run_payloads.sort(key=lambda run: (-(run["sweep_id"]), -(run["run_index"]), -run["record_id"]))
 
     return {
@@ -422,7 +443,7 @@ def get_suite_details(
         "target_name": suite.target_name,
         "runs": run_payloads,
         "environment": None if environment is None else environment.to_payload(),
-        "baseline_run": None if baseline_run is None else baseline_run.to_payload(analysis_options),
+        "baseline_run": None if baseline_run is None else baseline_run.to_payload(analysis_options, include_analysis=include_analysis),
     }
 
 
@@ -623,21 +644,33 @@ def get_run_details(
     run_id: int | tuple[int, int],
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
+    *,
+    include_analysis: bool = False,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         run = _resolve_run(session, run_id)
         if run is None:
             return None
-        return run.to_detail_payload(analysis_options)
+        return run.to_detail_payload(analysis_options, include_analysis=include_analysis)
 
 
 def get_selected_run_details(
     run_ids: Sequence[int | tuple[int, int]],
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
+    *,
+    include_analysis: bool = False,
 ) -> list[dict[str, Any]] | None:
     unique_run_ids = list(dict.fromkeys(run_ids))
-    runs = [get_run_details(run_id, database_path, analysis_options=analysis_options) for run_id in unique_run_ids]
+    runs = [
+        get_run_details(
+            run_id,
+            database_path,
+            analysis_options=analysis_options,
+            include_analysis=include_analysis,
+        )
+        for run_id in unique_run_ids
+    ]
     if any(run is None for run in runs):
         return None
 
@@ -650,6 +683,8 @@ def get_selected_run_details(
 def get_all_run_details(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
+    *,
+    include_analysis: bool = False,
 ) -> list[dict[str, Any]]:
     with db_session(database_path) as session:
         runs = session.execute(
@@ -657,7 +692,7 @@ def get_all_run_details(
             .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
         ).scalars().all()
 
-    return [run.to_payload(analysis_options) for run in runs]
+    return [run.to_payload(analysis_options, include_analysis=include_analysis) for run in runs]
 
 
 def compare_runs(
@@ -666,8 +701,18 @@ def compare_runs(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
 ) -> dict[str, Any] | None:
-    baseline = get_run_details(baseline_run_id, database_path, analysis_options=analysis_options)
-    candidate = get_run_details(candidate_run_id, database_path, analysis_options=analysis_options)
+    baseline = get_run_details(
+        baseline_run_id,
+        database_path,
+        analysis_options=analysis_options,
+        include_analysis=True,
+    )
+    candidate = get_run_details(
+        candidate_run_id,
+        database_path,
+        analysis_options=analysis_options,
+        include_analysis=True,
+    )
     if baseline is None or candidate is None:
         return None
 

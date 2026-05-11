@@ -47,3 +47,19 @@ def test_compare_sample_sets_marks_noisy_when_small_and_overlapping() -> None:
     assert comparison.regression_detected is False
     assert comparison.classification == "noisy"
     assert "low_sample_count" in comparison.warnings
+
+
+def test_compare_sample_sets_handles_empty_samples_without_crashing() -> None:
+    comparison = compare_sample_sets(
+        [],
+        [0.110, 0.150, 0.130],
+        AnalysisOptions(bootstrap_resamples=500, bootstrap_seed=3),
+    )
+
+    assert comparison.regression_detected is False
+    assert comparison.statistically_significant is False
+    assert comparison.classification == "noisy"
+    assert comparison.significance_p_value == 1.0
+    assert comparison.delta_ci_lower_seconds == 0.0
+    assert comparison.delta_ci_upper_seconds == 0.0
+    assert "baseline_empty_samples" in comparison.warnings
