@@ -116,7 +116,7 @@ def _analysis_options(
 
 
 def _has_analysis(run: dict[str, object]) -> bool:
-    return bool(run.get("analysis"))
+    return run.get("analysis") is not None
 
 
 def _styled(value: object, style: str | None = None) -> Text:
