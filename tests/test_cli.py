@@ -106,7 +106,7 @@ def _compact_output(output: str) -> str:
     return "".join(output.split())
 
 
-def _unexpected_analysis(*args, **kwargs):
+def _raise_if_analysis_called(*args, **kwargs):
     raise AssertionError("unexpected analysis")
 
 
@@ -452,7 +452,7 @@ def test_show_without_arguments_skips_statistical_analysis(
     monkeypatch.setattr(
         db_module,
         "analyze_samples",
-        _unexpected_analysis,
+        _raise_if_analysis_called,
     )
 
     show_result = runner.invoke(app, ["show", "--database", str(database_path)])
@@ -480,7 +480,7 @@ def test_show_run_supports_no_stats_fast_path(
     monkeypatch.setattr(
         db_module,
         "analyze_samples",
-        _unexpected_analysis,
+        _raise_if_analysis_called,
     )
 
     show_result = runner.invoke(app, ["show", "1.1", "--no-stats", "--database", str(database_path)])

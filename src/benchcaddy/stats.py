@@ -213,8 +213,6 @@ def compare_sample_sets(
 
     if baseline_values.size == 0 or candidate_values.size == 0:
         warnings: list[str] = []
-        if baseline_stats.sample_count < 5 or candidate_stats.sample_count < 5:
-            warnings.append("low_sample_count")
         if baseline_values.size == 0:
             warnings.append("baseline_empty_samples")
         if candidate_values.size == 0:
