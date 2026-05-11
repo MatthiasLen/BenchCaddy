@@ -4,10 +4,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from benchcaddy.db import get_run_details, record_benchmark_run
 from git.exc import GitCommandError, InvalidGitRepositoryError
 
 import benchcaddy.metadata as metadata_module
+from benchcaddy.db import get_run_details
 from benchcaddy.metadata import collect_environment_metadata, collect_git_state, metadata_to_dict
 
 
@@ -154,21 +154,15 @@ def test_collect_git_state_omits_git_when_commit_lookup_fails(monkeypatch: pytes
 def test_environment_round_trip_preserves_git_payload(
     tmp_path: Path,
     environment_payload: dict[str, object],
+    record_simple_run,
 ) -> None:
     database_path = tmp_path / "benchcaddy.db"
 
-    record_benchmark_run(
+    record_simple_run(
         suite_name="git-aware-suite",
-        target_name="benchmark_target",
-        configuration={"variant": "baseline"},
-        samples=[0.1, 0.1],
-        observations=[],
-        median_seconds=0.1,
-        min_seconds=0.1,
-        max_seconds=0.1,
-        std_seconds=0.0,
-        environment=environment_payload,
         database_path=database_path,
+        configuration={"variant": "baseline"},
+        environment=environment_payload,
     )
 
     run = get_run_details((1, 1), database_path)
@@ -178,22 +172,15 @@ def test_environment_round_trip_preserves_git_payload(
     assert run["environment"]["process"] == environment_payload["process"]
 
 
-def test_environment_round_trip_omits_git_payload_when_missing(tmp_path: Path) -> None:
+def test_environment_round_trip_omits_git_payload_when_missing(tmp_path: Path, record_simple_run) -> None:
     database_path = tmp_path / "benchcaddy.db"
     environment_payload = metadata_to_dict(collect_environment_metadata(tmp_path))
 
-    record_benchmark_run(
+    record_simple_run(
         suite_name="non-git-suite",
-        target_name="benchmark_target",
-        configuration={"variant": "baseline"},
-        samples=[0.1, 0.1],
-        observations=[],
-        median_seconds=0.1,
-        min_seconds=0.1,
-        max_seconds=0.1,
-        std_seconds=0.0,
-        environment=environment_payload,
         database_path=database_path,
+        configuration={"variant": "baseline"},
+        environment=environment_payload,
     )
 
     run = get_run_details((1, 1), database_path)

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "benchcaddy"
-version = "0.1.3"
-description = "Lightweight benchmark sweeps with environment capture."
+version = "0.1.4"
+description = "Lightweight benchmark sweeps with environment capture and CLI."
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["benchmark", "performance", "profiling", "cli", "testing"]
@@ -40,6 +40,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
+    "ruff>=0.11.11",
+    "pylint>=3.3.7",
+    "vulture>=2.14",
+    "radon>=6.0.1",
 ]
 
 [project.urls]
@@ -55,3 +59,22 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 180
+target-version = "py310"
+extend-exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # Pycodestyle errors
+    "F",    # Pyflakes (Logic bugs)
+    "I",    # Isort (Organize imports automatically)
+    "UP",   # Pyupgrade (Force modern Python syntax)
+    "B",    # Bugbear (Finds common design flaws)
+    "SIM",  # Simplify (Tells the AI to write simpler code)
+]
+ignore = ["E701"] # "E702"
+
+[tool.ruff.format]
+skip-magic-trailing-comma = false

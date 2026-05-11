@@ -35,10 +35,7 @@ def normalize_return_value(value: Any) -> StoredReturnValue:
         return float(value)
     if (vector := _as_numeric_vector(value)) is not None:
         return vector
-    raise TypeError(
-        "Unsupported return value type. Expected one of: "
-        "bool, int, float, str, or a one-dimensional numeric array/list/tuple."
-    )
+    raise TypeError("Unsupported return value type. Expected one of: bool, int, float, str, or a one-dimensional numeric array/list/tuple.")
 
 
 def _vector_magnitude(value: object) -> float | None:
@@ -68,10 +65,7 @@ def return_distance(
         return None
     if len(reference_vector) != len(candidate_vector):
         return None
-    squared_differences = (
-        (candidate - reference) ** 2
-        for reference, candidate in zip(reference_vector, candidate_vector, strict=True)
-    )
+    squared_differences = ((candidate - reference) ** 2 for reference, candidate in zip(reference_vector, candidate_vector, strict=True))
     return sqrt(sum(squared_differences))
 
 

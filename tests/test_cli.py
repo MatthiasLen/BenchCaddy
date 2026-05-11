@@ -1,16 +1,30 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
 import benchcaddy.db as db_module
-from benchcaddy.cli import _suite_row_style, app
+from benchcaddy.cli import _suite_row_style, _trend_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
+
+
+def _uniform_run_kwargs(
+    median_seconds: float,
+    *,
+    target_return_value: bool | int | float | str | list[float] | None = None,
+) -> dict[str, object]:
+    return {
+        "median_seconds": median_seconds,
+        "min_seconds": median_seconds,
+        "max_seconds": median_seconds,
+        "std_seconds": 0.0,
+        "target_return_value": target_return_value,
+    }
 
 
 def _seed_run(
@@ -43,11 +57,7 @@ def _seed_run(
                 ],
             },
         ],
-        median_seconds=median_seconds,
-        min_seconds=median_seconds,
-        max_seconds=median_seconds,
-        std_seconds=0.0,
-        target_return_value=target_return_value,
+        **_uniform_run_kwargs(median_seconds, target_return_value=target_return_value),
         environment=environment_payload,
         database_path=database_path,
     )
@@ -69,11 +79,7 @@ def _seed_custom_run(
         configuration=configuration,
         samples=[median_seconds, median_seconds],
         observations=observations,
-        median_seconds=median_seconds,
-        min_seconds=median_seconds,
-        max_seconds=median_seconds,
-        std_seconds=0.0,
-        target_return_value=target_return_value,
+        **_uniform_run_kwargs(median_seconds, target_return_value=target_return_value),
         environment=environment_payload,
         database_path=database_path,
     )
@@ -181,8 +187,21 @@ def test_cli_lists_shows_and_compares_runs(
     assert "0.67x" in suite_reference_compare_result.stdout
     assert "2.1" in suite_reference_compare_result.stdout
     assert "Best Run vs Reference" in suite_reference_compare_result.stdout
+    assert "Scope" in suite_reference_compare_result.stdout
     assert "Improvement Probability" in suite_reference_compare_result.stdout
     assert "p-value" in suite_reference_compare_result.stdout
+
+    suite_fastest_reference_result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "1.1", "--database", str(database_path)],
+    )
+    assert suite_fastest_reference_result.exit_code == 0
+    assert "Best Run vs Reference" in suite_fastest_reference_result.stdout
+    assert "already the fastest run" in suite_fastest_reference_result.stdout
+    assert "comparison" in suite_fastest_reference_result.stdout
+    assert "scope" in suite_fastest_reference_result.stdout
+    assert "Scope" in suite_fastest_reference_result.stdout
+    assert "full suite" in suite_fastest_reference_result.stdout
 
     verbose_compare_result = runner.invoke(
         app,
@@ -422,6 +441,7 @@ def test_show_without_arguments_lists_all_runs(
     assert "All Runs" in show_result.stdout
     assert "Run ID" in show_result.stdout
     assert "Record ID" in show_result.stdout
+    assert "Suite" in show_result.stdout
     assert "Configuration" in show_result.stdout
     assert "Mean +- Std (s)" in show_result.stdout
     assert "Return Value" in show_result.stdout
@@ -429,6 +449,8 @@ def test_show_without_arguments_lists_all_runs(
     assert "Recorded At" in show_result.stdout
     assert "2.1" in show_result.stdout
     assert "1.1" in show_result.stdout
+    assert "suite-a" in show_result.stdout
+    assert "suite-b" in show_result.stdout
     assert "candidate" in show_result.stdout
     assert "baseline" in show_result.stdout
 
@@ -530,18 +552,13 @@ def test_cli_show_renders_partial_git_environment(tmp_path: Path, environment_pa
         },
     }
 
-    record_benchmark_run(
+    _seed_custom_run(
         suite_name="partial-git-suite",
-        target_name="benchmark_target",
-        configuration={"variant": "detached-head"},
-        samples=[0.1, 0.1],
-        observations=[],
-        median_seconds=0.1,
-        min_seconds=0.1,
-        max_seconds=0.1,
-        std_seconds=0.0,
-        environment=partial_git_environment,
         database_path=database_path,
+        configuration={"variant": "detached-head"},
+        median_seconds=0.1,
+        observations=[],
+        environment_payload=partial_git_environment,
     )
 
     show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
@@ -756,6 +773,55 @@ def test_cli_strict_suite_compare_filters_reference_configuration(
     assert "3.1" not in result.stdout
 
 
+def test_cli_strict_suite_compare_uses_full_reference_configuration_by_default(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 34, "variant": "candidate"},
+        median_seconds=0.090,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate", "mode": "extra"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "2.1", "--strict", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Comparison: nonlinear-transform (strict: size, variant)" in result.stdout
+    assert "2.1" in result.stdout
+    assert "4.1" in result.stdout
+    assert "1.1" not in result.stdout
+    assert "3.1" not in result.stdout
+
+
 def test_cli_strict_suite_compare_requires_reference_run(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -774,6 +840,30 @@ def test_cli_strict_suite_compare_requires_reference_run(
     result = runner.invoke(
         app,
         ["compare", "nonlinear-transform", "--strict", "size", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 2
+    assert "--strict requires a suite comparison with a reference run ID." in result.stdout
+
+
+def test_cli_strict_suite_compare_requires_reference_run_without_keys(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "--strict", "--database", str(database_path)],
     )
 
     assert result.exit_code == 2
@@ -857,6 +947,32 @@ def test_suite_row_style_keeps_reference_green_when_it_is_best() -> None:
     assert _suite_row_style(comparison, comparison["runs"][0]) is None
 
 
+def test_trend_row_style_uses_green_for_best_and_yellow_for_anchor() -> None:
+    trend = {
+        "basis_run": {"id": 2, "median_seconds": 0.20},
+        "runs": [
+            {"id": 1, "median_seconds": 0.10},
+            {"id": 2, "median_seconds": 0.20},
+        ],
+    }
+
+    assert _trend_row_style(trend, trend["runs"][0]) == "green"
+    assert _trend_row_style(trend, trend["runs"][1]) == "yellow"
+
+
+def test_trend_row_style_keeps_anchor_green_when_it_is_best() -> None:
+    trend = {
+        "basis_run": {"id": 2, "median_seconds": 0.10},
+        "runs": [
+            {"id": 1, "median_seconds": 0.12},
+            {"id": 2, "median_seconds": 0.10},
+        ],
+    }
+
+    assert _trend_row_style(trend, trend["runs"][1]) == "green"
+    assert _trend_row_style(trend, trend["runs"][0]) is None
+
+
 def test_cli_compare_can_pin_and_use_baseline(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -924,7 +1040,7 @@ def test_cli_verbose_trend_preserves_warning_categories(
 
     result = runner.invoke(
         app,
-        ["--verbose", "trend", "warning-trend-suite", "--baseline", "1.1", "--database", str(database_path)],
+        ["--verbose", "trend", "warning-trend-suite", "1.1", "--database", str(database_path)],
     )
 
     assert result.exit_code == 0
@@ -990,7 +1106,7 @@ def test_cli_trend_shows_time_series_for_matching_configuration(
 
     result = runner.invoke(
         app,
-        ["trend", "trend-suite", "--baseline", "1.1", "--database", str(database_path)],
+        ["trend", "trend-suite", "1.1", "--database", str(database_path)],
     )
 
     assert result.exit_code == 0
