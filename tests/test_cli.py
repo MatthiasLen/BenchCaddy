@@ -422,6 +422,7 @@ def test_show_without_arguments_lists_all_runs(
     assert "All Runs" in show_result.stdout
     assert "Run ID" in show_result.stdout
     assert "Record ID" in show_result.stdout
+    assert "Suite" in show_result.stdout
     assert "Configuration" in show_result.stdout
     assert "Mean +- Std (s)" in show_result.stdout
     assert "Return Value" in show_result.stdout
@@ -429,6 +430,8 @@ def test_show_without_arguments_lists_all_runs(
     assert "Recorded At" in show_result.stdout
     assert "2.1" in show_result.stdout
     assert "1.1" in show_result.stdout
+    assert "suite-a" in show_result.stdout
+    assert "suite-b" in show_result.stdout
     assert "candidate" in show_result.stdout
     assert "baseline" in show_result.stdout
 
@@ -746,6 +749,55 @@ def test_cli_strict_suite_compare_filters_reference_configuration(
     result = runner.invoke(
         app,
         ["compare", "nonlinear-transform", "2.1", "--strict", "size", "variant", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Comparison: nonlinear-transform (strict: size, variant)" in result.stdout
+    assert "2.1" in result.stdout
+    assert "4.1" in result.stdout
+    assert "1.1" not in result.stdout
+    assert "3.1" not in result.stdout
+
+
+def test_cli_strict_suite_compare_uses_full_reference_configuration_by_default(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 34, "variant": "candidate"},
+        median_seconds=0.090,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate", "mode": "extra"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "2.1", "--strict", "--database", str(database_path)],
     )
 
     assert result.exit_code == 0

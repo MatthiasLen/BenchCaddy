@@ -692,7 +692,14 @@ def get_all_run_details(
             .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
         ).scalars().all()
 
-    return [run.to_payload(analysis_options, include_analysis=include_analysis) for run in runs]
+        return [
+            {
+                **run.to_payload(analysis_options, include_analysis=include_analysis),
+                "suite_name": run.suite.name,
+                "target_name": run.suite.target_name,
+            }
+            for run in runs
+        ]
 
 
 def compare_runs(

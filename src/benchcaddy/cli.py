@@ -398,7 +398,7 @@ def _show_selected_runs(runs: list[dict[str, object]]) -> None:
 
 
 def _show_all_runs(runs: list[dict[str, object]]) -> None:
-    console.print(_render_run_table("All Runs", runs))
+    console.print(_render_run_table("All Runs", runs, include_suite=True))
 
 
 def _print_run_comparison(
@@ -749,12 +749,12 @@ def show_command(
 @app.command("compare", help="Compare two runs directly, compare a suite to its best run, or compare a suite to a selected or pinned reference run.")
 def compare_command(
     left: str = typer.Argument(..., help="Suite name for suite comparison, or the baseline run ID for a direct run-to-run comparison."),
-    operands: list[str] = typer.Argument(None, help="For suite comparison: optional reference run ID, then strict config keys when --strict is used. For direct run comparison: the candidate run ID."),
+    operands: list[str] = typer.Argument(None, help="For suite comparison: optional reference run ID, then strict config keys when --strict is used. With --strict and no trailing keys, BenchCaddy matches the reference run's full configuration. For direct run comparison: the candidate run ID."),
     strict: bool = typer.Option(
         False,
         "--strict",
         "-s",
-        help="Restrict suite comparison to runs whose configuration matches the reference run for the given trailing config keys.",
+        help="Restrict suite comparison to runs whose configuration matches the reference run for the given trailing config keys. If no keys are provided, all reference run configuration keys are used.",
     ),
     use_baseline: bool = typer.Option(
         False,
@@ -811,6 +811,12 @@ def compare_command(
     if pin_baseline and right_run_id is None:
         console.print("--pin-baseline requires a suite comparison with a reference run ID.")
         raise typer.Exit(code=2)
+    if strict and right_run_id is not None and not strict_keys:
+        reference_run = get_run_details(right_run_id, database_path, include_analysis=False)
+        if reference_run is None:
+            console.print(f"Reference run '{right}' was not found in {database_path}.")
+            raise typer.Exit(code=1)
+        strict_keys = list(reference_run["configuration"].keys())
 
     comparison = compare_suite_runs(
         left,
