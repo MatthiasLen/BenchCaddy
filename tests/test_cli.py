@@ -187,8 +187,21 @@ def test_cli_lists_shows_and_compares_runs(
     assert "0.67x" in suite_reference_compare_result.stdout
     assert "2.1" in suite_reference_compare_result.stdout
     assert "Best Run vs Reference" in suite_reference_compare_result.stdout
+    assert "Scope" in suite_reference_compare_result.stdout
     assert "Improvement Probability" in suite_reference_compare_result.stdout
     assert "p-value" in suite_reference_compare_result.stdout
+
+    suite_fastest_reference_result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "1.1", "--database", str(database_path)],
+    )
+    assert suite_fastest_reference_result.exit_code == 0
+    assert "Best Run vs Reference" in suite_fastest_reference_result.stdout
+    assert "already the fastest run" in suite_fastest_reference_result.stdout
+    assert "comparison" in suite_fastest_reference_result.stdout
+    assert "scope" in suite_fastest_reference_result.stdout
+    assert "Scope" in suite_fastest_reference_result.stdout
+    assert "full suite" in suite_fastest_reference_result.stdout
 
     verbose_compare_result = runner.invoke(
         app,

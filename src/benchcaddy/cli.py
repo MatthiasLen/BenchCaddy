@@ -305,8 +305,23 @@ def _best_vs_reference_panel(comparison: dict[str, object]) -> Panel | None:
 
     best_run = min(comparison["runs"], key=lambda candidate: (candidate["median_seconds"], candidate["id"]))
     basis_run = comparison.get("basis_run")
-    if basis_run is None or best_run["id"] == basis_run["id"]:
+    if basis_run is None:
         return None
+
+    scope = (
+        f"strict: {', '.join(comparison.get('strict_keys', []))}"
+        if comparison.get("strict_keys")
+        else "full suite"
+    )
+    if best_run["id"] == basis_run["id"]:
+        return summary_panel(
+            "Best Run vs Reference",
+            [
+                ("Reference Run", _styled_run_label(basis_run, "green")),
+                ("Status", "Reference is already the fastest run in this comparison scope."),
+                ("Scope", scope),
+            ],
+        )
 
     best_analysis = best_run.get("comparison_analysis") or {}
     return summary_panel(
@@ -314,6 +329,7 @@ def _best_vs_reference_panel(comparison: dict[str, object]) -> Panel | None:
         [
             ("Reference Run", _styled_run_label(basis_run, "yellow")),
             ("Best Run", _styled_run_label(best_run, "green")),
+            ("Scope", scope),
             ("Delta CI (s)", _format_interval(best_analysis.get("delta_ci_lower_seconds"), best_analysis.get("delta_ci_upper_seconds"))),
             ("Improvement Probability", _format_probability(best_analysis.get("improvement_probability"))),
             ("Regression Probability", _format_probability(best_analysis.get("regression_probability"))),
