@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,10 @@ def _seed_sampled_run(
 
 def _compact_output(output: str) -> str:
     return "".join(output.split())
+
+
+def _plain_output(output: str) -> str:
+    return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output)
 
 
 def _raise_if_analysis_called(*args, **kwargs):
@@ -1023,24 +1028,27 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
     show_result = test_runner.invoke(app, ["show", "--help"])
     compare_result = test_runner.invoke(app, ["compare", "--help"])
     trend_result = test_runner.invoke(app, ["trend", "--help"])
+    show_output = _plain_output(show_result.stdout)
+    compare_output = _plain_output(compare_result.stdout)
+    trend_output = _plain_output(trend_result.stdout)
 
     assert show_result.exit_code == 0
-    assert "Inspect all recorded runs, a suite, or specific run IDs." in show_result.stdout
-    assert "Omit" in show_result.stdout
-    assert "identifiers to list all recorded runs." in show_result.stdout
-    assert "pinned baseline" in show_result.stdout
+    assert "Inspect all recorded runs, a suite, or specific run IDs." in show_output
+    assert "Omit" in show_output
+    assert "identifiers to list all recorded runs." in show_output
+    assert "pinned baseline" in show_output
 
     assert compare_result.exit_code == 0
-    assert "Compare two runs directly" in compare_result.stdout
-    assert "suite comparison" in compare_result.stdout
-    assert "direct run-to-run" in compare_result.stdout
-    assert "show," in compare_result.stdout
-    assert "compare, and trend" in compare_result.stdout
-    assert "--json" in compare_result.stdout
-    assert "--fail-if-regression" in compare_result.stdout
+    assert "Compare two runs directly" in compare_output
+    assert "suite comparison" in compare_output
+    assert "direct run-to-run" in compare_output
+    assert "show," in compare_output
+    assert "compare, and trend" in compare_output
+    assert "--json" in compare_output
+    assert "--fail-if-regression" in compare_output
 
     assert trend_result.exit_code == 0
-    assert "--json" in trend_result.stdout
+    assert "--json" in trend_output
 
 
 def test_cli_trend_shows_time_series_for_matching_configuration(
