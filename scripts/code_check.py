@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
 
 DEFAULT_TARGETS = ("src", "tests", "scripts")
 DEFAULT_EXCLUDES = (
@@ -20,6 +28,38 @@ DEFAULT_EXCLUDES = (
     "build",
     "dist",
 )
+
+SECTION_TITLES = {
+    "ruff-check": "RUFF",
+    "ruff-format": "RUFF FORMAT",
+    "pylint-duplicate-code": "PYLINT",
+    "vulture-dead-code": "VULTURE",
+    "radon-complexity": "RADON COMPLEXITY",
+    "radon-maintainability": "RADON MAINTAINABILITY",
+}
+
+STATUS_STYLES = {
+    True: "bold green",
+    False: "bold red",
+}
+
+RULE_STYLES = {
+    "ruff-check": "cyan",
+    "ruff-format": "cyan",
+    "pylint-duplicate-code": "magenta",
+    "vulture-dead-code": "blue",
+    "radon-complexity": "yellow",
+    "radon-maintainability": "yellow",
+}
+
+RADON_MI_LINE = re.compile(r"^(?P<path>.+?)\s+-\s+(?P<grade>[A-F])\s+\((?P<score>-?\d+(?:\.\d+)?)\)$")
+RADON_CC_LINE = re.compile(r"^\s+(?P<kind>\w)\s+(?P<line>\d+):\d+\s+(?P<name>.+?)\s+-\s+(?P<grade>[A-F])\s+\((?P<score>\d+)\)$")
+
+console = Console(stderr=False)
+
+
+def _table(*, header_style: str = "bold") -> Table:
+    return Table(show_header=True, header_style=header_style, border_style="white", box=box.SQUARE)
 
 
 @dataclass(slots=True)
@@ -70,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-vulture-confidence",
         type=int,
-        default=80,
+        default=70,
         help="Minimum confidence for dead-code findings from Vulture.",
     )
     parser.add_argument(
@@ -213,20 +253,141 @@ def summarize_agent_guidance(results: Sequence[CheckResult], max_complexity: int
     return guidance
 
 
-def emit_text(results: Sequence[CheckResult], guidance: Sequence[str]) -> None:
-    for result in results:
-        status = "PASS" if result.ok else "FAIL"
-        print(f"[{status}] {result.name}: {format_command(result.command)}")
-        if result.stdout:
-            print(result.stdout)
-        if result.stderr:
-            print(result.stderr, file=sys.stderr)
-        print()
+def _status_text(ok: bool) -> Text:
+    return Text("PASS" if ok else "FAIL", style=STATUS_STYLES[ok])
 
-    if guidance:
-        print("Agent guidance:")
-        for item in guidance:
-            print(f"- {item}")
+
+def _render_command(result: CheckResult) -> Text:
+    command_text = Text()
+    command_text.append("Command: ", style="bold")
+    command_text.append(format_command(result.command), style="dim")
+    return command_text
+
+
+def _render_section_header(result: CheckResult) -> None:
+    title = SECTION_TITLES.get(result.name, result.name.replace("-", " ").upper())
+    status = "PASS" if result.ok else "FAIL"
+    rule_style = RULE_STYLES.get(result.name, "white")
+    console.print(Rule(f"[{title}] {status}", style=rule_style))
+    console.print(_render_command(result))
+
+
+def _render_generic_output(text: str, *, title: str = "Details", style: str = "white") -> None:
+    console.print(Panel(text, title=title, border_style=style, padding=(0, 1)))
+
+
+def _render_radon_maintainability(text: str) -> bool:
+    rows: list[tuple[str, str, str]] = []
+    for line in text.splitlines():
+        match = RADON_MI_LINE.match(line.strip())
+        if not match:
+            continue
+        rows.append((match.group("path"), match.group("grade"), match.group("score")))
+
+    if not rows:
+        return False
+
+    table = _table()
+    table.add_column("File", style="cyan", overflow="fold")
+    table.add_column("Grade", justify="center")
+    table.add_column("MI Score", justify="right")
+
+    for path, grade, score in rows:
+        table.add_row(path, grade, score)
+
+    console.print(table)
+    console.print(
+        Panel(
+            "Radon MI is being reported directly from Radon. Values like 0.00 are real clamped scores, not formatting errors.",
+            title="MI Note",
+            border_style="yellow",
+            padding=(0, 1),
+        )
+    )
+    return True
+
+
+def _render_radon_complexity(text: str) -> bool:
+    entries: list[tuple[str, str, str, str, str]] = []
+    current_path: str | None = None
+    footer_lines: list[str] = []
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if raw_line.startswith(("src", "tests", "scripts")):
+            current_path = stripped
+            continue
+        match = RADON_CC_LINE.match(raw_line)
+        if match and current_path is not None:
+            entries.append(
+                (
+                    current_path,
+                    match.group("name"),
+                    match.group("line"),
+                    match.group("grade"),
+                    match.group("score"),
+                )
+            )
+            continue
+        footer_lines.append(stripped)
+
+    if not entries and not footer_lines:
+        return False
+
+    if entries:
+        table = _table()
+        table.add_column("File", style="cyan", overflow="fold")
+        table.add_column("Symbol", style="white", overflow="fold")
+        table.add_column("Line", justify="right")
+        table.add_column("Grade", justify="center")
+        table.add_column("Score", justify="right")
+        for path, name, line, grade, score in entries:
+            table.add_row(path, name, line, grade, score)
+        console.print(table)
+
+    if footer_lines:
+        _render_generic_output("\n".join(footer_lines), title="Summary", style="yellow")
+    return True
+
+
+def _render_agent_guidance(guidance: Sequence[str]) -> None:
+    if not guidance:
+        return
+    guidance_text = Text()
+    for index, item in enumerate(guidance, start=1):
+        guidance_text.append(f"{index}. ", style="bold")
+        guidance_text.append(item)
+        if index < len(guidance):
+            guidance_text.append("\n")
+    console.print(Panel(guidance_text, title="Agent Guidance", border_style="magenta", padding=(0, 1)))
+
+
+def emit_text(results: Sequence[CheckResult], guidance: Sequence[str]) -> None:
+    summary = _table()
+    summary.add_column("Check", style="cyan")
+    summary.add_column("Status", justify="center")
+    summary.add_column("Command", style="dim")
+
+    for result in results:
+        summary.add_row(result.name, _status_text(result.ok), format_command(result.command))
+
+    console.print(Panel(summary, title="Code Quality Report", border_style="white"))
+
+    for result in results:
+        _render_section_header(result)
+        if result.stdout:
+            rendered = False
+            if result.name == "radon-maintainability":
+                rendered = _render_radon_maintainability(result.stdout)
+            elif result.name == "radon-complexity":
+                rendered = _render_radon_complexity(result.stdout)
+            if not rendered:
+                _render_generic_output(result.stdout, style=RULE_STYLES.get(result.name, "white"))
+        if result.stderr:
+            _render_generic_output(result.stderr, title="stderr", style="red")
+
+    _render_agent_guidance(guidance)
 
 
 def emit_markdown(results: Sequence[CheckResult], guidance: Sequence[str]) -> None:

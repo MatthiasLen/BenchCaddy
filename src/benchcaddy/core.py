@@ -14,7 +14,7 @@ from typing import Any
 
 import psutil
 
-from .db import create_sweep_execution, get_database_path, record_benchmark_run
+from .db import benchmark_run_payload, create_sweep_execution, get_database_path, record_benchmark_run
 from .metadata import collect_environment_metadata, metadata_to_dict
 from .observability import collect_observations
 from .reporting import RichSweepReporter, SweepReporter
@@ -233,18 +233,24 @@ class Sweep:
             median_seconds = float(median(samples))
             min_seconds, max_seconds = float(min(samples)), float(max(samples))
             std_seconds = float(stdev(samples)) if len(samples) > 1 else 0.0
+            timing_payload = {
+                "median_seconds": median_seconds,
+                "min_seconds": min_seconds,
+                "max_seconds": max_seconds,
+                "std_seconds": std_seconds,
+            }
+            run_payload = benchmark_run_payload(
+                configuration=configuration,
+                samples=samples,
+                observations=observations,
+                target_return_value=target_return_value,
+                **timing_payload,
+            )
 
             benchmark_run = record_benchmark_run(
                 suite_name=self.suite_name,
                 target_name=_target_name(self.target),
-                configuration=configuration,
-                samples=samples,
-                observations=observations,
-                median_seconds=median_seconds,
-                min_seconds=min_seconds,
-                max_seconds=max_seconds,
-                std_seconds=std_seconds,
-                target_return_value=target_return_value,
+                **run_payload,
                 environment=environment,
                 sweep_execution_id=sweep_execution.id,
                 run_index=configuration_index,
@@ -254,14 +260,7 @@ class Sweep:
                 BenchmarkResult(
                     run_id=benchmark_run.display_id,
                     record_id=benchmark_run.id,
-                    configuration=configuration,
-                    samples=samples,
-                    observations=observations,
-                    median_seconds=median_seconds,
-                    min_seconds=min_seconds,
-                    max_seconds=max_seconds,
-                    std_seconds=std_seconds,
-                    target_return_value=target_return_value,
+                    **run_payload,
                 )
             )
 

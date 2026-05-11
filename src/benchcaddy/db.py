@@ -300,6 +300,177 @@ def _resolve_suite_baseline_run(session: Session, suite: BenchmarkSuite) -> Benc
     return session.get(BenchmarkRun, baseline_record.run_id)
 
 
+def _list_suite_runs(session: Session, suite_id: int) -> list[BenchmarkRun]:
+    return (
+        session.execute(
+            select(BenchmarkRun)
+            .where(BenchmarkRun.suite_id == suite_id)
+            .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _resolve_suite_reference(
+    session: Session,
+    suite: BenchmarkSuite,
+    reference_run_id: int | tuple[int, int] | None,
+    *,
+    use_pinned_baseline: bool,
+) -> tuple[BenchmarkRun | None, BenchmarkRun | None, int | tuple[int, int] | None, str | None, bool] | dict[str, Any]:
+    reference_run = None
+    reference_from_pinned = False
+    reference_run_suite_name = None
+    pinned_baseline_run = _resolve_suite_baseline_run(session, suite)
+
+    if reference_run_id is not None:
+        reference_run = _resolve_run(session, reference_run_id)
+        if reference_run is not None:
+            reference_run_suite_name = reference_run.suite.name
+    elif use_pinned_baseline:
+        reference_run = pinned_baseline_run
+        if reference_run is None:
+            return {
+                "error": "baseline_not_found",
+                "suite_name": suite.name,
+            }
+        reference_from_pinned = True
+        reference_run_id = reference_run.id
+        reference_run_suite_name = reference_run.suite.name
+
+    return (
+        reference_run,
+        pinned_baseline_run,
+        reference_run_id,
+        reference_run_suite_name,
+        reference_from_pinned,
+    )
+
+
+def _empty_suite_comparison_payload(suite: BenchmarkSuite) -> dict[str, Any]:
+    return {
+        "suite_name": suite.name,
+        "target_name": suite.target_name,
+        "basis_median_seconds": None,
+        "basis_run": None,
+        "basis_metric_label": "Best Median (s)",
+        "delta_column_label": "Delta vs Best (s)",
+        "ratio_column_label": "Slowdown",
+        "runs": [],
+        "pinned_baseline": None,
+    }
+
+
+def _resolve_suite_basis(
+    suite: BenchmarkSuite,
+    runs: Sequence[BenchmarkRun],
+    reference_run: BenchmarkRun | None,
+    reference_run_id: int | tuple[int, int] | None,
+    reference_run_suite_name: str | None,
+) -> tuple[BenchmarkRun, str, str, str] | dict[str, Any]:
+    if reference_run_id is None:
+        return (
+            min(runs, key=lambda run: (run.median_seconds, run.id)),
+            "Best Median (s)",
+            "Delta vs Best (s)",
+            "Slowdown",
+        )
+    if reference_run is None:
+        return {
+            "error": "reference_run_not_found",
+            "suite_name": suite.name,
+        }
+    if reference_run.suite_id != suite.id:
+        return {
+            "error": "reference_run_wrong_suite",
+            "suite_name": suite.name,
+            "reference_run_display_id": reference_run.display_id,
+            "reference_run_record_id": reference_run.id,
+            "reference_run_suite_name": reference_run_suite_name,
+        }
+    return (
+        reference_run,
+        "Reference Median (s)",
+        "Delta vs Reference (s)",
+        "Relative",
+    )
+
+
+def _apply_strict_comparison_filter(
+    suite: BenchmarkSuite,
+    runs: Sequence[BenchmarkRun],
+    basis_run: BenchmarkRun,
+    strict_keys: Sequence[str],
+    reference_run_id: int | tuple[int, int] | None,
+) -> tuple[list[BenchmarkRun], tuple[str, ...], dict[str, Any] | None] | dict[str, Any]:
+    normalized_keys = tuple(dict.fromkeys(strict_keys))
+    if not normalized_keys:
+        return list(runs), normalized_keys, None
+    if reference_run_id is None:
+        return {
+            "error": "strict_requires_reference_run",
+            "suite_name": suite.name,
+        }
+    missing_keys = [key for key in normalized_keys if key not in basis_run.configuration]
+    if missing_keys:
+        return {
+            "error": "strict_keys_not_found",
+            "suite_name": suite.name,
+            "strict_keys": list(normalized_keys),
+            "missing_strict_keys": missing_keys,
+            "reference_run_display_id": basis_run.display_id,
+        }
+    strict_config = {key: basis_run.configuration[key] for key in normalized_keys}
+    filtered_runs = [run for run in runs if all(run.configuration.get(key) == value for key, value in strict_config.items())]
+    return filtered_runs, normalized_keys, strict_config
+
+
+def _suite_comparison_payload(
+    *,
+    suite: BenchmarkSuite,
+    runs: Sequence[BenchmarkRun],
+    basis_run: BenchmarkRun,
+    basis_metric_label: str,
+    delta_column_label: str,
+    ratio_column_label: str,
+    strict_keys: Sequence[str],
+    strict_config: dict[str, Any] | None,
+    reference_from_pinned: bool,
+    reference_run_id: int | tuple[int, int] | None,
+    pinned_baseline_run: BenchmarkRun | None,
+    analysis_options: AnalysisOptions | None,
+) -> dict[str, Any]:
+    basis_median_seconds = basis_run.median_seconds
+    return {
+        "suite_name": suite.name,
+        "target_name": suite.target_name,
+        "basis_median_seconds": basis_median_seconds,
+        "basis_run": basis_run.to_suite_comparison_row(
+            basis_median_seconds,
+            basis_run.target_return_value,
+            basis_run.samples,
+            analysis_options,
+        ),
+        "basis_metric_label": basis_metric_label,
+        "delta_column_label": delta_column_label,
+        "ratio_column_label": ratio_column_label,
+        "strict_keys": list(strict_keys),
+        "strict_config": strict_config,
+        "basis_source": "pinned" if reference_from_pinned else "reference" if reference_run_id is not None else "best",
+        "pinned_baseline": None if pinned_baseline_run is None else pinned_baseline_run.to_payload(analysis_options),
+        "runs": [
+            run.to_suite_comparison_row(
+                basis_median_seconds,
+                basis_run.target_return_value,
+                basis_run.samples,
+                analysis_options,
+            )
+            for run in runs
+        ],
+    }
+
+
 @contextmanager
 def db_session(database_path: str | Path | None = None):
     engine = initialize_database(database_path)
@@ -329,6 +500,29 @@ def create_sweep_execution(
         session.commit()
         session.refresh(sweep_execution)
         return sweep_execution
+
+
+def benchmark_run_payload(
+    *,
+    configuration: dict[str, Any],
+    samples: list[float],
+    observations: list[dict[str, Any]],
+    median_seconds: float,
+    min_seconds: float,
+    max_seconds: float,
+    std_seconds: float,
+    target_return_value: StoredReturnValue | None = None,
+) -> dict[str, Any]:
+    return {
+        "configuration": configuration,
+        "samples": samples,
+        "observations": observations,
+        "median_seconds": median_seconds,
+        "min_seconds": min_seconds,
+        "max_seconds": max_seconds,
+        "std_seconds": std_seconds,
+        "target_return_value": target_return_value,
+    }
 
 
 def record_benchmark_run(
@@ -369,14 +563,16 @@ def record_benchmark_run(
             sweep_execution_id=sweep_execution_id,
             run_index=run_index,
             environment_id=environment_info.id,
-            configuration=configuration,
-            samples=samples,
-            observations=observations,
-            median_seconds=median_seconds,
-            min_seconds=min_seconds,
-            max_seconds=max_seconds,
-            std_seconds=std_seconds,
-            target_return_value=stored_return_value,
+            **benchmark_run_payload(
+                configuration=configuration,
+                samples=samples,
+                observations=observations,
+                median_seconds=median_seconds,
+                min_seconds=min_seconds,
+                max_seconds=max_seconds,
+                std_seconds=std_seconds,
+                target_return_value=stored_return_value,
+            ),
         )
         session.add(benchmark_run)
         session.commit()
@@ -512,120 +708,56 @@ def compare_suite_runs(
         if suite is None:
             return None
 
-        reference_run = None
-        reference_from_pinned = False
-        reference_run_suite_name = None
-        pinned_baseline_run = _resolve_suite_baseline_run(session, suite)
-        if reference_run_id is not None:
-            reference_run = _resolve_run(session, reference_run_id)
-            if reference_run is not None:
-                reference_run_suite_name = reference_run.suite.name
-        elif use_pinned_baseline:
-            reference_run = pinned_baseline_run
-            if reference_run is None:
-                return {
-                    "error": "baseline_not_found",
-                    "suite_name": suite.name,
-                }
-            reference_from_pinned = True
-            reference_run_id = reference_run.id
-            reference_run_suite_name = reference_run.suite.name
-
-        runs = (
-            session.execute(
-                select(BenchmarkRun)
-                .where(BenchmarkRun.suite_id == suite.id)
-                .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
-            )
-            .scalars()
-            .all()
+        reference_context = _resolve_suite_reference(
+            session,
+            suite,
+            reference_run_id,
+            use_pinned_baseline=use_pinned_baseline,
         )
+        if isinstance(reference_context, dict):
+            return reference_context
+        reference_run, pinned_baseline_run, reference_run_id, reference_run_suite_name, reference_from_pinned = reference_context
+        runs = _list_suite_runs(session, suite.id)
 
     if not runs:
-        return {
-            "suite_name": suite.name,
-            "target_name": suite.target_name,
-            "basis_median_seconds": None,
-            "basis_run": None,
-            "basis_metric_label": "Best Median (s)",
-            "delta_column_label": "Delta vs Best (s)",
-            "ratio_column_label": "Slowdown",
-            "runs": [],
-            "pinned_baseline": None,
-        }
+        return _empty_suite_comparison_payload(suite)
 
-    if reference_run_id is None:
-        basis_run = min(runs, key=lambda run: (run.median_seconds, run.id))
-        basis_metric_label = "Best Median (s)"
-        delta_column_label = "Delta vs Best (s)"
-        ratio_column_label = "Slowdown"
-    else:
-        if reference_run is None:
-            return {
-                "error": "reference_run_not_found",
-                "suite_name": suite.name,
-            }
-        if reference_run.suite_id != suite.id:
-            return {
-                "error": "reference_run_wrong_suite",
-                "suite_name": suite.name,
-                "reference_run_display_id": reference_run.display_id,
-                "reference_run_record_id": reference_run.id,
-                "reference_run_suite_name": reference_run_suite_name,
-            }
-        basis_run = reference_run
-        basis_metric_label = "Reference Median (s)"
-        delta_column_label = "Delta vs Reference (s)"
-        ratio_column_label = "Relative"
+    basis = _resolve_suite_basis(
+        suite,
+        runs,
+        reference_run,
+        reference_run_id,
+        reference_run_suite_name,
+    )
+    if isinstance(basis, dict):
+        return basis
+    basis_run, basis_metric_label, delta_column_label, ratio_column_label = basis
 
-    strict_config = None
-    strict_keys = tuple(dict.fromkeys(strict_keys))
-    if strict_keys:
-        if reference_run_id is None:
-            return {
-                "error": "strict_requires_reference_run",
-                "suite_name": suite.name,
-            }
-        missing_keys = [key for key in strict_keys if key not in basis_run.configuration]
-        if missing_keys:
-            return {
-                "error": "strict_keys_not_found",
-                "suite_name": suite.name,
-                "strict_keys": list(strict_keys),
-                "missing_strict_keys": missing_keys,
-                "reference_run_display_id": basis_run.display_id,
-            }
-        strict_config = {key: basis_run.configuration[key] for key in strict_keys}
-        runs = [run for run in runs if all(run.configuration.get(key) == value for key, value in strict_config.items())]
+    strict_result = _apply_strict_comparison_filter(
+        suite,
+        runs,
+        basis_run,
+        strict_keys,
+        reference_run_id,
+    )
+    if isinstance(strict_result, dict):
+        return strict_result
+    filtered_runs, strict_keys, strict_config = strict_result
 
-    basis_median_seconds = basis_run.median_seconds
-    return {
-        "suite_name": suite.name,
-        "target_name": suite.target_name,
-        "basis_median_seconds": basis_median_seconds,
-        "basis_run": basis_run.to_suite_comparison_row(
-            basis_median_seconds,
-            basis_run.target_return_value,
-            basis_run.samples,
-            analysis_options,
-        ),
-        "basis_metric_label": basis_metric_label,
-        "delta_column_label": delta_column_label,
-        "ratio_column_label": ratio_column_label,
-        "strict_keys": list(strict_keys),
-        "strict_config": strict_config,
-        "basis_source": "pinned" if reference_from_pinned else "reference" if reference_run_id is not None else "best",
-        "pinned_baseline": None if pinned_baseline_run is None else pinned_baseline_run.to_payload(analysis_options),
-        "runs": [
-            run.to_suite_comparison_row(
-                basis_median_seconds,
-                basis_run.target_return_value,
-                basis_run.samples,
-                analysis_options,
-            )
-            for run in runs
-        ],
-    }
+    return _suite_comparison_payload(
+        suite=suite,
+        runs=filtered_runs,
+        basis_run=basis_run,
+        basis_metric_label=basis_metric_label,
+        delta_column_label=delta_column_label,
+        ratio_column_label=ratio_column_label,
+        strict_keys=strict_keys,
+        strict_config=strict_config,
+        reference_from_pinned=reference_from_pinned,
+        reference_run_id=reference_run_id,
+        pinned_baseline_run=pinned_baseline_run,
+        analysis_options=analysis_options,
+    )
 
 
 def get_run_details(
