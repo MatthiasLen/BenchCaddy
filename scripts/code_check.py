@@ -445,8 +445,7 @@ def main() -> int:
     paths = existing_paths(args.paths)
 
     checks: list[tuple[str, list[str]]] = [("ruff-check", ruff_command(paths, fix=args.ruff_fix))]
-    if args.ruff_fix:
-        checks.append(("ruff-format", ruff_format_command(paths, check_only=False)))
+    checks.append(("ruff-format", ruff_format_command(paths, check_only=not args.ruff_fix)))
     if not args.ruff_only:
         checks.extend(
             [

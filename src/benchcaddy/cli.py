@@ -80,7 +80,7 @@ def _resolve_compare_strict_keys(
     right_run_id: int | tuple[int, int] | None,
     database_path: Path,
 ) -> list[str]:
-    if strict_keys and right_run_id is None:
+    if strict and right_run_id is None:
         console.print("--strict requires a suite comparison with a reference run ID.")
         raise typer.Exit(code=2)
     if strict and right_run_id is not None and not strict_keys:
@@ -1088,7 +1088,11 @@ def compare_command(
 
 
 @app.command(
-    "trend", help="Inspect one suite configuration over time. Uses the positional baseline run when provided, otherwise the pinned suite baseline, otherwise the latest matching run."
+    "trend",
+    help=(
+        "Inspect one suite configuration over time. Uses the positional baseline run when "
+        "provided, otherwise the pinned suite baseline, otherwise the latest matching run."
+    ),
 )
 def trend_command(
     suite_name: Annotated[
