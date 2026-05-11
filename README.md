@@ -80,12 +80,10 @@ Sweep(
 ```
 
 BenchCaddy writes samples, medians, observations, and environment metadata to
-`benchcaddy.db` in the current working directory.
-
-Those persisted raw samples now also drive richer analysis during inspection,
-including bootstrap confidence intervals, MAD, coefficient of variation,
+`benchcaddy.db` in the current working directory. Those persisted raw samples also drive richer analysis during inspection,
+including bootstrap confidence intervals, 
 outlier diagnostics, noise warnings, and regression classification.
-The methodology, assumptions, thresholds, and interpretation guidance for those
+The methodology and interpretation guidance for those
 statistics are documented in [`statistics.md`](statistics.md).
 
 The full runnable example lives in the repository and source distribution at
