@@ -66,7 +66,7 @@ def main() -> None:
 
     Sweep(
         target=bool_vector_target,
-        params={"size": [5,6]},
+        params={"size": [2]},
         suite_name="return-type-bool-vector",
         samples=3,
         warmup_iterations=2,
