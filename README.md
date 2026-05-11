@@ -285,14 +285,14 @@ jobs:
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-python@v5
-                with:
-                    python-version: '3.12'
+              with:
+                python-version: '3.12'
             - name: Install BenchCaddy
-                run: python -m pip install -e .
+              run: python -m pip install -e .
             - name: Record benchmark run
-                run: python examples/benchmark_nonlinear_transform.py --database benchcaddy.db
+              run: python examples/benchmark_nonlinear_transform.py --database benchcaddy.db
             - name: Enforce regression gate
-                run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
+              run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
 ```
 
 For a baseline-driven workflow, pin the reference run once and reuse it in CI:
