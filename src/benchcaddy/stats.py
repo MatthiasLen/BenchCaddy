@@ -211,6 +211,30 @@ def compare_sample_sets(
     if not isclose(baseline_stats.median_seconds, 0.0, abs_tol=1e-12):
         percent_change = float((delta_seconds / baseline_stats.median_seconds) * 100.0)
 
+    if baseline_values.size == 0 or candidate_values.size == 0:
+        warnings = [
+            *(["low_sample_count"] if baseline_stats.sample_count < 5 or candidate_stats.sample_count < 5 else []),
+            *(["baseline_empty_samples"] if baseline_values.size == 0 else []),
+            *(["candidate_empty_samples"] if candidate_values.size == 0 else []),
+            *(f"baseline_{warning}" for warning in baseline_stats.warnings),
+            *(f"candidate_{warning}" for warning in candidate_stats.warnings),
+        ]
+        return ComparisonStatistics(
+            delta_seconds=delta_seconds,
+            percent_change=percent_change,
+            delta_ci_lower_seconds=0.0,
+            delta_ci_upper_seconds=0.0,
+            regression_probability=0.0,
+            improvement_probability=0.0,
+            significance_p_value=1.0,
+            statistically_significant=False,
+            practical_threshold_seconds=abs(baseline_stats.median_seconds) * (chosen_options.regression_threshold_percent / 100.0),
+            exceeds_practical_threshold=False,
+            regression_detected=False,
+            classification="noisy",
+            warnings=tuple(dict.fromkeys(warnings)),
+        )
+
     rng = np.random.default_rng(chosen_options.bootstrap_seed + 101)
     baseline_indices = rng.integers(0, baseline_values.size, size=(chosen_options.bootstrap_resamples, baseline_values.size))
     candidate_indices = rng.integers(0, candidate_values.size, size=(chosen_options.bootstrap_resamples, candidate_values.size))
