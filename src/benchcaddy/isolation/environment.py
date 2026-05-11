@@ -7,7 +7,6 @@ by :mod:`benchcaddy.isolation.report` to generate reliability warnings.
 
 from __future__ import annotations
 
-import platform
 from dataclasses import dataclass
 
 import psutil
@@ -50,15 +49,6 @@ def _read_cpu_load() -> float | None:
 
 
 def _read_on_battery() -> bool | None:
-    if platform.system() == "Linux":
-        # psutil may raise NotImplementedError on some Linux containers.
-        try:
-            battery = psutil.sensors_battery()
-        except (AttributeError, NotImplementedError, OSError):
-            return None
-        if battery is None:
-            return None
-        return not battery.power_plugged
     try:
         battery = psutil.sensors_battery()
     except (AttributeError, NotImplementedError, OSError):

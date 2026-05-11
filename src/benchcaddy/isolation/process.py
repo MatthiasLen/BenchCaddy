@@ -109,6 +109,7 @@ def run_isolated(
     process.join()
 
     if not success:
-        raise RuntimeError(f"Isolated process raised an exception: {payload}") from payload if isinstance(payload, Exception) else RuntimeError(str(payload))
+        exc = payload if isinstance(payload, Exception) else RuntimeError(str(payload))
+        raise RuntimeError(f"Isolated process raised an exception: {payload}") from exc
 
     return payload
