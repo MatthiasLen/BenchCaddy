@@ -669,7 +669,7 @@ def show_command(
     no_stats: bool = typer.Option(
         False,
         "--no-stats",
-        help="Skip per-run statistical analysis when showing run or suite details.",
+        help="Skip per-run statistical analysis when showing run or suite details for a faster view.",
     ),
     confidence_level: float = typer.Option(
         0.95,

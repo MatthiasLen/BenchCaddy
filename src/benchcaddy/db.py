@@ -143,7 +143,7 @@ class BenchmarkRun(Base):
         return float(fmean(self.samples)) if self.samples else 0.0
 
     def analysis_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, object]:
-        analysis = analyze_samples(self.samples, analysis_options or AnalysisOptions())
+        analysis = analyze_samples(self.samples, analysis_options)
         return analysis.to_payload()
 
     def to_payload(
