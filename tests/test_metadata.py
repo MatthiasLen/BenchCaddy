@@ -4,10 +4,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from benchcaddy.db import get_run_details, record_benchmark_run
 from git.exc import GitCommandError, InvalidGitRepositoryError
 
 import benchcaddy.metadata as metadata_module
+from benchcaddy.db import get_run_details, record_benchmark_run
 from benchcaddy.metadata import collect_environment_metadata, collect_git_state, metadata_to_dict
 
 

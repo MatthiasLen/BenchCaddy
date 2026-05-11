@@ -3,14 +3,27 @@ from __future__ import annotations
 from io import StringIO
 from pathlib import Path
 
-import benchcaddy.core as core_module
 import pytest
+from rich.console import Console
+
+import benchcaddy.core as core_module
 from benchcaddy import Sweep, observe
-from benchcaddy.db import clear_suite_baseline, compare_runs, compare_suite_runs, db_session, get_run_details, get_suite_baseline, get_suite_trend, initialize_database
-from benchcaddy.db import get_suite_details, list_suite_summaries, record_benchmark_run, set_suite_baseline
+from benchcaddy.db import (
+    clear_suite_baseline,
+    compare_runs,
+    compare_suite_runs,
+    db_session,
+    get_run_details,
+    get_suite_baseline,
+    get_suite_details,
+    get_suite_trend,
+    initialize_database,
+    list_suite_summaries,
+    record_benchmark_run,
+    set_suite_baseline,
+)
 from benchcaddy.observability import summarize_observations
 from benchcaddy.reporting import RichSweepReporter
-from rich.console import Console
 
 
 def test_sweep_records_results_and_observations(
@@ -496,9 +509,7 @@ def test_verbose_sweep_prints_scientific_return_values(
     monkeypatch.setattr(
         core_module,
         "RichSweepReporter",
-        lambda: RichSweepReporter(
-            console=Console(file=output, force_terminal=False, color_system=None, width=120)
-        ),
+        lambda: RichSweepReporter(console=Console(file=output, force_terminal=False, color_system=None, width=120)),
     )
 
     sweep = Sweep(

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Sequence
+from typing import TYPE_CHECKING, Protocol
 
 from rich.console import Console
+
 from .presentation import dump_json, format_return_value, json_panel, render_table, summary_panel
 
 if TYPE_CHECKING:
@@ -98,10 +100,7 @@ class RichSweepReporter:
         elapsed_seconds: float,
         observation_count: int,
     ) -> None:
-        self.console.print(
-            f"Sample {sample_index}/{sample_total}: {elapsed_seconds:.6f}s"
-            f" | observations={observation_count}"
-        )
+        self.console.print(f"Sample {sample_index}/{sample_total}: {elapsed_seconds:.6f}s | observations={observation_count}")
 
     def on_configuration_completed(
         self,

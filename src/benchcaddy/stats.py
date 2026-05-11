@@ -260,7 +260,7 @@ def compare_sample_sets(
     significance_p_value = float(np.mean(np.asarray(permutation_deltas) >= observed_abs_delta))
 
     warnings = [
-        *( ["low_sample_count"] if baseline_stats.sample_count < 5 or candidate_stats.sample_count < 5 else [] ),
+        *(["low_sample_count"] if baseline_stats.sample_count < 5 or candidate_stats.sample_count < 5 else []),
         *(f"baseline_{warning}" for warning in baseline_stats.warnings),
         *(f"candidate_{warning}" for warning in candidate_stats.warnings),
     ]
@@ -271,11 +271,7 @@ def compare_sample_sets(
 
     statistically_significant = bool(significance_p_value <= chosen_options.significance_level)
     exceeds_practical_threshold = bool(delta_seconds >= practical_threshold_seconds)
-    regression_detected = bool(
-        statistically_significant
-        and exceeds_practical_threshold
-        and regression_probability >= 1.0 - chosen_options.significance_level
-    )
+    regression_detected = bool(statistically_significant and exceeds_practical_threshold and regression_probability >= 1.0 - chosen_options.significance_level)
 
     if regression_detected:
         classification = "regressing"

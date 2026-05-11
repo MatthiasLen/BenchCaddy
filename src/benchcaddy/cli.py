@@ -9,7 +9,18 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .db import compare_runs, compare_suite_runs, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details, get_suite_trend, list_suite_summaries, set_suite_baseline
+from .db import (
+    compare_runs,
+    compare_suite_runs,
+    get_all_run_details,
+    get_database_path,
+    get_run_details,
+    get_selected_run_details,
+    get_suite_details,
+    get_suite_trend,
+    list_suite_summaries,
+    set_suite_baseline,
+)
 from .observability import summarize_observations
 from .presentation import dump_json, format_return_error, format_return_value, json_panel, render_table, summary_panel
 from .stats import AnalysisOptions
@@ -58,7 +69,8 @@ def _as_run_id(value: str) -> int | tuple[int, int] | None:
 
 
 def _style_delta(percent_change: float | None) -> Text:
-    if percent_change is None: return Text("n/a")
+    if percent_change is None:
+        return Text("n/a")
     return Text(f"{percent_change:+.2f}%", style="green" if percent_change <= -5.0 else "red" if percent_change >= 5.0 else None)
 
 
@@ -286,10 +298,7 @@ def _render_run_table(
     return render_table(
         title,
         _run_table_columns(include_suite=include_suite, include_target=include_target),
-        [
-            _run_table_row(run, include_suite=include_suite, include_target=include_target)
-            for run in runs
-        ],
+        [_run_table_row(run, include_suite=include_suite, include_target=include_target) for run in runs],
     )
 
 
@@ -362,9 +371,7 @@ def _show_suite(details: dict[str, object]) -> None:
             ("Record ID", _styled(baseline_run["id"], "yellow")),
         ]
         if _has_analysis(baseline_run):
-            rows.append(
-                ("Median CI (s)", _format_interval(baseline_run.get("ci_lower_seconds"), baseline_run.get("ci_upper_seconds")))
-            )
+            rows.append(("Median CI (s)", _format_interval(baseline_run.get("ci_lower_seconds"), baseline_run.get("ci_upper_seconds"))))
         rows.append(("Configuration", dump_json(baseline_run["configuration"])))
         console.print(
             summary_panel(
@@ -425,12 +432,28 @@ def _print_run_comparison(
                     for key in sorted(set(baseline["configuration"]) | set(candidate["configuration"]))
                 ],
                 ("Median (s)", _styled(f"{baseline['median_seconds']:.6f}", baseline_style), _styled(f"{candidate['median_seconds']:.6f}", candidate_style)),
-                ("Mean +- Std (s)", _styled(_format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), baseline_style), _styled(_format_time(candidate.get("mean_seconds"), candidate.get("std_seconds")), candidate_style)),
-                ("Min (s)", _styled(_format_optional_seconds(baseline.get("min_seconds")), baseline_style), _styled(_format_optional_seconds(candidate.get("min_seconds")), candidate_style)),
-                ("Max (s)", _styled(_format_optional_seconds(baseline.get("max_seconds")), baseline_style), _styled(_format_optional_seconds(candidate.get("max_seconds")), candidate_style)),
+                (
+                    "Mean +- Std (s)",
+                    _styled(_format_time(baseline.get("mean_seconds"), baseline.get("std_seconds")), baseline_style),
+                    _styled(_format_time(candidate.get("mean_seconds"), candidate.get("std_seconds")), candidate_style),
+                ),
+                (
+                    "Min (s)",
+                    _styled(_format_optional_seconds(baseline.get("min_seconds")), baseline_style),
+                    _styled(_format_optional_seconds(candidate.get("min_seconds")), candidate_style),
+                ),
+                (
+                    "Max (s)",
+                    _styled(_format_optional_seconds(baseline.get("max_seconds")), baseline_style),
+                    _styled(_format_optional_seconds(candidate.get("max_seconds")), candidate_style),
+                ),
                 ("Median Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
                 ("Median Percent Change", "", _style_delta(comparison["percent_change"])),
-                ("Return Value", _styled(format_return_value(baseline.get("target_return_value"), compact=True), baseline_style), _styled(format_return_value(candidate.get("target_return_value"), compact=True), candidate_style)),
+                (
+                    "Return Value",
+                    _styled(format_return_value(baseline.get("target_return_value"), compact=True), baseline_style),
+                    _styled(format_return_value(candidate.get("target_return_value"), compact=True), candidate_style),
+                ),
                 ("Return Error", "", format_return_error(comparison.get("target_return_relative_error"))),
             ],
         )
@@ -694,9 +717,13 @@ def show_command(
     ),
 ) -> None:
     database_path = get_database_path(database)
-    analysis_options = None if skip_stats else AnalysisOptions(
-        confidence_level=confidence_level,
-        bootstrap_resamples=bootstrap_resamples,
+    analysis_options = (
+        None
+        if skip_stats
+        else AnalysisOptions(
+            confidence_level=confidence_level,
+            bootstrap_resamples=bootstrap_resamples,
+        )
     )
 
     if not identifiers:
@@ -749,7 +776,10 @@ def show_command(
 @app.command("compare", help="Compare two runs directly, compare a suite to its best run, or compare a suite to a selected or pinned reference run.")
 def compare_command(
     left: str = typer.Argument(..., help="Suite name for suite comparison, or the baseline run ID for a direct run-to-run comparison."),
-    operands: list[str] = typer.Argument(None, help="For suite comparison: optional reference run ID, then strict config keys when --strict is used. With --strict and no trailing keys, BenchCaddy matches the reference run's full configuration. For direct run comparison: the candidate run ID."),
+    operands: list[str] = typer.Argument(
+        None,
+        help="For suite comparison: optional reference run ID, then strict config keys when --strict is used. With --strict and no trailing keys, BenchCaddy matches the reference run's full configuration. For direct run comparison: the candidate run ID.",
+    ),
     strict: bool = typer.Option(
         False,
         "--strict",
@@ -767,7 +797,9 @@ def compare_command(
         help="Persist the supplied suite reference run as the suite baseline for future show, compare, and trend commands.",
     ),
     confidence_level: float = typer.Option(0.95, "--confidence-level", min=0.5, max=0.99, help="Bootstrap confidence level used for median and delta confidence intervals."),
-    bootstrap_resamples: int = typer.Option(2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."),
+    bootstrap_resamples: int = typer.Option(
+        2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."
+    ),
     noise_threshold: float = typer.Option(0.05, "--noise-threshold", min=0.0, help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs."),
     significance_level: float = typer.Option(0.05, "--significance-level", min=0.001, max=0.5, help="p-value threshold used when classifying regressions and improvements."),
     regression_threshold: float = typer.Option(5.0, "--regression-threshold", min=0.0, help="Practical regression threshold in percent relative to the baseline median."),
@@ -833,18 +865,14 @@ def compare_command(
         console.print(f"Reference run '{right}' was not found in {database_path}.")
         raise typer.Exit(code=1)
     if comparison.get("error") == "reference_run_wrong_suite":
-        console.print(
-            f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'."
-        )
+        console.print(f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'.")
         raise typer.Exit(code=1)
     if comparison.get("error") == "strict_requires_reference_run":
         console.print("--strict requires a suite comparison with a reference run ID.")
         raise typer.Exit(code=2)
     if comparison.get("error") == "strict_keys_not_found":
         missing_keys = ", ".join(comparison["missing_strict_keys"])
-        console.print(
-            f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}."
-        )
+        console.print(f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}.")
         raise typer.Exit(code=1)
     if comparison.get("error") == "baseline_not_found":
         console.print(f"Suite '{left}' does not have a pinned baseline in {database_path}.")
@@ -863,14 +891,22 @@ def compare_command(
     _print_suite_comparison(comparison)
 
 
-@app.command("trend", help="Inspect one suite configuration over time. Uses the explicit baseline when provided, otherwise the pinned suite baseline, otherwise the latest matching run.")
+@app.command(
+    "trend", help="Inspect one suite configuration over time. Uses the explicit baseline when provided, otherwise the pinned suite baseline, otherwise the latest matching run."
+)
 def trend_command(
     suite_name: str = typer.Argument(..., help="Suite name to inspect as a time-series trend."),
-    baseline: str | None = typer.Option(None, "--baseline", help="Optional baseline run ID to anchor the trend output. If omitted, trend uses the pinned suite baseline when set, otherwise the latest matching run."),
+    baseline: str | None = typer.Option(
+        None,
+        "--baseline",
+        help="Optional baseline run ID to anchor the trend output. If omitted, trend uses the pinned suite baseline when set, otherwise the latest matching run.",
+    ),
     limit: int | None = typer.Option(None, "--limit", min=1, help="Limit the trend output to the most recent matching runs."),
     window: int = typer.Option(5, "--window", min=2, help="Rolling window size used for drift analysis."),
     confidence_level: float = typer.Option(0.95, "--confidence-level", min=0.5, max=0.99, help="Bootstrap confidence level used for median and delta confidence intervals."),
-    bootstrap_resamples: int = typer.Option(2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."),
+    bootstrap_resamples: int = typer.Option(
+        2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."
+    ),
     noise_threshold: float = typer.Option(0.05, "--noise-threshold", min=0.0, help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs."),
     significance_level: float = typer.Option(0.05, "--significance-level", min=0.001, max=0.5, help="p-value threshold used when classifying regressions and improvements."),
     regression_threshold: float = typer.Option(5.0, "--regression-threshold", min=0.0, help="Practical regression threshold in percent relative to the baseline median."),
@@ -913,9 +949,7 @@ def trend_command(
         console.print(f"Reference run '{baseline}' was not found in {database_path}.")
         raise typer.Exit(code=1)
     if trend.get("error") == "reference_run_wrong_suite":
-        console.print(
-            f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'."
-        )
+        console.print(f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'.")
         raise typer.Exit(code=1)
     if trend.get("basis_run") is None:
         console.print(f"Suite '{suite_name}' does not have any recorded runs in {database_path}.")

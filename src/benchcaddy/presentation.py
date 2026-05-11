@@ -10,13 +10,11 @@ from rich.text import Text
 Column = str | tuple[str, str]
 Row = Sequence[object]
 
+
 def dump_json(value: object, *, indent: int | None = 0) -> str:
-    n_ind = (0 if indent is None else indent)
+    n_ind = 0 if indent is None else indent
     if isinstance(value, dict):
-        return "\n".join(
-            n_ind * " " + f"{k}: {('\\n' + dump_json(v, indent=n_ind + 2)) if isinstance(v, dict) else str(v)}"
-            for k, v in value.items()
-        )
+        return "\n".join(n_ind * " " + f"{k}: {('\\n' + dump_json(v, indent=n_ind + 2)) if isinstance(v, dict) else str(v)}" for k, v in value.items())
     return str(value)
 
 
