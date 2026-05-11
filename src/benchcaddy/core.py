@@ -4,20 +4,21 @@ import gc
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from statistics import median, stdev
 from time import perf_counter
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 import psutil
 
-from .db import create_sweep_execution, get_database_path, record_benchmark_run
+from .db import benchmark_run_payload, create_sweep_execution, get_database_path, record_benchmark_run
 from .metadata import collect_environment_metadata, metadata_to_dict
 from .observability import collect_observations
-from .return_values import StoredReturnValue, normalize_return_value
 from .reporting import RichSweepReporter, SweepReporter
+from .return_values import StoredReturnValue, normalize_return_value
 
 _MAX_UNIX_PRIORITY = -20
 _DEFAULT_SAMPLE_COUNT = 7
@@ -46,7 +47,7 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
         try:
             affinity = list(process.cpu_affinity())
             if affinity:
-                # Self-Affinity Refresh: Re-apply the current affinity to potentially lock 
+                # Self-Affinity Refresh: Re-apply the current affinity to potentially lock
                 # the process to the current CPU set and avoid migrations.
                 process.cpu_affinity(affinity)
         except (psutil.AccessDenied, NotImplementedError, ValueError):
@@ -58,17 +59,25 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
 
 
 def _target_name(target: Callable[..., Any] | str | Path) -> str:
-    if (script := _as_script_path(target)): return script.name
-    return getattr(target, "__name__", None) or getattr(getattr(target, "__call__", None), "__name__", None) or "callable_instance"
+    if script := _as_script_path(target):
+        return script.name
+    if target_name := getattr(target, "__name__", None):
+        return target_name
+    if callable(target) and (call_name := getattr(target.__call__, "__name__", None)):
+        return call_name
+    return "callable_instance"
 
 
 def _argument_tokens(configuration: Mapping[str, Any]) -> list[str]:
     tokens: list[str] = []
     for k, v in configuration.items():
         flag = f"--{k.replace('_', '-')}"
-        if v is True: tokens.append(flag)
-        elif v is False: tokens.extend([flag, "false"])
-        elif v is not None: tokens.extend([flag, str(v)])
+        if v is True:
+            tokens.append(flag)
+        elif v is False:
+            tokens.extend([flag, "false"])
+        elif v is not None:
+            tokens.extend([flag, str(v)])
     return tokens
 
 
@@ -112,11 +121,7 @@ class Sweep:
         if not self.store_target_return_value:
             return None
 
-        transformed = (
-            self.return_value_postprocessor(result)
-            if self.return_value_postprocessor is not None
-            else result
-        )
+        transformed = self.return_value_postprocessor(result) if self.return_value_postprocessor is not None else result
         try:
             return normalize_return_value(transformed)
         except TypeError as error:
@@ -126,10 +131,7 @@ class Sweep:
                     "Provide return_value_postprocessor to map it to one of: "
                     "bool, int, float, str, or a one-dimensional numeric array/list/tuple."
                 ) from error
-            raise TypeError(
-                "return_value_postprocessor must return one of: "
-                "bool, int, float, str, or a one-dimensional numeric array/list/tuple."
-            ) from error
+            raise TypeError("return_value_postprocessor must return one of: bool, int, float, str, or a one-dimensional numeric array/list/tuple.") from error
 
     def _configurations(self) -> list[dict[str, Any]]:
         if not self.params:
@@ -137,10 +139,7 @@ class Sweep:
 
         param_names = list(self.params.keys())
         param_values = [list(values) for values in self.params.values()]
-        return [
-            dict(zip(param_names, combination, strict=True))
-            for combination in product(*param_values)
-        ]
+        return [dict(zip(param_names, combination, strict=True)) for combination in product(*param_values)]
 
     def _sync_if_needed(self, result: Any) -> None:
         if self.sync is not None:
@@ -225,9 +224,7 @@ class Sweep:
             observations: list[dict[str, Any]] = []
             target_return_value: StoredReturnValue | None = None
             for sample_index in range(1, sample_count + 1):
-                elapsed, observation, sample_return_value = self._run_sample(
-                    configuration, reporter, sample_index, sample_count
-                )
+                elapsed, observation, sample_return_value = self._run_sample(configuration, reporter, sample_index, sample_count)
                 samples.append(elapsed)
                 observations.append(observation)
                 if target_return_value is None:
@@ -236,18 +233,24 @@ class Sweep:
             median_seconds = float(median(samples))
             min_seconds, max_seconds = float(min(samples)), float(max(samples))
             std_seconds = float(stdev(samples)) if len(samples) > 1 else 0.0
+            timing_payload = {
+                "median_seconds": median_seconds,
+                "min_seconds": min_seconds,
+                "max_seconds": max_seconds,
+                "std_seconds": std_seconds,
+            }
+            run_payload = benchmark_run_payload(
+                configuration=configuration,
+                samples=samples,
+                observations=observations,
+                target_return_value=target_return_value,
+                **timing_payload,
+            )
 
             benchmark_run = record_benchmark_run(
                 suite_name=self.suite_name,
                 target_name=_target_name(self.target),
-                configuration=configuration,
-                samples=samples,
-                observations=observations,
-                median_seconds=median_seconds,
-                min_seconds=min_seconds,
-                max_seconds=max_seconds,
-                std_seconds=std_seconds,
-                target_return_value=target_return_value,
+                **run_payload,
                 environment=environment,
                 sweep_execution_id=sweep_execution.id,
                 run_index=configuration_index,
@@ -257,14 +260,7 @@ class Sweep:
                 BenchmarkResult(
                     run_id=benchmark_run.display_id,
                     record_id=benchmark_run.id,
-                    configuration=configuration,
-                    samples=samples,
-                    observations=observations,
-                    median_seconds=median_seconds,
-                    min_seconds=min_seconds,
-                    max_seconds=max_seconds,
-                    std_seconds=std_seconds,
-                    target_return_value=target_return_value,
+                    **run_payload,
                 )
             )
 

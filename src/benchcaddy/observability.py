@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
 from statistics import fmean, stdev
 from time import perf_counter
-from typing import Any, Callable, Iterator
+from typing import Any
 
 
 @dataclass

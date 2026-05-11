@@ -10,13 +10,18 @@ from rich.text import Text
 Column = str | tuple[str, str]
 Row = Sequence[object]
 
+
 def dump_json(value: object, *, indent: int | None = 0) -> str:
-    n_ind = (0 if indent is None else indent)
+    n_ind = 0 if indent is None else indent
     if isinstance(value, dict):
-        return "\n".join(
-            n_ind * " " + f"{k}: {('\\n' + dump_json(v, indent=n_ind + 2)) if isinstance(v, dict) else str(v)}"
-            for k, v in value.items()
-        )
+        lines: list[str] = []
+        for key, nested_value in value.items():
+            prefix = n_ind * " " + f"{key}: "
+            if isinstance(nested_value, dict):
+                lines.append(prefix + "\n" + dump_json(nested_value, indent=n_ind + 2))
+            else:
+                lines.append(prefix + str(nested_value))
+        return "\n".join(lines)
     return str(value)
 
 

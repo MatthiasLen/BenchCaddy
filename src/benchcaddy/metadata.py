@@ -117,12 +117,11 @@ def _read_gpu_model() -> str | None:
                     if gpu_name:
                         return gpu_name
         return None
-    if system == "windows":
-        if wmic_output := _run_command(["wmic", "path", "win32_VideoController", "get", "name"]):
-            for line in wmic_output.splitlines():
-                stripped = line.strip()
-                if stripped and stripped.lower() != "name":
-                    return stripped
+    if system == "windows" and (wmic_output := _run_command(["wmic", "path", "win32_VideoController", "get", "name"])):
+        for line in wmic_output.splitlines():
+            stripped = line.strip()
+            if stripped and stripped.lower() != "name":
+                return stripped
     return None
 
 
@@ -146,12 +145,18 @@ def collect_git_state(cwd: Path | None = None) -> GitState:
 
 def collect_process_state() -> ProcessState:
     process = psutil.Process()
-    try: affinity = list(process.cpu_affinity())
-    except (psutil.AccessDenied, NotImplementedError, AttributeError): affinity = []
-    try: priority = process.nice()
-    except (psutil.AccessDenied, AttributeError): priority = None
-    try: rss_bytes = process.memory_info().rss
-    except (psutil.AccessDenied, AttributeError, OSError): rss_bytes = None
+    try:
+        affinity = list(process.cpu_affinity())
+    except (psutil.AccessDenied, NotImplementedError, AttributeError):
+        affinity = []
+    try:
+        priority = process.nice()
+    except (psutil.AccessDenied, AttributeError):
+        priority = None
+    try:
+        rss_bytes = process.memory_info().rss
+    except (psutil.AccessDenied, AttributeError, OSError):
+        rss_bytes = None
 
     return ProcessState(
         pid=process.pid,

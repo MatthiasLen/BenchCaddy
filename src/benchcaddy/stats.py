@@ -126,6 +126,12 @@ def _bootstrap_interval(
     )
 
 
+def _percent_change(delta_seconds: float, baseline_median_seconds: float) -> float | None:
+    if isclose(baseline_median_seconds, 0.0, abs_tol=1e-12):
+        return None
+    return float((delta_seconds / baseline_median_seconds) * 100.0)
+
+
 def _coefficient_of_variation(mean_seconds: float, std_seconds: float) -> float | None:
     if isclose(mean_seconds, 0.0, abs_tol=1e-12):
         return 0.0 if isclose(std_seconds, 0.0, abs_tol=1e-12) else None
@@ -194,6 +200,136 @@ def analyze_samples(
     )
 
 
+def _practical_threshold_seconds(baseline_median_seconds: float, options: AnalysisOptions) -> float:
+    return abs(baseline_median_seconds) * (options.regression_threshold_percent / 100.0)
+
+
+def _empty_comparison_warnings(
+    baseline_values: np.ndarray,
+    candidate_values: np.ndarray,
+    baseline_stats: RunStatistics,
+    candidate_stats: RunStatistics,
+) -> tuple[str, ...]:
+    warnings: list[str] = []
+    if baseline_values.size == 0:
+        warnings.append("baseline_empty_samples")
+    if candidate_values.size == 0:
+        warnings.append("candidate_empty_samples")
+    warnings.extend(f"baseline_{warning}" for warning in baseline_stats.warnings)
+    warnings.extend(f"candidate_{warning}" for warning in candidate_stats.warnings)
+    return tuple(dict.fromkeys(warnings))
+
+
+def _comparison_warning_list(
+    baseline_stats: RunStatistics,
+    candidate_stats: RunStatistics,
+) -> tuple[str, ...]:
+    warnings = [
+        *(["low_sample_count"] if baseline_stats.sample_count < 5 or candidate_stats.sample_count < 5 else []),
+        *(f"baseline_{warning}" for warning in baseline_stats.warnings),
+        *(f"candidate_{warning}" for warning in candidate_stats.warnings),
+    ]
+    if baseline_stats.is_noisy:
+        warnings.append("baseline_noisy")
+    if candidate_stats.is_noisy:
+        warnings.append("candidate_noisy")
+    return tuple(dict.fromkeys(warnings))
+
+
+def _bootstrap_delta_distribution(
+    baseline_values: np.ndarray,
+    candidate_values: np.ndarray,
+    options: AnalysisOptions,
+) -> np.ndarray:
+    rng = np.random.default_rng(options.bootstrap_seed + 101)
+    baseline_indices = rng.integers(0, baseline_values.size, size=(options.bootstrap_resamples, baseline_values.size))
+    candidate_indices = rng.integers(0, candidate_values.size, size=(options.bootstrap_resamples, candidate_values.size))
+    baseline_bootstrap = np.median(baseline_values[baseline_indices], axis=1)
+    candidate_bootstrap = np.median(candidate_values[candidate_indices], axis=1)
+    return candidate_bootstrap - baseline_bootstrap
+
+
+def _permutation_significance_p_value(
+    baseline_values: np.ndarray,
+    candidate_values: np.ndarray,
+    *,
+    delta_seconds: float,
+    options: AnalysisOptions,
+) -> float:
+    rng = np.random.default_rng(options.bootstrap_seed + 101)
+    pooled = np.concatenate([baseline_values, candidate_values])
+    observed_abs_delta = abs(delta_seconds)
+    permutation_deltas: list[float] = []
+    for _ in range(options.bootstrap_resamples):
+        permutation = rng.permutation(pooled)
+        baseline_perm = permutation[: baseline_values.size]
+        candidate_perm = permutation[baseline_values.size :]
+        permutation_deltas.append(abs(float(np.median(candidate_perm) - np.median(baseline_perm))))
+    return float(np.mean(np.asarray(permutation_deltas) >= observed_abs_delta))
+
+
+def _comparison_classification(
+    *,
+    significance_p_value: float,
+    delta_seconds: float,
+    practical_threshold_seconds: float,
+    regression_probability: float,
+    improvement_probability: float,
+    warnings: tuple[str, ...],
+    options: AnalysisOptions,
+) -> tuple[bool, bool, bool, str]:
+    statistically_significant = bool(significance_p_value <= options.significance_level)
+    exceeds_practical_threshold = bool(delta_seconds >= practical_threshold_seconds)
+    regression_detected = bool(
+        statistically_significant
+        and exceeds_practical_threshold
+        and regression_probability >= 1.0 - options.significance_level
+    )
+
+    if regression_detected:
+        classification = "regressing"
+    elif statistically_significant and improvement_probability >= 1.0 - options.significance_level:
+        classification = "improving"
+    elif warnings:
+        classification = "noisy"
+    else:
+        classification = "stable"
+    return statistically_significant, exceeds_practical_threshold, regression_detected, classification
+
+
+def _empty_sample_comparison(
+    *,
+    delta_seconds: float,
+    percent_change: float | None,
+    baseline_median_seconds: float,
+    warnings: tuple[str, ...],
+    options: AnalysisOptions,
+) -> ComparisonStatistics:
+    return ComparisonStatistics(
+        delta_seconds=delta_seconds,
+        percent_change=percent_change,
+        delta_ci_lower_seconds=0.0,
+        delta_ci_upper_seconds=0.0,
+        regression_probability=0.0,
+        improvement_probability=0.0,
+        significance_p_value=1.0,
+        statistically_significant=False,
+        practical_threshold_seconds=_practical_threshold_seconds(baseline_median_seconds, options),
+        exceeds_practical_threshold=False,
+        regression_detected=False,
+        classification="noisy",
+        warnings=warnings,
+    )
+
+
+def _delta_interval(delta_distribution: np.ndarray, options: AnalysisOptions) -> tuple[float, float]:
+    alpha = (1.0 - options.confidence_level) / 2.0
+    return (
+        float(np.quantile(delta_distribution, alpha)),
+        float(np.quantile(delta_distribution, 1.0 - alpha)),
+    )
+
+
 def compare_sample_sets(
     baseline_samples: list[float] | tuple[float, ...],
     candidate_samples: list[float] | tuple[float, ...],
@@ -207,84 +343,49 @@ def compare_sample_sets(
     baseline_stats = analyze_samples(list(baseline_values), chosen_options)
     candidate_stats = analyze_samples(list(candidate_values), chosen_options)
     delta_seconds = candidate_stats.median_seconds - baseline_stats.median_seconds
-    percent_change = None
-    if not isclose(baseline_stats.median_seconds, 0.0, abs_tol=1e-12):
-        percent_change = float((delta_seconds / baseline_stats.median_seconds) * 100.0)
+    percent_change = _percent_change(delta_seconds, baseline_stats.median_seconds)
 
     if baseline_values.size == 0 or candidate_values.size == 0:
-        warnings: list[str] = []
-        if baseline_values.size == 0:
-            warnings.append("baseline_empty_samples")
-        if candidate_values.size == 0:
-            warnings.append("candidate_empty_samples")
-        warnings.extend(f"baseline_{warning}" for warning in baseline_stats.warnings)
-        warnings.extend(f"candidate_{warning}" for warning in candidate_stats.warnings)
-        return ComparisonStatistics(
+        return _empty_sample_comparison(
             delta_seconds=delta_seconds,
             percent_change=percent_change,
-            delta_ci_lower_seconds=0.0,
-            delta_ci_upper_seconds=0.0,
-            regression_probability=0.0,
-            improvement_probability=0.0,
-            significance_p_value=1.0,
-            statistically_significant=False,
-            practical_threshold_seconds=abs(baseline_stats.median_seconds) * (chosen_options.regression_threshold_percent / 100.0),
-            exceeds_practical_threshold=False,
-            regression_detected=False,
-            classification="noisy",
-            warnings=tuple(dict.fromkeys(warnings)),
+            baseline_median_seconds=baseline_stats.median_seconds,
+            warnings=_empty_comparison_warnings(
+                baseline_values,
+                candidate_values,
+                baseline_stats,
+                candidate_stats,
+            ),
+            options=chosen_options,
         )
 
-    rng = np.random.default_rng(chosen_options.bootstrap_seed + 101)
-    baseline_indices = rng.integers(0, baseline_values.size, size=(chosen_options.bootstrap_resamples, baseline_values.size))
-    candidate_indices = rng.integers(0, candidate_values.size, size=(chosen_options.bootstrap_resamples, candidate_values.size))
-    baseline_bootstrap = np.median(baseline_values[baseline_indices], axis=1)
-    candidate_bootstrap = np.median(candidate_values[candidate_indices], axis=1)
-    delta_distribution = candidate_bootstrap - baseline_bootstrap
-    alpha = (1.0 - chosen_options.confidence_level) / 2.0
-    delta_ci_lower_seconds = float(np.quantile(delta_distribution, alpha))
-    delta_ci_upper_seconds = float(np.quantile(delta_distribution, 1.0 - alpha))
+    delta_distribution = _bootstrap_delta_distribution(
+        baseline_values,
+        candidate_values,
+        chosen_options,
+    )
+    delta_ci_lower_seconds, delta_ci_upper_seconds = _delta_interval(delta_distribution, chosen_options)
 
-    practical_threshold_seconds = abs(baseline_stats.median_seconds) * (chosen_options.regression_threshold_percent / 100.0)
+    practical_threshold_seconds = _practical_threshold_seconds(baseline_stats.median_seconds, chosen_options)
     regression_probability = float(np.mean(delta_distribution >= practical_threshold_seconds))
     improvement_probability = float(np.mean(delta_distribution <= -practical_threshold_seconds))
-
-    pooled = np.concatenate([baseline_values, candidate_values])
-    observed_abs_delta = abs(delta_seconds)
-    permutation_deltas: list[float] = []
-    for _ in range(chosen_options.bootstrap_resamples):
-        permutation = rng.permutation(pooled)
-        baseline_perm = permutation[: baseline_values.size]
-        candidate_perm = permutation[baseline_values.size :]
-        permutation_deltas.append(abs(float(np.median(candidate_perm) - np.median(baseline_perm))))
-    significance_p_value = float(np.mean(np.asarray(permutation_deltas) >= observed_abs_delta))
-
-    warnings = [
-        *( ["low_sample_count"] if baseline_stats.sample_count < 5 or candidate_stats.sample_count < 5 else [] ),
-        *(f"baseline_{warning}" for warning in baseline_stats.warnings),
-        *(f"candidate_{warning}" for warning in candidate_stats.warnings),
-    ]
-    if baseline_stats.is_noisy:
-        warnings.append("baseline_noisy")
-    if candidate_stats.is_noisy:
-        warnings.append("candidate_noisy")
-
-    statistically_significant = bool(significance_p_value <= chosen_options.significance_level)
-    exceeds_practical_threshold = bool(delta_seconds >= practical_threshold_seconds)
-    regression_detected = bool(
-        statistically_significant
-        and exceeds_practical_threshold
-        and regression_probability >= 1.0 - chosen_options.significance_level
+    significance_p_value = _permutation_significance_p_value(
+        baseline_values,
+        candidate_values,
+        delta_seconds=delta_seconds,
+        options=chosen_options,
     )
 
-    if regression_detected:
-        classification = "regressing"
-    elif statistically_significant and improvement_probability >= 1.0 - chosen_options.significance_level:
-        classification = "improving"
-    elif warnings:
-        classification = "noisy"
-    else:
-        classification = "stable"
+    warnings = _comparison_warning_list(baseline_stats, candidate_stats)
+    statistically_significant, exceeds_practical_threshold, regression_detected, classification = _comparison_classification(
+        significance_p_value=significance_p_value,
+        delta_seconds=delta_seconds,
+        practical_threshold_seconds=practical_threshold_seconds,
+        regression_probability=regression_probability,
+        improvement_probability=improvement_probability,
+        warnings=warnings,
+        options=chosen_options,
+    )
 
     return ComparisonStatistics(
         delta_seconds=delta_seconds,
@@ -299,14 +400,5 @@ def compare_sample_sets(
         exceeds_practical_threshold=exceeds_practical_threshold,
         regression_detected=regression_detected,
         classification=classification,
-        warnings=tuple(dict.fromkeys(warnings)),
+        warnings=warnings,
     )
-
-
-def drift_status(
-    samples: list[float] | tuple[float, ...],
-    reference_samples: list[float] | tuple[float, ...],
-    options: AnalysisOptions | None = None,
-) -> str:
-    comparison = compare_sample_sets(reference_samples, samples, options)
-    return comparison.classification
