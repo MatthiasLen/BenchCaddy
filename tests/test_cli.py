@@ -846,6 +846,30 @@ def test_cli_strict_suite_compare_requires_reference_run(
     assert "--strict requires a suite comparison with a reference run ID." in result.stdout
 
 
+def test_cli_strict_suite_compare_requires_reference_run_without_keys(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "--strict", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 2
+    assert "--strict requires a suite comparison with a reference run ID." in result.stdout
+
+
 def test_suite_compare_basis_matches_best_run_time_and_std(
     tmp_path: Path,
     environment_payload: dict[str, object],
