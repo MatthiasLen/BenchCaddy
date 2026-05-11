@@ -262,6 +262,21 @@ def _suite_row_style(comparison: dict[str, object], run: dict[str, object]) -> s
     return None
 
 
+def _trend_row_style(trend: dict[str, object], run: dict[str, object]) -> str | None:
+    basis_run = trend.get("basis_run")
+    if basis_run is None:
+        return None
+
+    best_run = min(trend["runs"], key=lambda candidate: (candidate["median_seconds"], candidate["id"]))
+    if run["id"] == best_run["id"]:
+        return "green"
+
+    if run["id"] == basis_run["id"]:
+        return "yellow"
+
+    return None
+
+
 def _format_optional_seconds(value: float | None) -> str:
     return "-" if value is None else f"{value:.6f}"
 
@@ -735,7 +750,7 @@ def _print_trend(trend: dict[str, object]) -> None:
                     )
                 )
             )
-        table.add_row(*(str(value) for value in row))
+        table.add_row(*_style_row(tuple(str(value) for value in row), _trend_row_style(trend, run)))
 
     console.print(table)
     if _STATE.verbose:
@@ -1073,7 +1088,7 @@ def compare_command(
 
 
 @app.command(
-    "trend", help="Inspect one suite configuration over time. Uses the explicit baseline when provided, otherwise the pinned suite baseline, otherwise the latest matching run."
+    "trend", help="Inspect one suite configuration over time. Uses the positional baseline run when provided, otherwise the pinned suite baseline, otherwise the latest matching run."
 )
 def trend_command(
     suite_name: Annotated[
@@ -1082,8 +1097,7 @@ def trend_command(
     ],
     baseline: Annotated[
         str | None,
-        typer.Option(
-            "--baseline",
+        typer.Argument(
             help=(
                 "Optional baseline run ID to anchor the trend output. If omitted, trend uses "
                 "the pinned suite baseline when set, otherwise the latest matching run."
