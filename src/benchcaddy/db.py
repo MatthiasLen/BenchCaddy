@@ -32,9 +32,9 @@ class BenchmarkSuite(Base):
     target_name: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
-    baseline: Mapped["BenchmarkSuiteBaseline | None"] = relationship(back_populates="suite")
-    sweep_executions: Mapped[list["BenchmarkSweepExecution"]] = relationship(back_populates="suite")
-    runs: Mapped[list["BenchmarkRun"]] = relationship(back_populates="suite")
+    baseline: Mapped[BenchmarkSuiteBaseline | None] = relationship(back_populates="suite")
+    sweep_executions: Mapped[list[BenchmarkSweepExecution]] = relationship(back_populates="suite")
+    runs: Mapped[list[BenchmarkRun]] = relationship(back_populates="suite")
 
 
 class BenchmarkSuiteBaseline(Base):
@@ -46,7 +46,7 @@ class BenchmarkSuiteBaseline(Base):
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
     suite: Mapped[BenchmarkSuite] = relationship(back_populates="baseline")
-    run: Mapped["BenchmarkRun"] = relationship()
+    run: Mapped[BenchmarkRun] = relationship()
 
 
 class BenchmarkSweepExecution(Base):
@@ -57,7 +57,7 @@ class BenchmarkSweepExecution(Base):
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
     suite: Mapped[BenchmarkSuite] = relationship(back_populates="sweep_executions")
-    runs: Mapped[list["BenchmarkRun"]] = relationship(back_populates="sweep_execution")
+    runs: Mapped[list[BenchmarkRun]] = relationship(back_populates="sweep_execution")
 
 
 class EnvironmentInfo(Base):
@@ -75,10 +75,10 @@ class EnvironmentInfo(Base):
     process_state: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
-    runs: Mapped[list["BenchmarkRun"]] = relationship(back_populates="environment")
+    runs: Mapped[list[BenchmarkRun]] = relationship(back_populates="environment")
 
     @classmethod
-    def from_payload(cls, environment: dict[str, Any]) -> "EnvironmentInfo":
+    def from_payload(cls, environment: dict[str, Any]) -> EnvironmentInfo:
         git_payload = environment.get("git") or {}
         return cls(
             python_version=environment["python_version"],
@@ -152,11 +152,7 @@ class BenchmarkRun(Base):
         *,
         include_analysis: bool = False,
     ) -> dict[str, Any]:
-        analysis = (
-            self.analysis_payload(analysis_options)
-            if include_analysis or analysis_options is not None
-            else None
-        )
+        analysis = self.analysis_payload(analysis_options) if include_analysis or analysis_options is not None else None
         payload = {
             "id": self.id,
             "record_id": self.id,
@@ -236,6 +232,7 @@ class BenchmarkRun(Base):
             "is_noisy": analysis["is_noisy"],
         }
 
+
 def _suite_query(suite_name: str):
     return select(BenchmarkSuite).where(BenchmarkSuite.name == suite_name)
 
@@ -244,6 +241,7 @@ def get_database_path(database_path: str | Path | None = None) -> Path:
     if database_path is None:
         return (Path.cwd() / "benchcaddy.db").resolve()
     return Path(database_path).resolve()
+
 
 def get_engine(database_path: str | Path | None = None) -> Engine:
     path = get_database_path(database_path)
@@ -292,9 +290,7 @@ def _migrate_legacy_schema(engine: Engine) -> None:
 
 
 def _get_suite_baseline_record(session: Session, suite_id: int) -> BenchmarkSuiteBaseline | None:
-    return session.scalar(
-        select(BenchmarkSuiteBaseline).where(BenchmarkSuiteBaseline.suite_id == suite_id)
-    )
+    return session.scalar(select(BenchmarkSuiteBaseline).where(BenchmarkSuiteBaseline.suite_id == suite_id))
 
 
 def _resolve_suite_baseline_run(session: Session, suite: BenchmarkSuite) -> BenchmarkRun | None:
@@ -390,14 +386,10 @@ def record_benchmark_run(
 
 def list_suite_summaries(database_path: str | Path | None = None) -> list[dict[str, Any]]:
     with db_session(database_path) as session:
-        suites = session.execute(
-            select(BenchmarkSuite).order_by(BenchmarkSuite.name)
-        ).scalars().all()
+        suites = session.execute(select(BenchmarkSuite).order_by(BenchmarkSuite.name)).scalars().all()
         summaries: list[dict[str, Any]] = []
         for suite in suites:
-            runs = session.execute(
-                select(BenchmarkRun).where(BenchmarkRun.suite_id == suite.id)
-            ).scalars().all()
+            runs = session.execute(select(BenchmarkRun).where(BenchmarkRun.suite_id == suite.id)).scalars().all()
             if not runs:
                 continue
             summaries.append(
@@ -425,11 +417,7 @@ def get_suite_details(
         if suite is None:
             return None
 
-        runs = session.execute(
-            select(BenchmarkRun)
-            .where(BenchmarkRun.suite_id == suite.id)
-            .order_by(BenchmarkRun.created_at.desc())
-        ).scalars().all()
+        runs = session.execute(select(BenchmarkRun).where(BenchmarkRun.suite_id == suite.id).order_by(BenchmarkRun.created_at.desc())).scalars().all()
         environment = None
         if runs:
             environment = runs[0].environment
@@ -543,11 +531,15 @@ def compare_suite_runs(
             reference_run_id = reference_run.id
             reference_run_suite_name = reference_run.suite.name
 
-        runs = session.execute(
-            select(BenchmarkRun)
-            .where(BenchmarkRun.suite_id == suite.id)
-            .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
-        ).scalars().all()
+        runs = (
+            session.execute(
+                select(BenchmarkRun)
+                .where(BenchmarkRun.suite_id == suite.id)
+                .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
+            )
+            .scalars()
+            .all()
+        )
 
     if not runs:
         return {
@@ -604,11 +596,7 @@ def compare_suite_runs(
                 "reference_run_display_id": basis_run.display_id,
             }
         strict_config = {key: basis_run.configuration[key] for key in strict_keys}
-        runs = [
-            run
-            for run in runs
-            if all(run.configuration.get(key) == value for key, value in strict_config.items())
-        ]
+        runs = [run for run in runs if all(run.configuration.get(key) == value for key, value in strict_config.items())]
 
     basis_median_seconds = basis_run.median_seconds
     return {
@@ -687,10 +675,7 @@ def get_all_run_details(
     include_analysis: bool = False,
 ) -> list[dict[str, Any]]:
     with db_session(database_path) as session:
-        runs = session.execute(
-            select(BenchmarkRun)
-            .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
-        ).scalars().all()
+        runs = session.execute(select(BenchmarkRun).order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())).scalars().all()
 
         return [
             {
@@ -725,10 +710,7 @@ def compare_runs(
 
     percent_change = None
     if baseline["median_seconds"] > 0:
-        percent_change = (
-            (candidate["median_seconds"] - baseline["median_seconds"])
-            / baseline["median_seconds"]
-        ) * 100.0
+        percent_change = ((candidate["median_seconds"] - baseline["median_seconds"]) / baseline["median_seconds"]) * 100.0
 
     baseline_observations = summarize_observations(baseline["observations"])
     candidate_observations = summarize_observations(candidate["observations"])
@@ -780,11 +762,13 @@ def get_suite_trend(
         if suite is None:
             return None
 
-        runs = session.execute(
-            select(BenchmarkRun)
-            .where(BenchmarkRun.suite_id == suite.id)
-            .order_by(BenchmarkRun.sweep_execution_id.asc(), BenchmarkRun.run_index.asc(), BenchmarkRun.id.asc())
-        ).scalars().all()
+        runs = (
+            session.execute(
+                select(BenchmarkRun).where(BenchmarkRun.suite_id == suite.id).order_by(BenchmarkRun.sweep_execution_id.asc(), BenchmarkRun.run_index.asc(), BenchmarkRun.id.asc())
+            )
+            .scalars()
+            .all()
+        )
         if not runs:
             return {
                 "suite_name": suite.name,
@@ -831,11 +815,7 @@ def get_suite_trend(
     for index, payload in enumerate(filtered_payloads):
         run_samples = filtered_samples[index]
         vs_basis = compare_sample_sets(basis_samples, run_samples, chosen_options).to_payload()
-        trailing_samples = [
-            sample
-            for prior_samples in filtered_samples[max(0, index - chosen_options.drift_window_size) : index]
-            for sample in prior_samples
-        ]
+        trailing_samples = [sample for prior_samples in filtered_samples[max(0, index - chosen_options.drift_window_size) : index] for sample in prior_samples]
         drift_analysis = None
         drift_status_label = "baseline" if payload["id"] == basis_run_id else "stable"
         if trailing_samples:

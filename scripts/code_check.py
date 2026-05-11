@@ -5,10 +5,9 @@ import json
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
-
 
 DEFAULT_TARGETS = ("src", "tests", "scripts")
 DEFAULT_EXCLUDES = (
@@ -38,10 +37,7 @@ class CheckResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Run code-structure checks that are useful for humans and coding agents. "
-            "The default targets stay scoped to the repository source tree."
-        )
+        description=("Run code-structure checks that are useful for humans and coding agents. The default targets stay scoped to the repository source tree.")
     )
     parser.add_argument(
         "paths",
@@ -205,25 +201,15 @@ def summarize_agent_guidance(results: Sequence[CheckResult], max_complexity: int
         if result.ok:
             continue
         if result.name == "pylint-duplicate-code":
-            guidance.append(
-                "Consolidate duplicated control flow or payload assembly into one helper before adding features."
-            )
+            guidance.append("Consolidate duplicated control flow or payload assembly into one helper before adding features.")
         elif result.name == "vulture-dead-code":
-            guidance.append(
-                "Remove unused functions, imports, and stale branches before expanding adjacent code."
-            )
+            guidance.append("Remove unused functions, imports, and stale branches before expanding adjacent code.")
         elif result.name == "radon-complexity":
-            guidance.append(
-                f"Break functions above complexity {max_complexity} into smaller units with single responsibilities."
-            )
+            guidance.append(f"Break functions above complexity {max_complexity} into smaller units with single responsibilities.")
         elif result.name == "radon-maintainability":
-            guidance.append(
-                "Refactor low-maintainability modules before layering new behavior onto them."
-            )
+            guidance.append("Refactor low-maintainability modules before layering new behavior onto them.")
         elif result.name.startswith("ruff"):
-            guidance.append(
-                "Apply style and formatting fixes first so later structural findings are easier to read."
-            )
+            guidance.append("Apply style and formatting fixes first so later structural findings are easier to read.")
     return guidance
 
 
