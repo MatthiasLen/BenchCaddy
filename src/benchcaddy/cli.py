@@ -666,7 +666,7 @@ def list_command(
 @app.command("show", help="Inspect all recorded runs, a suite, or specific run IDs. When a suite has a pinned baseline, it is shown in the suite view.")
 def show_command(
     identifiers: list[str] | None = typer.Argument(None, help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1). Omit identifiers to list all recorded runs."),
-    no_stats: bool = typer.Option(
+    skip_stats: bool = typer.Option(
         False,
         "--no-stats",
         help="Skip per-run statistical analysis when showing run or suite details for a faster view.",
@@ -694,7 +694,7 @@ def show_command(
     ),
 ) -> None:
     database_path = get_database_path(database)
-    analysis_options = None if no_stats else AnalysisOptions(
+    analysis_options = None if skip_stats else AnalysisOptions(
         confidence_level=confidence_level,
         bootstrap_resamples=bootstrap_resamples,
     )
@@ -711,7 +711,7 @@ def show_command(
                 run_id,
                 database_path,
                 analysis_options=analysis_options,
-                include_analysis=not no_stats,
+                include_analysis=not skip_stats,
             )
             if run is None:
                 console.print(f"Run '{identifier}' was not found in {database_path}.")
@@ -723,7 +723,7 @@ def show_command(
             identifier,
             database_path,
             analysis_options=analysis_options,
-            include_analysis=not no_stats,
+            include_analysis=not skip_stats,
         )
         if details is None:
             console.print(f"Suite '{identifier}' was not found in {database_path}.")
