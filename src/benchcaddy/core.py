@@ -61,7 +61,11 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
 def _target_name(target: Callable[..., Any] | str | Path) -> str:
     if script := _as_script_path(target):
         return script.name
-    return getattr(target, "__name__", None) or getattr(getattr(target, "__call__", None), "__name__", None) or "callable_instance"
+    if target_name := getattr(target, "__name__", None):
+        return target_name
+    if callable(target) and (call_name := getattr(target.__call__, "__name__", None)):
+        return call_name
+    return "callable_instance"
 
 
 def _argument_tokens(configuration: Mapping[str, Any]) -> list[str]:

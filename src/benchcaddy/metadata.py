@@ -117,12 +117,11 @@ def _read_gpu_model() -> str | None:
                     if gpu_name:
                         return gpu_name
         return None
-    if system == "windows":
-        if wmic_output := _run_command(["wmic", "path", "win32_VideoController", "get", "name"]):
-            for line in wmic_output.splitlines():
-                stripped = line.strip()
-                if stripped and stripped.lower() != "name":
-                    return stripped
+    if system == "windows" and (wmic_output := _run_command(["wmic", "path", "win32_VideoController", "get", "name"])):
+        for line in wmic_output.splitlines():
+            stripped = line.strip()
+            if stripped and stripped.lower() != "name":
+                return stripped
     return None
 
 

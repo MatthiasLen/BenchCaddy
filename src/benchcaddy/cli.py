@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -639,26 +640,30 @@ def _print_trend(trend: dict[str, object]) -> None:
 
 @app.callback()
 def callback(
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show additional detail in command output.",
-    ),
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Show additional detail in command output.",
+        ),
+    ] = False,
 ) -> None:
     _STATE.verbose = verbose
 
 
 @app.command("list")
 def list_command(
-    database: Path = typer.Option(
-        None,
-        "--database",
-        "-d",
-        exists=False,
-        dir_okay=False,
-        help="Path to the BenchCaddy SQLite database.",
-    ),
+    database: Annotated[
+        Path | None,
+        typer.Option(
+            "--database",
+            "-d",
+            exists=False,
+            dir_okay=False,
+            help="Path to the BenchCaddy SQLite database.",
+        ),
+    ] = None,
 ) -> None:
     database_path = get_database_path(database)
     summaries = list_suite_summaries(database_path)
@@ -688,33 +693,46 @@ def list_command(
 
 @app.command("show", help="Inspect all recorded runs, a suite, or specific run IDs. When a suite has a pinned baseline, it is shown in the suite view.")
 def show_command(
-    identifiers: list[str] | None = typer.Argument(None, help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1). Omit identifiers to list all recorded runs."),
-    skip_stats: bool = typer.Option(
-        False,
-        "--no-stats",
-        help="Skip per-run statistical analysis when showing run or suite details for a faster view.",
-    ),
-    confidence_level: float = typer.Option(
-        0.95,
-        "--confidence-level",
-        min=0.5,
-        max=0.99,
-        help="Bootstrap confidence level used for per-run median confidence intervals.",
-    ),
-    bootstrap_resamples: int = typer.Option(
-        2000,
-        "--bootstrap-resamples",
-        min=100,
-        help="Bootstrap resample count used for per-run median confidence intervals.",
-    ),
-    database: Path = typer.Option(
-        None,
-        "--database",
-        "-d",
-        exists=False,
-        dir_okay=False,
-        help="Path to the BenchCaddy SQLite database.",
-    ),
+    identifiers: Annotated[
+        list[str] | None,
+        typer.Argument(
+            help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1). Omit identifiers to list all recorded runs.",
+        ),
+    ] = None,
+    skip_stats: Annotated[
+        bool,
+        typer.Option(
+            "--no-stats",
+            help="Skip per-run statistical analysis when showing run or suite details for a faster view.",
+        ),
+    ] = False,
+    confidence_level: Annotated[
+        float,
+        typer.Option(
+            "--confidence-level",
+            min=0.5,
+            max=0.99,
+            help="Bootstrap confidence level used for per-run median confidence intervals.",
+        ),
+    ] = 0.95,
+    bootstrap_resamples: Annotated[
+        int,
+        typer.Option(
+            "--bootstrap-resamples",
+            min=100,
+            help="Bootstrap resample count used for per-run median confidence intervals.",
+        ),
+    ] = 2000,
+    database: Annotated[
+        Path | None,
+        typer.Option(
+            "--database",
+            "-d",
+            exists=False,
+            dir_okay=False,
+            help="Path to the BenchCaddy SQLite database.",
+        ),
+    ] = None,
 ) -> None:
     database_path = get_database_path(database)
     analysis_options = (
@@ -775,42 +793,101 @@ def show_command(
 
 @app.command("compare", help="Compare two runs directly, compare a suite to its best run, or compare a suite to a selected or pinned reference run.")
 def compare_command(
-    left: str = typer.Argument(..., help="Suite name for suite comparison, or the baseline run ID for a direct run-to-run comparison."),
-    operands: list[str] = typer.Argument(
-        None,
-        help="For suite comparison: optional reference run ID, then strict config keys when --strict is used. With --strict and no trailing keys, BenchCaddy matches the reference run's full configuration. For direct run comparison: the candidate run ID.",
-    ),
-    strict: bool = typer.Option(
-        False,
-        "--strict",
-        "-s",
-        help="Restrict suite comparison to runs whose configuration matches the reference run for the given trailing config keys. If no keys are provided, all reference run configuration keys are used.",
-    ),
-    use_baseline: bool = typer.Option(
-        False,
-        "--use-baseline",
-        help="Use the pinned suite baseline as the comparison reference instead of the suite's best run.",
-    ),
-    pin_baseline: bool = typer.Option(
-        False,
-        "--pin-baseline",
-        help="Persist the supplied suite reference run as the suite baseline for future show, compare, and trend commands.",
-    ),
-    confidence_level: float = typer.Option(0.95, "--confidence-level", min=0.5, max=0.99, help="Bootstrap confidence level used for median and delta confidence intervals."),
-    bootstrap_resamples: int = typer.Option(
-        2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."
-    ),
-    noise_threshold: float = typer.Option(0.05, "--noise-threshold", min=0.0, help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs."),
-    significance_level: float = typer.Option(0.05, "--significance-level", min=0.001, max=0.5, help="p-value threshold used when classifying regressions and improvements."),
-    regression_threshold: float = typer.Option(5.0, "--regression-threshold", min=0.0, help="Practical regression threshold in percent relative to the baseline median."),
-    database: Path = typer.Option(
-        None,
-        "--database",
-        "-d",
-        exists=False,
-        dir_okay=False,
-        help="Path to the BenchCaddy SQLite database.",
-    ),
+    left: Annotated[
+        str,
+        typer.Argument(
+            help="Suite name for suite comparison, or the baseline run ID for a direct run-to-run comparison.",
+        ),
+    ],
+    operands: Annotated[
+        list[str] | None,
+        typer.Argument(
+            help=(
+                "For suite comparison: optional reference run ID, then strict config keys when "
+                "--strict is used. With --strict and no trailing keys, BenchCaddy matches the "
+                "reference run's full configuration. For direct run comparison: the candidate "
+                "run ID."
+            ),
+        ),
+    ] = None,
+    strict: Annotated[
+        bool,
+        typer.Option(
+            "--strict",
+            "-s",
+            help=(
+                "Restrict suite comparison to runs whose configuration matches the reference "
+                "run for the given trailing config keys. If no keys are provided, all "
+                "reference run configuration keys are used."
+            ),
+        ),
+    ] = False,
+    use_baseline: Annotated[
+        bool,
+        typer.Option(
+            "--use-baseline",
+            help="Use the pinned suite baseline as the comparison reference instead of the suite's best run.",
+        ),
+    ] = False,
+    pin_baseline: Annotated[
+        bool,
+        typer.Option(
+            "--pin-baseline",
+            help="Persist the supplied suite reference run as the suite baseline for future show, compare, and trend commands.",
+        ),
+    ] = False,
+    confidence_level: Annotated[
+        float,
+        typer.Option(
+            "--confidence-level",
+            min=0.5,
+            max=0.99,
+            help="Bootstrap confidence level used for median and delta confidence intervals.",
+        ),
+    ] = 0.95,
+    bootstrap_resamples: Annotated[
+        int,
+        typer.Option(
+            "--bootstrap-resamples",
+            min=100,
+            help="Bootstrap and permutation resample count used for confidence intervals and significance estimates.",
+        ),
+    ] = 2000,
+    noise_threshold: Annotated[
+        float,
+        typer.Option(
+            "--noise-threshold",
+            min=0.0,
+            help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs.",
+        ),
+    ] = 0.05,
+    significance_level: Annotated[
+        float,
+        typer.Option(
+            "--significance-level",
+            min=0.001,
+            max=0.5,
+            help="p-value threshold used when classifying regressions and improvements.",
+        ),
+    ] = 0.05,
+    regression_threshold: Annotated[
+        float,
+        typer.Option(
+            "--regression-threshold",
+            min=0.0,
+            help="Practical regression threshold in percent relative to the baseline median.",
+        ),
+    ] = 5.0,
+    database: Annotated[
+        Path | None,
+        typer.Option(
+            "--database",
+            "-d",
+            exists=False,
+            dir_okay=False,
+            help="Path to the BenchCaddy SQLite database.",
+        ),
+    ] = None,
 ) -> None:
     right, strict_keys = _parse_compare_operands(operands, strict)
     database_path = get_database_path(database)
@@ -895,29 +972,88 @@ def compare_command(
     "trend", help="Inspect one suite configuration over time. Uses the explicit baseline when provided, otherwise the pinned suite baseline, otherwise the latest matching run."
 )
 def trend_command(
-    suite_name: str = typer.Argument(..., help="Suite name to inspect as a time-series trend."),
-    baseline: str | None = typer.Option(
-        None,
-        "--baseline",
-        help="Optional baseline run ID to anchor the trend output. If omitted, trend uses the pinned suite baseline when set, otherwise the latest matching run.",
-    ),
-    limit: int | None = typer.Option(None, "--limit", min=1, help="Limit the trend output to the most recent matching runs."),
-    window: int = typer.Option(5, "--window", min=2, help="Rolling window size used for drift analysis."),
-    confidence_level: float = typer.Option(0.95, "--confidence-level", min=0.5, max=0.99, help="Bootstrap confidence level used for median and delta confidence intervals."),
-    bootstrap_resamples: int = typer.Option(
-        2000, "--bootstrap-resamples", min=100, help="Bootstrap and permutation resample count used for confidence intervals and significance estimates."
-    ),
-    noise_threshold: float = typer.Option(0.05, "--noise-threshold", min=0.0, help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs."),
-    significance_level: float = typer.Option(0.05, "--significance-level", min=0.001, max=0.5, help="p-value threshold used when classifying regressions and improvements."),
-    regression_threshold: float = typer.Option(5.0, "--regression-threshold", min=0.0, help="Practical regression threshold in percent relative to the baseline median."),
-    database: Path = typer.Option(
-        None,
-        "--database",
-        "-d",
-        exists=False,
-        dir_okay=False,
-        help="Path to the BenchCaddy SQLite database.",
-    ),
+    suite_name: Annotated[
+        str,
+        typer.Argument(help="Suite name to inspect as a time-series trend."),
+    ],
+    baseline: Annotated[
+        str | None,
+        typer.Option(
+            "--baseline",
+            help=(
+                "Optional baseline run ID to anchor the trend output. If omitted, trend uses "
+                "the pinned suite baseline when set, otherwise the latest matching run."
+            ),
+        ),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            "--limit",
+            min=1,
+            help="Limit the trend output to the most recent matching runs.",
+        ),
+    ] = None,
+    window: Annotated[
+        int,
+        typer.Option(
+            "--window",
+            min=2,
+            help="Rolling window size used for drift analysis.",
+        ),
+    ] = 5,
+    confidence_level: Annotated[
+        float,
+        typer.Option(
+            "--confidence-level",
+            min=0.5,
+            max=0.99,
+            help="Bootstrap confidence level used for median and delta confidence intervals.",
+        ),
+    ] = 0.95,
+    bootstrap_resamples: Annotated[
+        int,
+        typer.Option(
+            "--bootstrap-resamples",
+            min=100,
+            help="Bootstrap and permutation resample count used for confidence intervals and significance estimates.",
+        ),
+    ] = 2000,
+    noise_threshold: Annotated[
+        float,
+        typer.Option(
+            "--noise-threshold",
+            min=0.0,
+            help="Coefficient-of-variation threshold (std/mean) used to flag noisy runs.",
+        ),
+    ] = 0.05,
+    significance_level: Annotated[
+        float,
+        typer.Option(
+            "--significance-level",
+            min=0.001,
+            max=0.5,
+            help="p-value threshold used when classifying regressions and improvements.",
+        ),
+    ] = 0.05,
+    regression_threshold: Annotated[
+        float,
+        typer.Option(
+            "--regression-threshold",
+            min=0.0,
+            help="Practical regression threshold in percent relative to the baseline median.",
+        ),
+    ] = 5.0,
+    database: Annotated[
+        Path | None,
+        typer.Option(
+            "--database",
+            "-d",
+            exists=False,
+            dir_okay=False,
+            help="Path to the BenchCaddy SQLite database.",
+        ),
+    ] = None,
 ) -> None:
     database_path = get_database_path(database)
     baseline_run_id = None
