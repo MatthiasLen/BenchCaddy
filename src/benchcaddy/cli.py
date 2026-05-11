@@ -22,6 +22,7 @@ from .db import (
     list_suite_summaries,
     set_suite_baseline,
 )
+from .isolation import build_reliability_report, collect_environment_state, estimate_noise, get_affinity
 from .observability import summarize_observations
 from .presentation import dump_json, format_return_error, format_return_value, json_panel, render_table, serialize_json, summary_panel
 from .stats import AnalysisOptions
@@ -1364,6 +1365,81 @@ def trend_command(
         return
 
     _print_trend(trend)
+
+
+def _quality_style(level: str) -> str:
+    return "green" if level == "HIGH" else "yellow" if level == "FAIR" else "red"
+
+
+@app.command("check", help="Check the current environment for benchmark reliability issues.")
+def check_command(
+    noise_iterations: Annotated[
+        int,
+        typer.Option(
+            "--noise-iterations",
+            min=2,
+            help="Number of empty timing loops used to estimate measurement jitter.",
+        ),
+    ] = 200,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Emit machine-readable JSON output.",
+        ),
+    ] = False,
+) -> None:
+    env = collect_environment_state()
+    noise = estimate_noise(noise_iterations)
+    report = build_reliability_report(environment=env, noise=noise)
+    affinity = get_affinity()
+
+    if json_output:
+        _emit_json(
+            {
+                "statistical_confidence": report.statistical_confidence,
+                "environmental_quality": report.environmental_quality,
+                "warnings": list(report.warnings),
+                "environment": {
+                    "cpu_load": env.cpu_load,
+                    "on_battery": env.on_battery,
+                    "thermal_throttling": env.thermal_throttling,
+                    "frequency_stable": env.frequency_stable,
+                },
+                "noise": {
+                    "relative_jitter": noise.relative_jitter,
+                    "level": noise.level,
+                },
+                "affinity": affinity,
+            }
+        )
+        return
+
+    stat_style = _quality_style(report.statistical_confidence)
+    env_style = _quality_style(report.environmental_quality)
+    console.print(
+        summary_panel(
+            "Benchmark Reliability",
+            [
+                ("Statistical Confidence", _styled(report.statistical_confidence, stat_style)),
+                ("Environmental Quality", _styled(report.environmental_quality, env_style)),
+                ("Timing Jitter", f"{noise.relative_jitter:.2%} ({noise.level})"),
+                ("CPU Affinity", ", ".join(str(c) for c in affinity) if affinity else "unavailable"),
+                ("CPU Load", f"{env.cpu_load:.0%}" if env.cpu_load is not None else "unavailable"),
+                ("On Battery", "yes" if env.on_battery else "no" if env.on_battery is False else "unknown"),
+                ("Thermal Throttling", "yes" if env.thermal_throttling else "no" if env.thermal_throttling is False else "unknown"),
+                ("Frequency Stable", "yes" if env.frequency_stable else "no" if env.frequency_stable is False else "unknown"),
+            ],
+        )
+    )
+    if report.warnings:
+        console.print(
+            render_table(
+                "Warnings",
+                ["#", "Message"],
+                [(i, msg) for i, msg in enumerate(report.warnings, start=1)],
+            )
+        )
 
 
 main = app
