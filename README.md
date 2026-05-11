@@ -242,6 +242,66 @@ benchcaddy trend nonlinear-transform --limit 8 --window 4
 confidence intervals, compares each run to the baseline, and labels rolling
 drift as stable, noisy, improving, or regressing.
 
+## CI/CD integration
+
+BenchCaddy can support CI-oriented benchmark checks without introducing a
+separate command surface.
+
+Use `compare --json` for machine-readable output:
+
+```bash
+benchcaddy compare nonlinear-transform --json
+benchcaddy compare nonlinear-transform 2.4 --json
+benchcaddy compare 2.3 3 --json
+benchcaddy trend nonlinear-transform --json
+```
+
+Use `compare --fail-if-regression PERCENT` to turn the existing regression
+classification into a CI gate. The supplied percent is used as the practical
+regression threshold for that invocation, so the reported classification and
+the exit condition stay aligned.
+
+```bash
+benchcaddy compare nonlinear-transform --use-baseline --fail-if-regression 5%
+benchcaddy compare 2.3 3 --json --fail-if-regression 5
+```
+
+Exit codes for gated compares:
+
+- `0`: comparison completed and the regression gate passed
+- `1`: requested suite or run could not be resolved
+- `2`: CLI usage error
+- `3`: comparison completed and the regression gate failed
+
+When `--fail-if-regression` is enabled, the JSON payload includes a `gate`
+object with the threshold, pass/fail state, and any failing runs.
+
+Example GitHub Actions job:
+
+```yaml
+jobs:
+    benchmark-gate:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+                with:
+                    python-version: '3.12'
+            - name: Install BenchCaddy
+                run: python -m pip install -e .
+            - name: Record benchmark run
+                run: python examples/benchmark_nonlinear_transform.py --database benchcaddy.db
+            - name: Enforce regression gate
+                run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
+```
+
+For a baseline-driven workflow, pin the reference run once and reuse it in CI:
+
+```bash
+benchcaddy compare nonlinear-transform 2.4 --pin-baseline
+benchcaddy compare nonlinear-transform --use-baseline --json --fail-if-regression 5%
+```
+
 For more detail in the inspection output, add `--verbose`:
 
 ```bash

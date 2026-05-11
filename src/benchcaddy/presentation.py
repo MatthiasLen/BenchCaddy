@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
+from datetime import date, datetime
 from numbers import Real
+from pathlib import Path
 
 from rich.panel import Panel
 from rich.table import Table
@@ -23,6 +26,20 @@ def dump_json(value: object, *, indent: int | None = 0) -> str:
                 lines.append(prefix + str(nested_value))
         return "\n".join(lines)
     return str(value)
+
+
+def _json_default(value: object) -> object:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def serialize_json(value: object, *, indent: int | None = 2) -> str:
+    return json.dumps(value, indent=indent, default=_json_default, sort_keys=True)
 
 
 def format_scientific_number(value: Real) -> str:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,6 @@ from typer.testing import CliRunner
 import benchcaddy.cli as cli_module
 import benchcaddy.core as core_module
 import benchcaddy.db as db_module
-from benchcaddy import Sweep
 from benchcaddy.cli import _suite_row_style, _trend_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 from benchcaddy.presentation import format_return_error, format_return_value
@@ -378,6 +378,7 @@ def test_direct_sweep_persists_and_displays_return_values(
     tmp_path: Path,
     monkeypatch,
     environment_payload: dict[str, object],
+    build_single_sample_sweep,
 ) -> None:
     database_path = tmp_path / "example.db"
     runner = CliRunner()
@@ -387,13 +388,10 @@ def test_direct_sweep_persists_and_displays_return_values(
     def benchmark_target(variant: str) -> float:
         return 10.0 if variant == "baseline" else 13.5
 
-    sweep = Sweep(
+    sweep = build_single_sample_sweep(
         target=benchmark_target,
         params={"variant": ["baseline", "candidate"]},
         suite_name="direct-return-value-suite",
-        samples=1,
-        warmup_iterations=0,
-        lock_cpu_affinity=False,
         database_path=database_path,
         store_target_return_value=True,
     )
@@ -544,6 +542,7 @@ def test_direct_sweep_supports_return_value_types(
     tmp_path: Path,
     monkeypatch,
     environment_payload: dict[str, object],
+    build_single_sample_sweep,
     suite_name: str,
     target,
     expected_return_value: bool | list[float],
@@ -552,13 +551,9 @@ def test_direct_sweep_supports_return_value_types(
 
     _stub_sweep_runtime(monkeypatch, environment_payload)
 
-    Sweep(
+    build_single_sample_sweep(
         target=target,
-        params={},
         suite_name=suite_name,
-        samples=1,
-        warmup_iterations=0,
-        lock_cpu_affinity=False,
         database_path=database_path,
         store_target_return_value=True,
     ).run()
@@ -1027,6 +1022,7 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
 
     show_result = test_runner.invoke(app, ["show", "--help"])
     compare_result = test_runner.invoke(app, ["compare", "--help"])
+    trend_result = test_runner.invoke(app, ["trend", "--help"])
 
     assert show_result.exit_code == 0
     assert "Inspect all recorded runs, a suite, or specific run IDs." in show_result.stdout
@@ -1040,6 +1036,11 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
     assert "direct run-to-run" in compare_result.stdout
     assert "show," in compare_result.stdout
     assert "compare, and trend" in compare_result.stdout
+    assert "--json" in compare_result.stdout
+    assert "--fail-if-regression" in compare_result.stdout
+
+    assert trend_result.exit_code == 0
+    assert "--json" in trend_result.stdout
 
 
 def test_cli_trend_shows_time_series_for_matching_configuration(
@@ -1093,3 +1094,185 @@ def test_cli_trend_shows_time_series_for_matching_configuration(
     assert "2.1" in result.stdout
     assert "3.1" in result.stdout
     assert "4.1" not in result.stdout
+
+
+def test_cli_compare_json_output_reports_direct_regression_gate_failure(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="direct-gate-suite",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="direct-gate-suite",
+        configuration={"variant": "candidate"},
+        samples=[0.129, 0.130, 0.131, 0.130, 0.132, 0.129, 0.131],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "1.1", "2.1", "--json", "--fail-if-regression", "5%", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == cli_module.REGRESSION_EXIT_CODE
+    payload = json.loads(result.stdout)
+    assert payload["comparison_mode"] == "direct"
+    assert payload["comparison_analysis"]["regression_detected"] is True
+    assert payload["gate"]["enabled"] is True
+    assert payload["gate"]["failed"] is True
+    assert payload["gate"]["threshold_percent"] == pytest.approx(5.0)
+    assert payload["gate"]["failing_runs"][0]["display_id"] == "2.1"
+
+
+def test_cli_compare_json_output_reports_direct_gate_pass(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="direct-gate-pass-suite",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="direct-gate-pass-suite",
+        configuration={"variant": "candidate"},
+        samples=[0.101, 0.102, 0.103, 0.102, 0.104, 0.101, 0.103],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "1.1", "2.1", "--json", "--fail-if-regression", "5", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["comparison_mode"] == "direct"
+    assert payload["gate"]["failed"] is False
+    assert payload["gate"]["failing_runs"] == []
+
+
+def test_cli_compare_json_output_reports_suite_regression_gate_failure(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="suite-gate-suite",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="suite-gate-suite",
+        configuration={"variant": "candidate"},
+        samples=[0.129, 0.130, 0.131, 0.130, 0.132, 0.129, 0.131],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "suite-gate-suite", "--json", "--fail-if-regression", "5%", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == cli_module.REGRESSION_EXIT_CODE
+    payload = json.loads(result.stdout)
+    assert payload["comparison_mode"] == "suite"
+    assert payload["basis_run"]["display_id"] == "1.1"
+    assert payload["gate"]["failed"] is True
+    assert payload["gate"]["failing_runs"][0]["display_id"] == "2.1"
+
+
+def test_cli_compare_json_output_includes_baseline_update_when_pinning(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="json-pin-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="json-pin-suite",
+        configuration={"variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "json-pin-suite", "2.1", "--pin-baseline", "--json", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["comparison_mode"] == "suite"
+    assert payload["baseline_update"]["display_id"] == "2.1"
+    assert "Baseline Updated" not in result.stdout
+
+
+def test_cli_trend_json_output_is_machine_readable(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="trend-json-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="trend-json-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="trend-json-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.139, 0.140, 0.141, 0.142, 0.140, 0.139, 0.141],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["trend", "trend-json-suite", "1.1", "--json", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["suite_name"] == "trend-json-suite"
+    assert payload["basis_run"]["display_id"] == "1.1"
+    assert len(payload["runs"]) == 3
+    assert "Trend Basis:" not in result.stdout
