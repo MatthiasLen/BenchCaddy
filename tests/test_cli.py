@@ -426,6 +426,140 @@ def test_direct_sweep_persists_and_displays_return_values(
     assert "1.2" in compare_result.stdout
 
 
+def test_cli_end_to_end_compare_and_trend_json_support_regression_gate(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _stub_sweep_runtime(monkeypatch, environment_payload)
+
+    run_samples = [
+        [0.1090, 0.1100, 0.1110, 0.1105, 0.1095],
+        [0.1020, 0.1010, 0.1030, 0.1025, 0.1015],
+        [0.1060, 0.1070, 0.1050, 0.1065, 0.1055],
+        [0.1120, 0.1110, 0.1130, 0.1125, 0.1115],
+        [0.1000, 0.0990, 0.1010, 0.1005, 0.0995],
+        [0.1140, 0.1150, 0.1130, 0.1145, 0.1135],
+        [0.1180, 0.1170, 0.1190, 0.1185, 0.1175],
+        [0.1210, 0.1200, 0.1220, 0.1215, 0.1205],
+        [0.1250, 0.1240, 0.1260, 0.1255, 0.1245],
+        [0.1290, 0.1280, 0.1300, 0.1295, 0.1285],
+        [0.1330, 0.1320, 0.1340, 0.1335, 0.1325],
+        [0.1370, 0.1360, 0.1380, 0.1375, 0.1365],
+        [0.1410, 0.1400, 0.1420, 0.1415, 0.1405],
+        [0.1450, 0.1440, 0.1460, 0.1455, 0.1445],
+        [0.1490, 0.1480, 0.1500, 0.1495, 0.1485],
+        [0.1530, 0.1520, 0.1540, 0.1535, 0.1525],
+        [0.1600, 0.1590, 0.1610, 0.1605, 0.1595],
+        [0.1680, 0.1670, 0.1690, 0.1685, 0.1675],
+        [0.1810, 0.1800, 0.1820, 0.1815, 0.1805],
+        [0.1950, 0.1940, 0.1960, 0.1955, 0.1945],
+    ]
+
+    perf_counter_values: list[float] = []
+    current_time = 0.0
+    for samples in run_samples:
+        for duration in samples:
+            perf_counter_values.extend([current_time, current_time + duration])
+            current_time += duration + 1.0
+    perf_counter_iter = iter(perf_counter_values)
+    monkeypatch.setattr(core_module, "perf_counter", lambda: next(perf_counter_iter))
+
+    def benchmark_target() -> float:
+        return 42.0
+
+    sweep = core_module.Sweep(
+        target=benchmark_target,
+        params={},
+        suite_name="e2e-json-suite",
+        samples=5,
+        warmup_iterations=0,
+        lock_cpu_affinity=False,
+        database_path=database_path,
+    )
+
+    for _ in range(20):
+        results = sweep.run()
+        assert len(results) == 1
+
+    compare_result = runner.invoke(app, ["compare", "e2e-json-suite", "--database", str(database_path)])
+    assert compare_result.exit_code == 0
+    assert "Comparison: e2e-json-suite" in compare_result.stdout
+    assert "Best" in compare_result.stdout
+
+    compare_json_result = runner.invoke(app, ["compare", "e2e-json-suite", "--json", "--database", str(database_path)])
+    assert compare_json_result.exit_code == 0
+    compare_payload = json.loads(compare_json_result.stdout)
+    assert compare_payload["comparison_mode"] == "suite"
+    assert len(compare_payload["runs"]) == 20
+
+    best_run = compare_payload["basis_run"]
+    trend_result = runner.invoke(app, ["trend", "e2e-json-suite", best_run["display_id"], "--json", "--database", str(database_path)])
+    assert trend_result.exit_code == 0
+    trend_payload = json.loads(trend_result.stdout)
+    assert trend_payload["suite_name"] == "e2e-json-suite"
+    assert trend_payload["basis_run"]["display_id"] == best_run["display_id"]
+    assert len(trend_payload["runs"]) == 20
+
+    trend_runs = trend_payload["runs"]
+    worst_run = max(trend_runs, key=lambda run: (run["median_seconds"], run["id"]))
+    expected_best_run = min(trend_runs, key=lambda run: (run["median_seconds"], run["id"]))
+    assert best_run["display_id"] == expected_best_run["display_id"]
+
+    percent_change = ((worst_run["median_seconds"] - best_run["median_seconds"]) / best_run["median_seconds"]) * 100.0
+    assert percent_change > 0.0
+
+    narrow_gap = 0.01
+    failing_threshold = max(percent_change * 0.98, narrow_gap)
+    passing_threshold = percent_change + narrow_gap
+
+    failing_gate_result = runner.invoke(
+        app,
+        [
+            "compare",
+            best_run["display_id"],
+            worst_run["display_id"],
+            "--json",
+            "--fail-if-regression",
+            f"{failing_threshold:.4f}",
+            "--database",
+            str(database_path),
+        ],
+    )
+
+    assert failing_gate_result.exit_code == cli_module.REGRESSION_EXIT_CODE == 3
+    failing_payload = json.loads(failing_gate_result.stdout)
+    assert failing_payload["comparison_mode"] == "direct"
+    assert failing_payload["candidate"]["display_id"] == worst_run["display_id"]
+    assert failing_payload["comparison_analysis"]["regression_detected"] is True
+    assert failing_payload["gate"]["failed"] is True
+    assert failing_payload["gate"]["failing_runs"][0]["display_id"] == worst_run["display_id"]
+
+    passing_gate_result = runner.invoke(
+        app,
+        [
+            "compare",
+            best_run["display_id"],
+            worst_run["display_id"],
+            "--json",
+            "--fail-if-regression",
+            f"{passing_threshold:.4f}",
+            "--database",
+            str(database_path),
+        ],
+    )
+
+    assert passing_gate_result.exit_code == 0
+    passing_payload = json.loads(passing_gate_result.stdout)
+    assert passing_payload["comparison_mode"] == "direct"
+    assert passing_payload["comparison_analysis"]["regression_detected"] is False
+    assert passing_payload["gate"]["failed"] is False
+    assert passing_payload["gate"]["failing_runs"] == []
+
+
 def test_show_without_arguments_lists_all_runs(
     tmp_path: Path,
     monkeypatch,

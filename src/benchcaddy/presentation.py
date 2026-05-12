@@ -52,6 +52,32 @@ def truncate_table_value(value: str, *, max_length: int = 22) -> str:
     return f"{value[: max_length - 3]}..."
 
 
+def format_time_summary(mean_seconds: float | None, std_seconds: float | None) -> str:
+    mean_value = 0.0 if mean_seconds is None else mean_seconds
+    std_value = 0.0 if std_seconds is None else std_seconds
+    return f"{mean_value:.6f} +- {std_value:.6f}"
+
+
+def format_interval(lower_seconds: float | None, upper_seconds: float | None) -> str:
+    if lower_seconds is None or upper_seconds is None:
+        return "-"
+    return f"[{lower_seconds:.6f}, {upper_seconds:.6f}]"
+
+
+def format_ratio(value: float | None) -> str:
+    return "-" if value is None else f"{value * 100.0:.2f}%"
+
+
+def format_probability(value: float | None) -> str:
+    return "-" if value is None else f"{value * 100.0:.1f}%"
+
+
+def format_warning_list(value: list[str] | tuple[str, ...] | None) -> str:
+    if not value:
+        return "-"
+    return ", ".join(str(item).replace("_", " ") for item in value)
+
+
 def format_return_value(value: object, *, compact: bool = False) -> str:
     if value is None:
         return "-"
