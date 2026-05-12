@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Callable
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -557,11 +558,7 @@ def _trend_row(run: dict[str, object], *, verbose: bool) -> tuple[object, ...]:
 
 
 def _trend_warning_rows(runs: list[dict[str, object]]) -> list[tuple[object, object]]:
-    return [
-        (run["display_id"], format_warning_list(warnings))
-        for run in runs
-        if (warnings := _trend_run_warnings(run))
-    ]
+    return [(run["display_id"], format_warning_list(warnings)) for run in runs if (warnings := _trend_run_warnings(run))]
 
 
 def _suite_findings_panel(comparison: dict[str, object]) -> Panel:
@@ -1061,9 +1058,13 @@ def show_command(
     database: DatabaseOption = None,
 ) -> None:
     database_path = get_database_path(database)
-    analysis_options = None if skip_stats else _analysis_options(
-        confidence_level=confidence_level,
-        bootstrap_resamples=bootstrap_resamples,
+    analysis_options = (
+        None
+        if skip_stats
+        else _analysis_options(
+            confidence_level=confidence_level,
+            bootstrap_resamples=bootstrap_resamples,
+        )
     )
 
     if not identifiers:
