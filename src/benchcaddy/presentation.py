@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Sequence
+from datetime import date, datetime
 from numbers import Real
+from pathlib import Path
 
 from rich.panel import Panel
 from rich.table import Table
@@ -25,6 +28,20 @@ def dump_json(value: object, *, indent: int | None = 0) -> str:
     return str(value)
 
 
+def _json_default(value: object) -> object:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def serialize_json(value: object, *, indent: int | None = 2) -> str:
+    return json.dumps(value, indent=indent, default=_json_default, sort_keys=True)
+
+
 def format_scientific_number(value: Real) -> str:
     return f"{float(value):.6e}"
 
@@ -33,6 +50,32 @@ def truncate_table_value(value: str, *, max_length: int = 22) -> str:
     if len(value) <= max_length:
         return value
     return f"{value[: max_length - 3]}..."
+
+
+def format_time_summary(mean_seconds: float | None, std_seconds: float | None) -> str:
+    mean_value = 0.0 if mean_seconds is None else mean_seconds
+    std_value = 0.0 if std_seconds is None else std_seconds
+    return f"{mean_value:.6f} +- {std_value:.6f}"
+
+
+def format_interval(lower_seconds: float | None, upper_seconds: float | None) -> str:
+    if lower_seconds is None or upper_seconds is None:
+        return "-"
+    return f"[{lower_seconds:.6f}, {upper_seconds:.6f}]"
+
+
+def format_ratio(value: float | None) -> str:
+    return "-" if value is None else f"{value * 100.0:.2f}%"
+
+
+def format_probability(value: float | None) -> str:
+    return "-" if value is None else f"{value * 100.0:.1f}%"
+
+
+def format_warning_list(value: list[str] | tuple[str, ...] | None) -> str:
+    if not value:
+        return "-"
+    return ", ".join(str(item).replace("_", " ") for item in value)
 
 
 def format_return_value(value: object, *, compact: bool = False) -> str:

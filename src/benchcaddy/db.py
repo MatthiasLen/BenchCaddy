@@ -318,9 +318,7 @@ def _resolve_suite_baseline_run(session: Session, suite: BenchmarkSuite) -> Benc
 def _list_suite_runs(session: Session, suite_id: int) -> list[BenchmarkRun]:
     return (
         session.execute(
-            select(BenchmarkRun)
-            .where(BenchmarkRun.suite_id == suite_id)
-            .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
+            select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
         )
         .scalars()
         .all()

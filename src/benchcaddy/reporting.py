@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
 
 class SweepReporter(Protocol):
+    """Defines the progress callback contract emitted during a benchmark sweep."""
+
     def on_sweep_started(
         self,
         *,
@@ -58,6 +60,8 @@ class SweepReporter(Protocol):
 
 
 class RichSweepReporter:
+    """Renders sweep progress and summary events to a Rich console."""
+
     def __init__(self, console: Console | None = None) -> None:
         self.console = console or Console()
 
