@@ -122,13 +122,13 @@ from benchcaddy import Sweep
 
 
 Sweep(
-    target="./train_step.py",
+    target="./workload.py",
     params={
         "size": [512, 2048],
         "variant": ["baseline", "stabilized"],
         "use_cache": [True, False],
     },
-    suite_name="train-step",
+    suite_name="workload",
     samples=5,
 ).run()
 ```
