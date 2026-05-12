@@ -1,3 +1,12 @@
+"""Statistical analysis for benchmark samples and run comparisons.
+
+This module should encapsulate descriptive statistics, bootstrap-based
+confidence intervals, noise heuristics, and pairwise comparison logic for
+benchmark sample sets. Statistical policy belongs here so callers can use
+one consistent analysis model across storage, CLI inspection, and trend
+reporting.
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass

@@ -1,3 +1,11 @@
+"""Runtime metadata collection for benchmark provenance.
+
+This module should encapsulate the host, process, and repository metadata
+that gets attached to benchmark runs so results can be interpreted in
+context. It should gather descriptive provenance signals, not benchmark
+statistics or environment reliability judgments.
+"""
+
 from __future__ import annotations
 
 import platform

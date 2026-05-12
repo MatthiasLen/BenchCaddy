@@ -1,9 +1,9 @@
-"""Measurement noise estimation.
+"""Timing-noise estimation for the current host.
 
-Run a series of empty timing loops to characterise the baseline jitter
-introduced by the scheduler, timer resolution, and other system-level
-sources of noise.  The result is a simple :class:`NoiseEstimate` that
-classifies noise as *low*, *moderate*, or *high*.
+This module should encapsulate quick, benchmark-adjacent probes that
+estimate baseline timing jitter introduced by the runtime and operating
+system. It should stay focused on producing simple noise classifications
+that can inform result interpretation and reliability reporting.
 """
 
 from __future__ import annotations

@@ -1,3 +1,11 @@
+"""Public package surface for BenchCaddy.
+
+This module should encapsulate the stable, user-facing imports that make
+up the primary BenchCaddy API. Re-exports that belong in the default
+package namespace should stay here, while internal helpers should remain
+in their implementation modules.
+"""
+
 from .core import Sweep
 from .isolation import (
     EnvironmentState,

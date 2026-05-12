@@ -1,8 +1,9 @@
 """Lightweight environment signal collection.
 
-This module *observes* the system state — it does not attempt to
-control or modify it.  The resulting :class:`EnvironmentState` is used
-by :mod:`benchcaddy.isolation.report` to generate reliability warnings.
+This module should encapsulate read-only system signals that affect the
+trustworthiness of benchmark results, such as background CPU load,
+battery state, thermal pressure, and frequency scaling. It should gather
+environment state snapshots, not apply machine-level controls.
 """
 
 from __future__ import annotations
