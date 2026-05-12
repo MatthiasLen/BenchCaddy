@@ -32,7 +32,7 @@ from .db import (
     list_suite_summaries,
     set_suite_baseline,
 )
-from .isolation import build_reliability_report, collect_environment_state, estimate_noise, get_affinity
+from .isolation import build_reliability_report, collect_environment_state, estimate_noise_consensus, get_affinity
 from .observability import summarize_observations
 from .presentation import (
     dump_json,
@@ -1364,7 +1364,7 @@ def check_command(
         typer.Option(
             "--noise-iterations",
             min=2,
-            help="Number of empty timing loops used to estimate measurement jitter.",
+            help="Number of short calibrated probe loops used to estimate measurement jitter.",
         ),
     ] = 200,
     json_output: Annotated[
@@ -1376,7 +1376,7 @@ def check_command(
     ] = False,
 ) -> None:
     env = collect_environment_state()
-    noise = estimate_noise(noise_iterations)
+    noise = estimate_noise_consensus(noise_iterations)
     report = build_reliability_report(environment=env, noise=noise)
     affinity = get_affinity()
 
@@ -1395,6 +1395,14 @@ def check_command(
                 "noise": {
                     "relative_jitter": noise.relative_jitter,
                     "level": noise.level,
+                    "robust_jitter": noise.robust_jitter,
+                    "tail_jitter": noise.tail_jitter,
+                    "median_sample_seconds": noise.median_sample_seconds,
+                    "iteration_count": noise.iteration_count,
+                    "repeat_count": noise.repeat_count,
+                    "ci_lower": noise.ci_lower,
+                    "ci_upper": noise.ci_upper,
+                    "relative_margin_of_error": noise.relative_margin_of_error,
                 },
                 "affinity": affinity,
             }
@@ -1410,6 +1418,21 @@ def check_command(
                 ("Statistical Confidence", _styled(report.statistical_confidence, stat_style)),
                 ("Environmental Quality", _styled(report.environmental_quality, env_style)),
                 ("Timing Jitter", f"{noise.relative_jitter:.2%} ({noise.level})"),
+                ("Robust Jitter", format_ratio(noise.robust_jitter)),
+                ("Tail Jitter (p95)", format_ratio(noise.tail_jitter)),
+                (
+                    "Jitter 95% CI",
+                    format_interval(noise.ci_lower, noise.ci_upper),
+                ),
+                (
+                    "95% Relative Margin",
+                    format_ratio(noise.relative_margin_of_error),
+                ),
+                (
+                    "Median Probe",
+                    f"{noise.median_sample_seconds * 1_000_000:.0f} us" if noise.median_sample_seconds is not None else "unavailable",
+                ),
+                ("Probe Samples", f"{noise.repeat_count} x {noise.iteration_count}" if noise.iteration_count else "unavailable"),
                 ("CPU Affinity", ", ".join(str(c) for c in affinity) if affinity else "unavailable"),
                 ("CPU Load", f"{env.cpu_load:.0%}" if env.cpu_load is not None else "unavailable"),
                 ("On Battery", "yes" if env.on_battery else "no" if env.on_battery is False else "unknown"),

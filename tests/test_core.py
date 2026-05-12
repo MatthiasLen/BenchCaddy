@@ -8,6 +8,7 @@ import pytest
 from rich.console import Console
 
 import benchcaddy.core as core_module
+import benchcaddy.isolation.process as isolation_process_module
 import benchcaddy.observability as observability_module
 from benchcaddy import Sweep, observe
 from benchcaddy.db import (
@@ -657,11 +658,11 @@ def test_prepare_system_keeps_current_affinity_set(monkeypatch) -> None:
     def process_factory() -> DummyProcess:
         return DummyProcess()
 
-    monkeypatch.setattr(core_module.psutil, "Process", process_factory)
-    monkeypatch.setattr(core_module.gc, "collect", lambda: None)
-    monkeypatch.setattr(core_module.gc, "freeze", lambda: None)
-    monkeypatch.setattr(core_module.os, "name", "nt")
-    monkeypatch.setattr(core_module.psutil, "HIGH_PRIORITY_CLASS", 128, raising=False)
+    monkeypatch.setattr(isolation_process_module.psutil, "Process", process_factory)
+    monkeypatch.setattr(isolation_process_module.gc, "collect", lambda: None)
+    monkeypatch.setattr(isolation_process_module.gc, "freeze", lambda: None)
+    monkeypatch.setattr(isolation_process_module.os, "name", "nt")
+    monkeypatch.setattr(isolation_process_module.psutil, "HIGH_PRIORITY_CLASS", 128, raising=False)
 
     core_module.prepare_system(lock_cpu_affinity=True)
 
@@ -681,11 +682,11 @@ def test_prepare_system_skips_affinity_refresh_when_disabled(monkeypatch) -> Non
             affinity_set_calls.append(list(cpus))
             return list(cpus)
 
-    monkeypatch.setattr(core_module.psutil, "Process", lambda: DummyProcess())
-    monkeypatch.setattr(core_module.gc, "collect", lambda: None)
-    monkeypatch.setattr(core_module.gc, "freeze", lambda: None)
-    monkeypatch.setattr(core_module.os, "name", "nt")
-    monkeypatch.setattr(core_module.psutil, "HIGH_PRIORITY_CLASS", 128, raising=False)
+    monkeypatch.setattr(isolation_process_module.psutil, "Process", DummyProcess)
+    monkeypatch.setattr(isolation_process_module.gc, "collect", lambda: None)
+    monkeypatch.setattr(isolation_process_module.gc, "freeze", lambda: None)
+    monkeypatch.setattr(isolation_process_module.os, "name", "nt")
+    monkeypatch.setattr(isolation_process_module.psutil, "HIGH_PRIORITY_CLASS", 128, raising=False)
 
     core_module.prepare_system(lock_cpu_affinity=False)
 
