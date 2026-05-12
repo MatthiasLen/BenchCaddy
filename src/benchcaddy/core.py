@@ -1,3 +1,17 @@
+"""Benchmark sweep execution engine.
+
+This module should encapsulate the mechanics of running benchmark suites:
+expanding parameter grids, invoking targets, collecting samples and
+observations, normalizing optional return values, and persisting run
+results. It is the operational core of BenchCaddy and should avoid
+taking on presentation or long-term storage responsibilities beyond the
+minimal coordination needed to record completed runs.
+
+TODO: Move process-preparation and isolation-specific concerns into the
+``benchcaddy.isolation`` package so this module can focus on sweep
+execution rather than environment control.
+"""
+
 from __future__ import annotations
 
 import gc

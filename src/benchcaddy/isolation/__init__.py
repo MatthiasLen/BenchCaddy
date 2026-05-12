@@ -1,23 +1,10 @@
-"""benchcaddy.isolation — practical benchmark environment awareness.
+"""Benchmark isolation and environment-reliability utilities.
 
-This package provides lightweight, portable utilities for detecting
-unreliable benchmark environments.  It deliberately avoids complex
-isolation mechanisms (cgroups, NUMA, turbo-boost control) in favour of
-simple observation and clear reporting.
-
-Public API
-----------
-.. autosummary::
-
-   set_affinity
-   get_affinity
-   EnvironmentState
-   collect_environment_state
-   NoiseEstimate
-   estimate_noise
-   ReliabilityReport
-   build_reliability_report
-   run_isolated
+This package should encapsulate the optional controls and diagnostics
+that help BenchCaddy run in a cleaner measurement environment. Affinity
+management, lightweight environment inspection, noise estimation,
+reliability reporting, and subprocess isolation belong here as a cohesive
+support layer around the core sweep engine.
 """
 
 from .affinity import get_affinity, set_affinity

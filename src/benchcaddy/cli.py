@@ -1,3 +1,12 @@
+"""Command-line interface for inspecting BenchCaddy benchmark data.
+
+This module should encapsulate CLI concerns: command registration,
+argument validation, orchestration of application services, and terminal
+output wiring. Benchmark execution, persistence, formatting primitives,
+and statistical calculations should stay in their dedicated modules and
+only be coordinated from here.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

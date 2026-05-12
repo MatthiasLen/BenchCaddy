@@ -1,3 +1,15 @@
+"""SQLite persistence and query layer for BenchCaddy.
+
+This module should encapsulate the database schema, engine lifecycle, and
+high-level read/write helpers used by the rest of the package. It is the
+single place that should understand how benchmark runs, environments,
+sweeps, and derived comparison payloads are stored and retrieved.
+
+TODO: Split ORM model definitions from query/serialization helpers once
+the persistence surface grows further; this file currently hosts both
+schema declarations and application-facing data access logic.
+"""
+
 from __future__ import annotations
 
 import threading

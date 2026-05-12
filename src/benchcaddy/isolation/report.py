@@ -1,9 +1,9 @@
-"""Benchmark reliability reporting.
+"""Reliability reporting for isolation diagnostics.
 
-Combine an :class:`~benchcaddy.isolation.environment.EnvironmentState`
-and a :class:`~benchcaddy.isolation.noise.NoiseEstimate` into a
-human-readable :class:`ReliabilityReport` that surfaces actionable
-warnings without overstating what BenchCaddy can guarantee.
+This module should encapsulate the policy that turns raw isolation
+signals into human-readable reliability judgments and warnings. It is
+where environment state and noise estimates are combined into a concise,
+actionable report for users.
 """
 
 from __future__ import annotations

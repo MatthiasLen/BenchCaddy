@@ -1,9 +1,9 @@
-"""CPU affinity management.
+"""CPU affinity helpers for benchmark process placement.
 
-Pin the current process to specific CPU cores when supported, and
-detect the current affinity set.  Both operations fail gracefully on
-platforms that do not expose the API (e.g. macOS, Windows without
-admin, some container environments).
+This module should encapsulate the small, platform-tolerant helpers that
+read or set the current process affinity mask. It should remain narrowly
+focused on CPU placement rather than broader process lifecycle or system
+inspection logic.
 """
 
 from __future__ import annotations

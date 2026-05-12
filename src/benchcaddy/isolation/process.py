@@ -1,9 +1,9 @@
-"""Run a callable in an isolated subprocess.
+"""Subprocess-based execution isolation.
 
-Executing benchmarks in a freshly-spawned process eliminates
-interpreter warm-up effects, module-level side effects, and GC state
-inherited from the host process — providing cleaner, more reproducible
-measurements.
+This module should encapsulate the mechanics for running benchmarkable
+callables in a fresh Python process when the caller wants to avoid
+interpreter state leakage. Process spawning, timeout handling, and child
+result propagation belong here.
 """
 
 from __future__ import annotations
