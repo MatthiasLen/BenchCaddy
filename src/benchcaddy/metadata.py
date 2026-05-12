@@ -18,6 +18,8 @@ import psutil
 from git import Repo
 from git.exc import GitError
 
+from .isolation.process import ProcessState, collect_process_state
+
 _COMMAND_TIMEOUT_SECONDS = 2
 
 
@@ -26,14 +28,6 @@ class GitState:
     branch: str | None
     commit_hash: str | None
     dirty: bool | None
-
-
-@dataclass
-class ProcessState:
-    pid: int
-    priority: int | str | None
-    affinity: list[int]
-    rss_bytes: int | None
 
 
 @dataclass
@@ -148,29 +142,6 @@ def collect_git_state(cwd: Path | None = None) -> GitState:
         branch=_read_git_branch(repo),
         commit_hash=commit_hash,
         dirty=_read_git_dirty(repo),
-    )
-
-
-def collect_process_state() -> ProcessState:
-    process = psutil.Process()
-    try:
-        affinity = list(process.cpu_affinity())
-    except (psutil.AccessDenied, NotImplementedError, AttributeError):
-        affinity = []
-    try:
-        priority = process.nice()
-    except (psutil.AccessDenied, AttributeError):
-        priority = None
-    try:
-        rss_bytes = process.memory_info().rss
-    except (psutil.AccessDenied, AttributeError, OSError):
-        rss_bytes = None
-
-    return ProcessState(
-        pid=process.pid,
-        priority=priority,
-        affinity=affinity,
-        rss_bytes=rss_bytes,
     )
 
 
