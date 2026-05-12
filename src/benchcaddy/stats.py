@@ -280,11 +280,7 @@ def _comparison_classification(
 ) -> tuple[bool, bool, bool, str]:
     statistically_significant = bool(significance_p_value <= options.significance_level)
     exceeds_practical_threshold = bool(delta_seconds >= practical_threshold_seconds)
-    regression_detected = bool(
-        statistically_significant
-        and exceeds_practical_threshold
-        and regression_probability >= 1.0 - options.significance_level
-    )
+    regression_detected = bool(statistically_significant and exceeds_practical_threshold and regression_probability >= 1.0 - options.significance_level)
 
     if regression_detected:
         classification = "regressing"
