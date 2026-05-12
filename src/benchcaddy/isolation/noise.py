@@ -17,9 +17,9 @@ worse of those two views.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from math import exp, log
 from random import Random
-from dataclasses import dataclass
 from statistics import median
 from time import get_clock_info, perf_counter
 
