@@ -14,6 +14,7 @@ import multiprocessing.connection
 import os
 import traceback
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -135,8 +136,8 @@ def _worker(
 
     try:
         conn.send((True, fn(*args, **kwargs)))
-    except BaseException as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-        try:
+    except Exception as exc:
+        with suppress(BrokenPipeError, EOFError, OSError):
             conn.send(
                 (
                     False,
@@ -147,8 +148,6 @@ def _worker(
                     },
                 )
             )
-        except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-            pass
     finally:
         conn.close()
 
