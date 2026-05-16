@@ -18,7 +18,6 @@ from benchcaddy.isolation import (
     ReliabilityReport,
     build_reliability_report,
     collect_environment_state,
-    estimate_noise,
     get_affinity,
     run_isolated,
     set_affinity,
@@ -179,22 +178,22 @@ class TestNoiseEstimate:
 
 class TestEstimateNoise:
     def test_returns_noise_estimate(self):
-        result = estimate_noise(iterations=10)
+        result = NoiseAnalyzer().analyze(iterations=10)
         assert isinstance(result, NoiseEstimate)
 
     def test_level_is_valid(self):
-        result = estimate_noise(iterations=10)
+        result = NoiseAnalyzer().analyze(iterations=10)
         assert result.noise_level in {"low", "moderate", "high"}
         assert result.drift_level in {"low", "moderate", "high"}
 
     def test_relative_jitter_non_negative(self):
-        result = estimate_noise(iterations=10)
+        result = NoiseAnalyzer().analyze(iterations=10)
         assert result.relative_jitter >= 0.0
         assert result.relative_drift >= 0.0
 
     def test_raises_on_fewer_than_two_iterations(self):
         with pytest.raises(ValueError, match="iterations must be at least 2"):
-            estimate_noise(iterations=1)
+            NoiseAnalyzer().analyze(iterations=1)
 
 def _capture(*durations: float) -> NoiseCapture:
     return NoiseCapture(

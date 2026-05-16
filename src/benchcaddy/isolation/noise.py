@@ -22,7 +22,7 @@ _RESOLUTION_MULTIPLIER = 200
 _INITIAL_WORK_UNITS = 32
 _MAX_WORK_UNITS = 1 << 20
 _CALIBRATION_REPEATS = 5
-_WARMUP_ITERATIONS = 5
+_WARMUP_ITERATIONS = 20
 
 # Classification policy.
 _LOW_THRESHOLD = 0.05
@@ -144,8 +144,3 @@ class NoiseAnalyzer:
     ) -> NoiseEstimate:
         """Run capture and statistics end to end."""
         return self.estimate_statistics(self.capture(iterations=iterations))
-
-
-def estimate_noise(iterations: int = _DEFAULT_ITERATIONS) -> NoiseEstimate:
-    """Estimate timing noise from a single calibrated probe run."""
-    return NoiseAnalyzer().analyze(iterations=iterations)
