@@ -9,12 +9,14 @@ support layer around the core sweep engine.
 
 from .affinity import get_affinity, set_affinity
 from .environment import EnvironmentState, collect_environment_state
-from .noise import NoiseEstimate, estimate_noise, estimate_noise_consensus
+from .noise import NoiseAnalyzer, NoiseCapture, NoiseEstimate, estimate_noise
 from .process import ProcessState, collect_process_state, prepare_system, run_isolated
 from .report import ReliabilityReport, build_reliability_report
 
 __all__ = [
     "EnvironmentState",
+    "NoiseAnalyzer",
+    "NoiseCapture",
     "NoiseEstimate",
     "ProcessState",
     "ReliabilityReport",
@@ -22,7 +24,6 @@ __all__ = [
     "collect_environment_state",
     "collect_process_state",
     "estimate_noise",
-    "estimate_noise_consensus",
     "get_affinity",
     "prepare_system",
     "run_isolated",
