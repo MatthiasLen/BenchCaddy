@@ -67,7 +67,6 @@ class Sweep:
     warmup_runs: int | None = None
     lock_cpu_affinity: bool = True
     database_path: str | Path | None = None
-    sync: Callable[[], None] | None = None
     store_target_return_value: bool = False
     return_value_postprocessor: Callable[[Any], Any] | None = None
     verbose: bool = False
@@ -97,12 +96,6 @@ class Sweep:
         param_values = [list(values) for values in self.params.values()]
         return [dict(zip(param_names, combination, strict=True)) for combination in product(*param_values)]
 
-    def _sync_if_needed(self, result: Any) -> None:
-        if self.sync is not None:
-            self.sync()
-        elif callable(synchronize := getattr(result, "synchronize", None)):
-            synchronize()
-
     def _invoke_target(self, configuration: Mapping[str, Any]) -> Any:
         return self.target(**configuration)
 
@@ -117,7 +110,6 @@ class Sweep:
         with collect_observations() as collector:
             start = perf_counter()
             result = self._invoke_target(configuration)
-            self._sync_if_needed(result)
             elapsed = perf_counter() - start
             stored_return_value = self._prepare_return_value(result)
 
@@ -131,7 +123,7 @@ class Sweep:
         )
         return elapsed, {"sample": sample_index, "records": collector.records}, stored_return_value
 
-    def run(self, sync: Callable[[], None] | None = None) -> list[BenchmarkResult]:
+    def run(self) -> list[BenchmarkResult]:
         prepare_system(lock_cpu_affinity=self.lock_cpu_affinity)
         environment = metadata_to_dict(collect_environment_metadata())
         configurations = self._configurations()
@@ -139,9 +131,6 @@ class Sweep:
         results: list[BenchmarkResult] = []
         sample_count = self.iterations if self.iterations is not None else self.samples
         warmup_count = self.warmup_runs if self.warmup_runs is not None else self.warmup_iterations
-
-        if sync is not None:
-            self.sync = sync
 
         _report(
             reporter,
@@ -169,7 +158,7 @@ class Sweep:
             )
 
             for _ in range(warmup_count):
-                self._sync_if_needed(self._invoke_target(configuration))
+                self._invoke_target(configuration)
 
             samples: list[float] = []
             observations: list[dict[str, Any]] = []

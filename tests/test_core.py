@@ -620,7 +620,7 @@ def test_prepare_system_skips_affinity_refresh_when_disabled(monkeypatch) -> Non
     assert affinity_set_calls == []
 
 
-def test_run_sample_measures_target_and_sync_with_gc_outside_timing(monkeypatch) -> None:
+def test_run_sample_measures_target_with_gc_outside_timing(monkeypatch) -> None:
     events: list[str] = []
     timer_values = iter([10.0, 10.125])
     sweep = Sweep(target=lambda: None, params={}, suite_name="timing-boundary-suite", warmup_iterations=0)
@@ -628,17 +628,16 @@ def test_run_sample_measures_target_and_sync_with_gc_outside_timing(monkeypatch)
     monkeypatch.setattr(core_module.gc, "collect", lambda: events.append("gc"))
     monkeypatch.setattr(core_module, "perf_counter", lambda: events.append("timer") or next(timer_values))
     monkeypatch.setattr(sweep, "_invoke_target", lambda configuration: events.append("target") or object())
-    sweep.sync = lambda: events.append("sync")
 
     elapsed, observation, stored_return_value = sweep._run_sample({}, None, 1, 1)
 
-    assert events == ["gc", "timer", "target", "sync", "timer"]
+    assert events == ["gc", "timer", "target", "timer"]
     assert elapsed == pytest.approx(0.125)
     assert observation == {"sample": 1, "records": []}
     assert stored_return_value is None
 
 
-def test_run_sample_uses_result_synchronize_when_sync_callback_is_absent(monkeypatch) -> None:
+def test_run_sample_does_not_use_result_synchronize(monkeypatch) -> None:
     events: list[str] = []
     timer_values = iter([20.0, 20.05])
     sweep = Sweep(target=lambda: None, params={}, suite_name="result-sync-suite", warmup_iterations=0)
@@ -653,7 +652,7 @@ def test_run_sample_uses_result_synchronize_when_sync_callback_is_absent(monkeyp
 
     elapsed, observation, stored_return_value = sweep._run_sample({}, None, 1, 1)
 
-    assert events == ["gc", "timer", "target", "result-sync", "timer"]
+    assert events == ["gc", "timer", "target", "timer"]
     assert elapsed == pytest.approx(0.05)
     assert observation == {"sample": 1, "records": []}
     assert stored_return_value is None
@@ -738,7 +737,6 @@ def test_sweep_warmup_calls_are_not_persisted_as_samples(
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
     monkeypatch.setattr(sweep, "_invoke_target", lambda configuration: events.append("warmup-target") or object())
-    monkeypatch.setattr(sweep, "_sync_if_needed", lambda result: events.append("warmup-sync"))
     monkeypatch.setattr(
         sweep,
         "_run_sample",
@@ -748,7 +746,7 @@ def test_sweep_warmup_calls_are_not_persisted_as_samples(
     results = sweep.run()
     run = get_run_details((1, 1), database_path)
 
-    assert events == ["warmup-target", "warmup-sync", "warmup-target", "warmup-sync", "sample-1", "sample-2"]
+    assert events == ["warmup-target", "warmup-target", "sample-1", "sample-2"]
     assert len(results) == 1
     assert results[0].samples == [0.21, 0.19]
     assert results[0].target_return_value == pytest.approx(11.0)
@@ -1079,7 +1077,6 @@ def test_run_prefers_iterations_and_warmup_runs_over_default_counts(
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
     monkeypatch.setattr(sweep, "_invoke_target", lambda configuration: events.append("warmup-target") or object())
-    monkeypatch.setattr(sweep, "_sync_if_needed", lambda result: events.append("warmup-sync"))
     monkeypatch.setattr(
         sweep,
         "_run_sample",
@@ -1088,12 +1085,12 @@ def test_run_prefers_iterations_and_warmup_runs_over_default_counts(
 
     results = sweep.run()
 
-    assert events == ["warmup-target", "warmup-sync", "sample-1-of-2", "sample-2-of-2"]
+    assert events == ["warmup-target", "sample-1-of-2", "sample-2-of-2"]
     assert len(results) == 1
     assert results[0].samples == [0.11, 0.12]
 
 
-def test_run_sync_argument_overrides_result_synchronize(
+def test_run_ignores_result_synchronize_behavior(
     tmp_path: Path,
     monkeypatch,
     environment_payload: dict[str, object],
@@ -1122,11 +1119,10 @@ def test_run_sync_argument_overrides_result_synchronize(
         warmup_iterations=0,
         lock_cpu_affinity=False,
         database_path=database_path,
-    ).run(sync=lambda: events.append("explicit-sync"))
+    ).run()
 
     assert len(results) == 1
-    assert events.count("explicit-sync") == 1
-    assert "result-sync" not in events
+    assert events == ["target"]
 
 
 def test_sweep_does_not_persist_partial_run_when_sample_fails(

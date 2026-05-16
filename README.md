@@ -106,12 +106,21 @@ The main public `Sweep(...)` options are:
 - `warmup_runs`: alias for `warmup_iterations`
 - `database_path`: store results in a specific SQLite file instead of `./benchcaddy.db`
 - `lock_cpu_affinity`: preserve the current CPU affinity set before benchmarking
-- `sync`: callable used to synchronize async device work after each invocation
 - `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`, or 1D numeric vectors from list/tuple/numpy arrays)
 - `return_value_postprocessor`: map complex target return values to a supported type before storage
   - when multiple samples are collected, the first measured sample return value is stored for the run
 - `reporter`: custom reporter implementing the `SweepReporter` protocol
 - `verbose=True`: use the built-in Rich reporter during execution
+
+## Benchmark target contract
+
+A benchmark target must be synchronous from BenchCaddy's perspective: it should
+return only after the measured work is complete.
+
+If your workload schedules asynchronous device or background work, make the
+target wait for completion before it returns. For example, GPU benchmarks should
+perform any required device synchronization inside the benchmarked function so
+that BenchCaddy measures the full workload rather than only the launch overhead.
 
 ## Script targets
 
