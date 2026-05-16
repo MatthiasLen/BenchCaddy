@@ -29,6 +29,15 @@ _LOW_THRESHOLD = 0.05
 _MODERATE_THRESHOLD = 0.20
 
 
+def _classify_relative_level(value: float) -> str:
+    """Classify a relative noise or drift value as low, moderate, or high."""
+    if value < _LOW_THRESHOLD:
+        return "low"
+    if value < _MODERATE_THRESHOLD:
+        return "moderate"
+    return "high"
+
+
 @dataclass(frozen=True)
 class NoiseEstimate:
     """Characterisation of timing noise measured on the current host."""
@@ -109,25 +118,14 @@ class NoiseAnalyzer:
             relative_drift = 0.0
             sample_median = 0.0
         else:
-            relative_jitter, _ = robust_relative_jitter(capture.durations, center=sample_median)
+            relative_jitter, _ = robust_relative_jitter(capture.durations)
             quarter = max(1, len(capture.durations) // 4)
             first_quarter_median = float(median(capture.durations[:quarter]))
             last_quarter_median = float(median(capture.durations[-quarter:]))
             relative_drift = abs(last_quarter_median - first_quarter_median) / sample_median
 
-        if relative_jitter < _LOW_THRESHOLD:
-            noise_level = "low"
-        elif relative_jitter < _MODERATE_THRESHOLD:
-            noise_level = "moderate"
-        else:
-            noise_level = "high"
-
-        if relative_drift < _LOW_THRESHOLD:
-            drift_level = "low"
-        elif relative_drift < _MODERATE_THRESHOLD:
-            drift_level = "moderate"
-        else:
-            drift_level = "high"
+        noise_level = _classify_relative_level(relative_jitter)
+        drift_level = _classify_relative_level(relative_drift)
 
         return NoiseEstimate(
             relative_jitter=relative_jitter,
