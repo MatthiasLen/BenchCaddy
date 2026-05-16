@@ -214,7 +214,7 @@ def build_reliability_report(
         :func:`~benchcaddy.isolation.environment.collect_environment_state`.
     noise:
         A :class:`~benchcaddy.isolation.noise.NoiseEstimate` collected
-        via :func:`~benchcaddy.isolation.noise.estimate_noise`.
+        via :class:`~benchcaddy.isolation.noise.NoiseAnalyzer`.
     """
     warnings = _collect_warnings(environment, noise)
     environmental_quality = _environmental_quality(environment, noise)

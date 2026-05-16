@@ -101,6 +101,7 @@ def robust_relative_jitter(
     center: float | None = None,
     scale_factor: float = 1.4826,
 ) -> tuple[float, float]:
+    """Returns MAD over median as a robust relative jitter estimate, along with the median value used."""
     values_array = np.asarray(values, dtype=float)
     median_value = float(np.median(values_array)) if center is None else center
     if median_value <= 0.0:

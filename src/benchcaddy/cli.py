@@ -32,7 +32,7 @@ from .db import (
     list_suite_summaries,
     set_suite_baseline,
 )
-from .isolation import build_reliability_report, collect_environment_state, estimate_noise, get_affinity
+from .isolation import NoiseAnalyzer, build_reliability_report, collect_environment_state, get_affinity
 from .observability import summarize_observations
 from .presentation import (
     dump_json,
@@ -1376,7 +1376,7 @@ def check_command(
     ] = False,
 ) -> None:
     env = collect_environment_state()
-    noise = estimate_noise(noise_iterations)
+    noise = NoiseAnalyzer().analyze(iterations=noise_iterations)
     report = build_reliability_report(environment=env, noise=noise)
     affinity = get_affinity()
 
