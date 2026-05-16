@@ -3,9 +3,8 @@
 ## Code Style
 
 - Prefer lean Python code with clear local flow over extra abstraction.
-- Do not introduce helper functions that have one call site and add little semantic value.
 - Avoid deep call stacks and multiple layers of indirection.
-- Do not add few-line wrappers around stdlib or NumPy calls unless they enforce reusable policy used in multiple places.
+- Do not introduce helper functions that have one call site and add little semantic value. Do not add "shallow" few-line wrappers.
 - Avoid temporary internal dataclasses, tuples, or helper objects whose only job is to shuttle a few computed values to one consumer.
 - Keep changes minimal and targeted. 
 

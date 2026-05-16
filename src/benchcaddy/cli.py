@@ -1357,8 +1357,8 @@ def _quality_style(level: str) -> str:
     return {"HIGH": "green", "FAIR": "yellow", "LOW": "red"}.get(level, "red")
 
 
-@app.command("check", help="Check the current environment for benchmark reliability issues.")
-def check_command(
+@app.command("env", help="Check the current environment for benchmark reliability issues.")
+def env_command(
     noise_iterations: Annotated[
         int,
         typer.Option(
@@ -1366,7 +1366,7 @@ def check_command(
             min=2,
             help="Number of short calibrated probe loops used to estimate measurement jitter.",
         ),
-    ] = 50,
+    ] = 200,
     json_output: Annotated[
         bool,
         typer.Option(
