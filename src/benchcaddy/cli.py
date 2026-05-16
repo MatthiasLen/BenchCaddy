@@ -1354,11 +1354,11 @@ def trend_command(
 
 
 def _quality_style(level: str) -> str:
-    return "green" if level == "HIGH" else "yellow" if level == "FAIR" else "red"
+    return {"HIGH": "green", "FAIR": "yellow", "LOW": "red"}.get(level, "red")
 
 
-@app.command("check", help="Check the current environment for benchmark reliability issues.")
-def check_command(
+@app.command("env", help="Check the current environment for benchmark reliability issues.")
+def env_command(
     noise_iterations: Annotated[
         int,
         typer.Option(

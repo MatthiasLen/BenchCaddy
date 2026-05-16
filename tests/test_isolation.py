@@ -9,13 +9,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
+import benchcaddy.cli as cli_module
+import benchcaddy.isolation.environment as isolation_environment_module
 from benchcaddy.cli import app
 from benchcaddy.isolation import (
     EnvironmentState,
     NoiseAnalyzer,
     NoiseCapture,
     NoiseEstimate,
-    ReliabilityReport,
     build_reliability_report,
     collect_environment_state,
     get_affinity,
@@ -29,18 +30,23 @@ from benchcaddy.isolation import (
 
 
 class TestGetAffinity:
-    def test_returns_list_or_none(self):
-        result = get_affinity()
-        assert result is None or isinstance(result, list)
+    def test_success_returns_cpu_list(self):
+        mock_process = MagicMock()
+        mock_process.cpu_affinity.return_value = [0, 2]
+        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
+            assert get_affinity() == [0, 2]
 
-    def test_returns_ints(self):
-        result = get_affinity()
-        if result is not None:
-            assert all(isinstance(cpu, int) for cpu in result)
+    def test_access_denied_returns_none(self):
+        import psutil
+
+        mock_process = MagicMock()
+        mock_process.cpu_affinity.side_effect = psutil.AccessDenied(0)
+        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
+            assert get_affinity() is None
 
     def test_no_cpu_affinity_attribute(self):
         mock_process = MagicMock(spec=[])  # no cpu_affinity attribute
-        with patch("benchcaddy.isolation.affinity.psutil.Process", return_value=mock_process):
+        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
             assert get_affinity() is None
 
 
@@ -50,7 +56,7 @@ class TestSetAffinity:
 
     def test_no_cpu_affinity_attribute(self):
         mock_process = MagicMock(spec=[])  # no cpu_affinity attribute
-        with patch("benchcaddy.isolation.affinity.psutil.Process", return_value=mock_process):
+        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
             assert set_affinity([0]) is False
 
     def test_access_denied_returns_false(self):
@@ -58,13 +64,13 @@ class TestSetAffinity:
 
         mock_process = MagicMock()
         mock_process.cpu_affinity.side_effect = psutil.AccessDenied(0)
-        with patch("benchcaddy.isolation.affinity.psutil.Process", return_value=mock_process):
+        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
             assert set_affinity([0]) is False
 
     def test_success_returns_true(self):
         mock_process = MagicMock()
         mock_process.cpu_affinity.return_value = None
-        with patch("benchcaddy.isolation.affinity.psutil.Process", return_value=mock_process):
+        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
             assert set_affinity([0]) is True
             mock_process.cpu_affinity.assert_called_once_with([0])
 
@@ -75,18 +81,6 @@ class TestSetAffinity:
 
 
 class TestEnvironmentState:
-    def test_fields(self):
-        state = EnvironmentState(
-            cpu_load=0.12,
-            on_battery=False,
-            thermal_throttling=False,
-            frequency_stable=True,
-        )
-        assert state.cpu_load == pytest.approx(0.12)
-        assert state.on_battery is False
-        assert state.thermal_throttling is False
-        assert state.frequency_stable is True
-
     def test_frozen(self):
         state = EnvironmentState(cpu_load=0.1, on_battery=None, thermal_throttling=None, frequency_stable=None)
         with pytest.raises(AttributeError):
@@ -94,26 +88,18 @@ class TestEnvironmentState:
 
 
 class TestCollectEnvironmentState:
-    def test_returns_environment_state(self):
-        state = collect_environment_state()
-        assert isinstance(state, EnvironmentState)
+    def test_collects_signal_snapshot_from_reader_functions(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(isolation_environment_module, "_read_cpu_load", lambda: 0.12)
+        monkeypatch.setattr(isolation_environment_module, "_read_on_battery", lambda: False)
+        monkeypatch.setattr(isolation_environment_module, "_read_thermal_throttling", lambda: True)
+        monkeypatch.setattr(isolation_environment_module, "_read_frequency_stable", lambda: False)
 
-    def test_cpu_load_in_range_or_none(self):
-        state = collect_environment_state()
-        if state.cpu_load is not None:
-            assert 0.0 <= state.cpu_load <= 1.0
-
-    def test_on_battery_bool_or_none(self):
-        state = collect_environment_state()
-        assert state.on_battery is None or isinstance(state.on_battery, bool)
-
-    def test_thermal_throttling_bool_or_none(self):
-        state = collect_environment_state()
-        assert state.thermal_throttling is None or isinstance(state.thermal_throttling, bool)
-
-    def test_frequency_stable_bool_or_none(self):
-        state = collect_environment_state()
-        assert state.frequency_stable is None or isinstance(state.frequency_stable, bool)
+        assert collect_environment_state() == EnvironmentState(
+            cpu_load=0.12,
+            on_battery=False,
+            thermal_throttling=True,
+            frequency_stable=False,
+        )
 
     def test_frequency_stability_uses_windowed_samples(self):
         samples = [
@@ -149,6 +135,38 @@ class TestCollectEnvironmentState:
 
         assert state.frequency_stable is False
 
+    def test_frequency_stability_returns_none_when_frequency_api_gives_no_samples(self):
+        with (
+            patch("benchcaddy.isolation.environment.psutil.cpu_freq", return_value=None),
+            patch("benchcaddy.isolation.environment.sleep", return_value=None),
+        ):
+            assert isolation_environment_module._read_frequency_stable() is None
+
+
+class TestEnvironmentPolicy:
+    def test_missing_telemetry_adds_conservative_risk_and_warning(self):
+        environment = EnvironmentState(
+            cpu_load=None,
+            on_battery=None,
+            thermal_throttling=None,
+            frequency_stable=None,
+        )
+
+        assert isolation_environment_module.environment_risk_score(environment) == 1
+        assert isolation_environment_module.environment_warnings(environment) == [
+            "Environment telemetry unavailable — quality estimate is conservative"
+        ]
+
+    def test_environment_risk_score_accumulates_signal_risks(self):
+        environment = EnvironmentState(
+            cpu_load=0.50,
+            on_battery=True,
+            thermal_throttling=True,
+            frequency_stable=False,
+        )
+
+        assert isolation_environment_module.environment_risk_score(environment) == 9
+
 
 # ---------------------------------------------------------------------------
 # noise
@@ -156,20 +174,6 @@ class TestCollectEnvironmentState:
 
 
 class TestNoiseEstimate:
-    def test_fields(self):
-        est = NoiseEstimate(
-            relative_jitter=0.018,
-            noise_level="low",
-            relative_drift=0.004,
-            drift_level="low",
-        )
-        assert est.relative_jitter == pytest.approx(0.018)
-        assert est.noise_level == "low"
-        assert est.relative_drift == pytest.approx(0.004)
-        assert est.drift_level == "low"
-        assert est.iteration_count == 0
-        assert est.median_sample_seconds is None
-
     def test_frozen(self):
         est = NoiseEstimate(relative_jitter=0.018, noise_level="low", relative_drift=0.004, drift_level="low")
         with pytest.raises(AttributeError):
@@ -177,19 +181,25 @@ class TestNoiseEstimate:
 
 
 class TestEstimateNoise:
-    def test_returns_noise_estimate(self):
-        result = NoiseAnalyzer().analyze(iterations=10)
-        assert isinstance(result, NoiseEstimate)
+    def test_analyze_forwards_iterations_and_returns_statistics(self):
+        recorded_iterations: list[int] = []
 
-    def test_level_is_valid(self):
-        result = NoiseAnalyzer().analyze(iterations=10)
-        assert result.noise_level in {"low", "moderate", "high"}
-        assert result.drift_level in {"low", "moderate", "high"}
+        class StubNoiseAnalyzer(NoiseAnalyzer):
+            def capture(self, iterations: int = 500) -> NoiseCapture:
+                recorded_iterations.append(iterations)
+                return _capture(1.0, 1.0, 1.0, 1.0)
 
-    def test_relative_jitter_non_negative(self):
-        result = NoiseAnalyzer().analyze(iterations=10)
-        assert result.relative_jitter >= 0.0
-        assert result.relative_drift >= 0.0
+        result = StubNoiseAnalyzer().analyze(iterations=4)
+
+        assert recorded_iterations == [4]
+        assert result == NoiseEstimate(
+            relative_jitter=0.0,
+            noise_level="low",
+            relative_drift=0.0,
+            drift_level="low",
+            iteration_count=4,
+            median_sample_seconds=1.0,
+        )
 
     def test_raises_on_fewer_than_two_iterations(self):
         with pytest.raises(ValueError, match="iterations must be at least 2"):
@@ -317,6 +327,17 @@ class TestNoiseAnalyzer:
         assert result.relative_drift == pytest.approx(0.0)
         assert result.median_sample_seconds == pytest.approx(0.0)
 
+    def test_estimate_statistics_rejects_duration_count_mismatch(self):
+        analyzer = NoiseAnalyzer()
+        capture = NoiseCapture(
+            durations=(1.0, 1.0),
+            iteration_count=3,
+            work_units=512,
+        )
+
+        with pytest.raises(ValueError, match="capture iteration_count does not match recorded durations"):
+            analyzer.estimate_statistics(capture)
+
 
 # ---------------------------------------------------------------------------
 # process
@@ -351,12 +372,108 @@ class TestRunIsolated:
             run_isolated(time.sleep, args=(10,), fresh_process=True, timeout=0.1)
 
     def test_exception_in_child_raises_runtime_error(self):
-        with pytest.raises(RuntimeError, match="Isolated process raised"):
+        with pytest.raises(RuntimeError, match="ValueError: boom"):
             run_isolated(_raise_error, fresh_process=True, timeout=30)
 
     def test_disable_gc(self):
         result = run_isolated(_add, args=(1, 1), fresh_process=True, disable_gc=True, timeout=30)
         assert result == 2
+
+    def test_fresh_process_uses_spawn_context(self, monkeypatch: pytest.MonkeyPatch):
+        calls: list[str] = []
+
+        class DummyConnection:
+            def __init__(self, payload=None):
+                self._payload = payload
+
+            def poll(self, timeout=None):
+                return True
+
+            def recv(self):
+                return self._payload
+
+            def close(self):
+                return None
+
+        class DummyProcess:
+            def __init__(self, *, target, args, daemon):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                self.exitcode = 0
+
+            def start(self):
+                return None
+
+            def join(self, timeout=None):
+                return None
+
+            def terminate(self):
+                self.exitcode = -15
+
+            def kill(self):
+                self.exitcode = -9
+
+        class DummyContext:
+            def Pipe(self, duplex=False):
+                return DummyConnection((True, 5)), DummyConnection()
+
+            def Process(self, *, target, args, daemon):
+                return DummyProcess(target=target, args=args, daemon=daemon)
+
+        monkeypatch.setattr(
+            "benchcaddy.isolation.process.multiprocessing.get_context",
+            lambda method: calls.append(method) or DummyContext(),
+        )
+
+        assert run_isolated(_add, args=(2, 3), fresh_process=True, timeout=1.0) == 5
+        assert calls == ["spawn"]
+
+    def test_child_exit_before_result_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch):
+        class DummyConnection:
+            def poll(self, timeout=None):
+                return True
+
+            def recv(self):
+                raise EOFError()
+
+            def close(self):
+                return None
+
+        class DummyProcess:
+            exitcode = 0
+
+            def __init__(self, *, target, args, daemon):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+
+            def start(self):
+                return None
+
+            def join(self, timeout=None):
+                return None
+
+            def terminate(self):
+                self.exitcode = -15
+
+            def kill(self):
+                self.exitcode = -9
+
+        class DummyContext:
+            def Pipe(self, duplex=False):
+                return DummyConnection(), DummyConnection()
+
+            def Process(self, *, target, args, daemon):
+                return DummyProcess(target=target, args=args, daemon=daemon)
+
+        monkeypatch.setattr(
+            "benchcaddy.isolation.process.multiprocessing.get_context",
+            lambda _method: DummyContext(),
+        )
+
+        with pytest.raises(RuntimeError, match="exited before sending a result"):
+            run_isolated(_add, args=(2, 3), fresh_process=True, timeout=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -472,30 +589,49 @@ class TestReliabilityReport:
         report = build_reliability_report(environment=_make_env(on_battery=True), noise=_make_noise())
         text = report.format()
         assert "Warnings:" in text
-
-
-class TestReliabilityReportFrozen:
-    def test_frozen(self):
-        report = ReliabilityReport(timing_stability="HIGH", environmental_quality="HIGH", warnings=())
-        with pytest.raises(AttributeError):
-            report.timing_stability = "LOW"  # type: ignore[misc]
-
-
 # ---------------------------------------------------------------------------
-# CLI check command
+# CLI env command
 # ---------------------------------------------------------------------------
 
 
 runner = CliRunner()
 
 
-class TestCheckCommand:
-    def test_check_runs_without_error(self):
-        result = runner.invoke(app, ["check"])
-        assert result.exit_code == 0
+@pytest.fixture
+def stubbed_check_dependencies(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    analyze_calls: list[int] = []
 
-    def test_check_json_output(self):
-        result = runner.invoke(app, ["check", "--json"])
+    monkeypatch.setattr(
+        cli_module,
+        "collect_environment_state",
+        lambda: _make_env(cpu_load=0.12, on_battery=False, thermal_throttling=False, frequency_stable=True),
+    )
+    monkeypatch.setattr(cli_module, "get_affinity", lambda: [0, 1])
+
+    def fake_analyze(self, iterations: int = 500) -> NoiseEstimate:
+        analyze_calls.append(iterations)
+        return _make_noise(
+            noise_level="moderate",
+            jitter=0.05,
+            drift_level="low",
+            drift=0.01,
+            iteration_count=iterations,
+        )
+
+    monkeypatch.setattr(cli_module.NoiseAnalyzer, "analyze", fake_analyze)
+    return analyze_calls
+
+
+class TestEnvCommand:
+    def test_env_renders_summary_and_warnings(self, stubbed_check_dependencies: list[int]):
+        result = runner.invoke(app, ["env"])
+        assert result.exit_code == 0
+        assert "Benchmark Reliability" in result.output
+        assert "Warnings" in result.output
+        assert stubbed_check_dependencies == [200]
+
+    def test_env_json_output(self, stubbed_check_dependencies: list[int]):
+        result = runner.invoke(app, ["env", "--json"])
         assert result.exit_code == 0
         payload = json.loads(result.output)
         assert "timing_stability" in payload
@@ -510,29 +646,19 @@ class TestCheckCommand:
         assert payload["environmental_quality"] in {"HIGH", "FAIR", "LOW"}
         assert payload["noise"]["noise_level"] in {"low", "moderate", "high"}
         assert payload["noise"]["drift_level"] in {"low", "moderate", "high"}
+        assert payload["environment"]["cpu_load"] == pytest.approx(0.12)
+        assert payload["environment"]["on_battery"] is False
+        assert payload["environment"]["thermal_throttling"] is False
+        assert payload["environment"]["frequency_stable"] is True
+        assert payload["noise"]["relative_jitter"] == pytest.approx(0.05)
+        assert payload["noise"]["noise_level"] == "moderate"
+        assert payload["noise"]["relative_drift"] == pytest.approx(0.01)
+        assert payload["noise"]["drift_level"] == "low"
+        assert payload["noise"]["iteration_count"] == 200
+        assert payload["affinity"] == [0, 1]
+        assert stubbed_check_dependencies == [200]
 
-    def test_check_with_noise_iterations(self):
-        result = runner.invoke(app, ["check", "--noise-iterations", "10"])
+    def test_env_with_noise_iterations(self, stubbed_check_dependencies: list[int]):
+        result = runner.invoke(app, ["env", "--noise-iterations", "10"])
         assert result.exit_code == 0
-
-    def test_check_json_environment_keys(self):
-        result = runner.invoke(app, ["check", "--json"])
-        payload = json.loads(result.output)
-        env = payload["environment"]
-        assert "cpu_load" in env
-        assert "on_battery" in env
-        assert "thermal_throttling" in env
-        assert "frequency_stable" in env
-
-    def test_check_json_noise_keys(self):
-        result = runner.invoke(app, ["check", "--json"])
-        payload = json.loads(result.output)
-        noise = payload["noise"]
-        assert "relative_jitter" in noise
-        assert "noise_level" in noise
-        assert "relative_drift" in noise
-        assert "drift_level" in noise
-        assert "iteration_count" in noise
-        assert "median_sample_seconds" in noise
-        assert noise["relative_jitter"] >= 0.0
-        assert noise["relative_drift"] >= 0.0
+        assert stubbed_check_dependencies == [10]

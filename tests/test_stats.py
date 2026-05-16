@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from benchcaddy.stats import (
     AnalysisOptions,
     analyze_samples,
@@ -13,6 +15,13 @@ def test_robust_relative_jitter_uses_scaled_mad() -> None:
 
     assert median_value == 1.0
     assert jitter == 0.0
+
+
+def test_robust_relative_jitter_always_uses_sample_median() -> None:
+    jitter, median_value = robust_relative_jitter([0.9, 1.0, 1.2])
+
+    assert median_value == 1.0
+    assert jitter == pytest.approx(0.14826)
 
 
 def test_analyze_samples_reports_noise_and_outliers() -> None:

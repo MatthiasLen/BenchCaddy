@@ -12,13 +12,16 @@ import gc
 import multiprocessing
 import multiprocessing.connection
 import os
+import traceback
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
 import psutil
 
 _MAX_UNIX_PRIORITY = -20
+_PROCESS_JOIN_GRACE_SECONDS = 0.2
 
 
 @dataclass
@@ -38,27 +41,31 @@ class ProcessState:
     """Resident set size in bytes, or ``None`` when unavailable."""
 
 
-def _read_process_affinity(process: psutil.Process) -> list[int]:
-    """Return the current affinity mask, falling back to an empty list."""
+def set_affinity(cpus: list[int]) -> bool:
+    """Pin the current process to *cpus* when the platform supports it."""
+    if not cpus:
+        return False
+
+    process = psutil.Process()
+    if not hasattr(process, "cpu_affinity"):
+        return False
+
     try:
-        return list(process.cpu_affinity())
-    except (psutil.AccessDenied, NotImplementedError, AttributeError):
-        return []
+        process.cpu_affinity(cpus)
+        return True
+    except (psutil.AccessDenied, NotImplementedError, ValueError, OSError):
+        return False
 
 
-def _read_process_priority(process: psutil.Process) -> int | str | None:
-    """Return the process priority when the platform exposes it."""
-    try:
-        return process.nice()
-    except (psutil.AccessDenied, AttributeError):
+def get_affinity() -> list[int] | None:
+    """Return the CPU cores the current process may run on, if exposed."""
+    process = psutil.Process()
+    if not hasattr(process, "cpu_affinity"):
         return None
 
-
-def _read_process_rss(process: psutil.Process) -> int | None:
-    """Return the process resident set size in bytes."""
     try:
-        return process.memory_info().rss
-    except (psutil.AccessDenied, AttributeError, OSError):
+        return list(process.cpu_affinity())
+    except (psutil.AccessDenied, NotImplementedError, AttributeError, OSError):
         return None
 
 
@@ -66,11 +73,26 @@ def collect_process_state() -> ProcessState:
     """Collect a lightweight snapshot of the current Python process."""
     process = psutil.Process()
 
+    try:
+        affinity = list(process.cpu_affinity())
+    except (psutil.AccessDenied, NotImplementedError, AttributeError):
+        affinity = []
+
+    try:
+        priority = process.nice()
+    except (psutil.AccessDenied, AttributeError):
+        priority = None
+
+    try:
+        rss_bytes = process.memory_info().rss
+    except (psutil.AccessDenied, AttributeError, OSError):
+        rss_bytes = None
+
     return ProcessState(
         pid=process.pid,
-        priority=_read_process_priority(process),
-        affinity=_read_process_affinity(process),
-        rss_bytes=_read_process_rss(process),
+        priority=priority,
+        affinity=affinity,
+        rss_bytes=rss_bytes,
     )
 
 
@@ -113,12 +135,41 @@ def _worker(
         gc.collect()
 
     try:
-        result = fn(*args, **kwargs)
-        conn.send((True, result))
-    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
-        conn.send((False, exc))
+        conn.send((True, fn(*args, **kwargs)))
+    except Exception as exc:
+        with suppress(BrokenPipeError, EOFError, OSError):
+            conn.send(
+                (
+                    False,
+                    {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(),
+                    },
+                )
+            )
     finally:
         conn.close()
+
+
+def _join_process(process: multiprocessing.Process, timeout: float) -> bool:
+    """Wait briefly for *process* to exit and report whether it stopped."""
+    process.join(timeout)
+    return process.exitcode is not None
+
+
+def _stop_process(process: multiprocessing.Process, timeout: float) -> None:
+    """Terminate a child process without blocking indefinitely."""
+    if process.exitcode is not None:
+        return
+
+    process.terminate()
+    if _join_process(process, timeout):
+        return
+
+    if hasattr(process, "kill"):
+        process.kill()
+        _join_process(process, timeout)
 
 
 def run_isolated(
@@ -142,8 +193,11 @@ def run_isolated(
         Keyword arguments forwarded to *fn*.
     fresh_process:
         When ``True`` (default), *fn* is executed in a freshly spawned
-        subprocess so that GC state, import side effects, and JIT
-        warm-up from the host process cannot influence timings.
+        subprocess created with the ``spawn`` start method so that GC
+        state, import side effects, and JIT warm-up from the host
+        process cannot influence timings. This requires *fn*, *args*,
+        and *kwargs* to be picklable, and the calling module must be
+        safe to import under ``spawn``.
         When ``False``, *fn* is called directly in the current process.
     disable_gc:
         When ``True``, the Python garbage collector is disabled inside
@@ -171,8 +225,9 @@ def run_isolated(
     if not fresh_process:
         return fn(*args, **kw)
 
-    parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
-    process = multiprocessing.Process(
+    context = multiprocessing.get_context("spawn")
+    parent_conn, child_conn = context.Pipe(duplex=False)
+    process = context.Process(
         target=_worker,
         args=(fn, args, kw, child_conn, disable_gc),
         daemon=True,
@@ -182,18 +237,29 @@ def run_isolated(
 
     try:
         if parent_conn.poll(timeout):
-            success, payload = parent_conn.recv()
+            try:
+                success, payload = parent_conn.recv()
+            except EOFError as exc:
+                raise RuntimeError("Isolated process exited before sending a result.") from exc
         else:
-            process.kill()
-            process.join()
+            _stop_process(process, _PROCESS_JOIN_GRACE_SECONDS)
             raise TimeoutError(f"run_isolated timed out after {timeout}s")
     finally:
         parent_conn.close()
 
-    process.join()
+    if not _join_process(process, _PROCESS_JOIN_GRACE_SECONDS):
+        _stop_process(process, _PROCESS_JOIN_GRACE_SECONDS)
 
     if not success:
-        exc = payload if isinstance(payload, Exception) else RuntimeError(str(payload))
-        raise RuntimeError(f"Isolated process raised an exception: {payload}") from exc
+        if isinstance(payload, dict):
+            exception_type = payload.get("type", "Exception")
+            exception_message = payload.get("message", "")
+            child_traceback = payload.get("traceback", "")
+            details = f"{exception_type}: {exception_message}" if exception_message else exception_type
+            message = f"Isolated process raised an exception: {details}"
+            if child_traceback:
+                message = f"{message}\n{child_traceback.rstrip()}"
+            raise RuntimeError(message)
+        raise RuntimeError(f"Isolated process raised an exception: {payload}")
 
     return payload
