@@ -20,9 +20,12 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import psutil
+
+from .observability import IsolatedRunResult, collect_observations
 
 _MAX_UNIX_PRIORITY = -20
 _WORKER_FLAG = "--benchcaddy-worker"
@@ -130,6 +133,22 @@ def _child_error_payload(exc: Exception) -> dict[str, str]:
     }
 
 
+def _run_observed_call(
+    fn: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> IsolatedRunResult:
+    with collect_observations() as collector:
+        start = perf_counter()
+        result = fn(*args, **kwargs)
+        elapsed = perf_counter() - start
+    return IsolatedRunResult(
+        elapsed_seconds=elapsed,
+        return_value=result,
+        observations=list(collector.records),
+    )
+
+
 def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
     """Execute one isolated request inside the worker process."""
     fn = _resolve_callable(request["module_name"], request["qualname"])
@@ -148,7 +167,7 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
     try:
         for _ in range(warmup_runs):
             fn(*args, **kwargs)
-        return {"ok": True, "payload": fn(*args, **kwargs)}
+        return {"ok": True, "payload": _run_observed_call(fn, args, kwargs)}
     except Exception as exc:
         return {"ok": False, "payload": _child_error_payload(exc)}
 
@@ -204,7 +223,7 @@ def run_isolated(
     warmup_runs: int = 0,
     lock_cpu_affinity: bool = True,
     timeout: float | None = None,
-) -> Any:
+) -> IsolatedRunResult:
     """Call *fn* with optional subprocess isolation.
 
     Parameters
@@ -241,8 +260,10 @@ def run_isolated(
 
     Returns
     -------
-    Any
-        The return value of *fn*.
+    IsolatedRunResult
+        Structured result containing the measured elapsed time, the
+        callable return value, and observations recorded by isolated
+        decorators during the measured call.
 
     Raises
     ------
@@ -257,7 +278,7 @@ def run_isolated(
         raise ValueError("warmup_runs must be >= 0")
 
     if not fresh_process:
-        return fn(*args, **kw)
+        return _run_observed_call(fn, args, kw)
 
     module_name = getattr(fn, "__module__", None)
     qualname = getattr(fn, "__qualname__", None)
@@ -296,6 +317,8 @@ def run_isolated(
 
     payload = response.get("payload")
     if response.get("ok"):
+        if not isinstance(payload, IsolatedRunResult):
+            raise RuntimeError("Isolated worker returned an invalid result payload")
         return payload
 
     if isinstance(payload, dict):
@@ -311,6 +334,7 @@ def run_isolated(
 
 
 def _main(argv: list[str]) -> int:
+    """Entry point for the worker subprocess. This should never be called directly; it's invoked via subprocess in :func:`run_isolated`."""
     if len(argv) != 3 or argv[0] != _WORKER_FLAG:
         return 2
 
