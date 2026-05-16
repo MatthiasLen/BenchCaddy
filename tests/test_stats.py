@@ -1,6 +1,42 @@
 from __future__ import annotations
 
-from benchcaddy.stats import AnalysisOptions, analyze_samples, compare_sample_sets
+from benchcaddy.stats import (
+    AnalysisOptions,
+    analyze_samples,
+    bootstrap_log_interval,
+    compare_sample_sets,
+    median_or_none,
+    robust_relative_jitter,
+    tail_relative_jitter,
+)
+
+
+def test_median_or_none_handles_empty_and_populated_values() -> None:
+    assert median_or_none([]) is None
+    assert median_or_none([1.0, 3.0, 2.0]) == 2.0
+
+
+def test_robust_relative_jitter_uses_scaled_mad() -> None:
+    jitter, median_value = robust_relative_jitter([1.0, 1.0, 1.0, 1.3])
+
+    assert median_value == 1.0
+    assert jitter == 0.0
+
+
+def test_tail_relative_jitter_uses_requested_upper_quantile() -> None:
+    jitter, median_value = tail_relative_jitter([1.0, 1.0, 1.0, 1.3])
+
+    assert median_value == 1.0
+    assert jitter >= 0.20
+
+
+def test_bootstrap_log_interval_returns_positive_ordered_bounds() -> None:
+    interval = bootstrap_log_interval([0.01, 0.02, 0.04, 0.08], resamples=500, seed=7)
+
+    assert interval is not None
+    lower, upper = interval
+    assert lower > 0.0
+    assert upper >= lower
 
 
 def test_analyze_samples_reports_noise_and_outliers() -> None:

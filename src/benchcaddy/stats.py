@@ -9,6 +9,7 @@ reporting.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from math import isclose
 
@@ -70,10 +71,6 @@ class ComparisonStatistics:
         return asdict(self)
 
 
-def _as_array(samples: list[float] | tuple[float, ...]) -> np.ndarray:
-    return np.asarray(samples, dtype=float)
-
-
 def _validate_options(options: AnalysisOptions) -> None:
     if not 0.0 < options.confidence_level < 1.0:
         raise ValueError("confidence_level must be between 0 and 1.")
@@ -96,6 +93,66 @@ def _sample_std(values: np.ndarray) -> float:
     if values.size <= 1:
         return 0.0
     return float(np.std(values, ddof=1))
+
+
+def median_or_none(values: Sequence[float] | np.ndarray) -> float | None:
+    values_array = np.asarray(values, dtype=float)
+    if values_array.size == 0:
+        return None
+    return float(np.median(values_array))
+
+
+def robust_relative_jitter(
+    values: Sequence[float] | np.ndarray,
+    *,
+    center: float | None = None,
+    scale_factor: float = 1.4826,
+) -> tuple[float, float]:
+    values_array = np.asarray(values, dtype=float)
+    median_value = float(np.median(values_array)) if center is None else center
+    if median_value <= 0.0:
+        return 0.0, median_value
+
+    mad = float(np.median(np.abs(values_array - median_value)))
+    return (scale_factor * mad) / median_value, median_value
+
+
+def tail_relative_jitter(
+    values: Sequence[float] | np.ndarray,
+    *,
+    center: float | None = None,
+    quantile: float = 0.95,
+) -> tuple[float, float]:
+    values_array = np.asarray(values, dtype=float)
+    median_value = float(np.median(values_array)) if center is None else center
+    if median_value <= 0.0:
+        return 0.0, median_value
+
+    upper_tail = float(np.quantile(values_array, quantile))
+    return max(0.0, (upper_tail / median_value) - 1.0), median_value
+
+
+def bootstrap_log_interval(
+    values: Sequence[float] | np.ndarray,
+    *,
+    resamples: int,
+    seed: int = 0,
+    lower_quantile: float = 0.025,
+    upper_quantile: float = 0.975,
+    epsilon: float = 1e-12,
+) -> tuple[float, float] | None:
+    values_array = np.asarray(values, dtype=float)
+    if values_array.size < 2:
+        return None
+
+    rng = np.random.default_rng(seed)
+    log_values = np.log(np.maximum(values_array, epsilon))
+    sample_indices = rng.integers(0, log_values.size, size=(resamples, log_values.size))
+    bootstrap_log_medians = np.median(log_values[sample_indices], axis=1)
+    return (
+        float(np.exp(np.quantile(bootstrap_log_medians, lower_quantile))),
+        float(np.exp(np.quantile(bootstrap_log_medians, upper_quantile))),
+    )
 
 
 def _bootstrap_estimates(
@@ -164,7 +221,7 @@ def analyze_samples(
 ) -> RunStatistics:
     chosen_options = options or AnalysisOptions()
     _validate_options(chosen_options)
-    values = _as_array(samples)
+    values = np.asarray(samples, dtype=float)
     mean_seconds = float(np.mean(values)) if values.size else 0.0
     median_seconds = float(np.median(values)) if values.size else 0.0
     std_seconds = _sample_std(values)
@@ -342,8 +399,8 @@ def compare_sample_sets(
 ) -> ComparisonStatistics:
     chosen_options = options or AnalysisOptions()
     _validate_options(chosen_options)
-    baseline_values = _as_array(baseline_samples)
-    candidate_values = _as_array(candidate_samples)
+    baseline_values = np.asarray(baseline_samples, dtype=float)
+    candidate_values = np.asarray(candidate_samples, dtype=float)
 
     baseline_stats = analyze_samples(list(baseline_values), chosen_options)
     candidate_stats = analyze_samples(list(candidate_values), chosen_options)

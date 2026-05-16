@@ -58,6 +58,23 @@ def _sample_frequency_ratios() -> list[float]:
     return ratios
 
 
+def _frequency_ratio() -> float | None:
+    """Return the current-to-max CPU frequency ratio when available."""
+    try:
+        freq = psutil.cpu_freq()
+    except (AttributeError, OSError, NotImplementedError):
+        return None
+    if freq is None:
+        return None
+
+    max_freq = freq.max
+    current_freq = freq.current
+    if not max_freq or not current_freq:
+        return None
+
+    return current_freq / max_freq
+
+
 def _read_cpu_load() -> float | None:
     """Read short-window CPU utilisation as a fraction in ``[0, 1]``."""
     try:
@@ -96,21 +113,7 @@ def _read_thermal_throttling() -> bool | None:
     return False
 
 
-def _frequency_ratio() -> float | None:
-    """Return the current-to-max CPU frequency ratio when available."""
-    try:
-        freq = psutil.cpu_freq()
-    except (AttributeError, OSError, NotImplementedError):
-        return None
-    if freq is None:
-        return None
 
-    max_freq = freq.max
-    current_freq = freq.current
-    if not max_freq or not current_freq:
-        return None
-
-    return current_freq / max_freq
 
 
 def _read_frequency_stable() -> bool | None:

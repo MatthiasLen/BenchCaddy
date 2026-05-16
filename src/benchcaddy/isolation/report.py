@@ -32,8 +32,8 @@ _UNKNOWN_ENVIRONMENT_RISK = 1
 class ReliabilityReport:
     """A concise summary of benchmark environment reliability."""
 
-    statistical_confidence: str
-    """Overall statistical confidence level: ``"HIGH"``, ``"FAIR"``, or
+    timing_stability: str
+    """Overall timing stability level: ``"HIGH"``, ``"FAIR"``, or
     ``"LOW"``."""
 
     environmental_quality: str
@@ -48,7 +48,7 @@ class ReliabilityReport:
         lines: list[str] = [
             "Benchmark Reliability",
             "---------------------",
-            f"Statistical confidence: {self.statistical_confidence}",
+            f"Timing stability:      {self.timing_stability}",
             f"Environmental quality:  {self.environmental_quality}",
         ]
         if self.warnings:
@@ -95,9 +95,14 @@ def _environmental_risk_score(env: EnvironmentState, noise: NoiseEstimate) -> in
         elif env.cpu_load > _LOAD_MODERATE_THRESHOLD:
             risk += _MODERATE_LOAD_RISK
 
-    if noise.level == "high":
+    if noise.noise_level == "high":
         risk += _HIGH_NOISE_RISK
-    elif noise.level == "moderate":
+    elif noise.noise_level == "moderate":
+        risk += _MODERATE_NOISE_RISK
+
+    if noise.drift_level == "high":
+        risk += _HIGH_NOISE_RISK
+    elif noise.drift_level == "moderate":
         risk += _MODERATE_NOISE_RISK
 
     if _all_environment_signals_missing(env):
@@ -123,33 +128,40 @@ def _environmental_quality(env: EnvironmentState, noise: NoiseEstimate) -> str:
 
 
 def _noise_warning(noise: NoiseEstimate) -> str | None:
-    """Describe the dominant form of timing instability."""
-    if noise.level == "low":
+    """Describe the measured timing jitter within the capture window."""
+    if noise.noise_level == "low":
         return None
 
-    if (
-        noise.tail_jitter is not None
-        and noise.robust_jitter is not None
-        and noise.tail_jitter > (noise.robust_jitter * 1.5)
-    ):
-        severity = "High" if noise.level == "high" else "Moderate"
-        guidance = "intermittent scheduler pauses may distort results" if noise.level == "high" else "intermittent pauses may still affect short benchmarks"
-        return (
-            f"{severity} timing jitter detected (95th percentile tail {noise.tail_jitter:.1%} above median; overall {noise.relative_jitter:.1%}) — {guidance}"
-        )
-
-    severity = "High" if noise.level == "high" else "Moderate"
-    guidance = "background scheduling or frequency changes may distort results" if noise.level == "high" else "consider reducing background activity or increasing sample counts"
-    return f"{severity} timing jitter detected (overall {noise.relative_jitter:.1%}) — {guidance}"
+    severity = "High" if noise.noise_level == "high" else "Moderate"
+    guidance = (
+        "background scheduling or frequency changes may distort results"
+        if noise.noise_level == "high"
+        else "consider reducing background activity or increasing sample counts"
+    )
+    return f"{severity} timing jitter detected (MAD noise {noise.relative_jitter:.1%}) — {guidance}"
 
 
-def _confidence_warning(noise: NoiseEstimate) -> str | None:
-    """Explain when the noise estimate itself is not yet stable enough."""
-    if noise.statistical_confidence == "LOW":
-        return "Noise estimate has low repeat stability — rerun check or increase --noise-iterations"
-    if noise.statistical_confidence == "FAIR":
-        return "Noise estimate is near a classification boundary — expect some run-to-run variability"
-    return None
+def _drift_warning(noise: NoiseEstimate) -> str | None:
+    """Describe timing drift across the capture window."""
+    if noise.drift_level == "low":
+        return None
+
+    severity = "High" if noise.drift_level == "high" else "Moderate"
+    guidance = (
+        "measurements changed materially during capture"
+        if noise.drift_level == "high"
+        else "results may still shift during longer benchmark runs"
+    )
+    return f"{severity} timing drift detected (early/late quartile drift {noise.relative_drift:.1%}) — {guidance}"
+
+
+def _timing_stability(noise: NoiseEstimate) -> str:
+    """Summarize overall timing stability from noise and drift levels."""
+    if "high" in {noise.noise_level, noise.drift_level}:
+        return "LOW"
+    if "moderate" in {noise.noise_level, noise.drift_level}:
+        return "FAIR"
+    return "HIGH"
 
 
 def _collect_warnings(env: EnvironmentState, noise: NoiseEstimate) -> list[str]:
@@ -180,9 +192,9 @@ def _collect_warnings(env: EnvironmentState, noise: NoiseEstimate) -> list[str]:
     if noise_warning is not None:
         warnings.append(noise_warning)
 
-    confidence_warning = _confidence_warning(noise)
-    if confidence_warning is not None:
-        warnings.append(confidence_warning)
+    drift_warning = _drift_warning(noise)
+    if drift_warning is not None:
+        warnings.append(drift_warning)
 
     return warnings
 
@@ -205,11 +217,10 @@ def build_reliability_report(
         via :func:`~benchcaddy.isolation.noise.estimate_noise`.
     """
     warnings = _collect_warnings(environment, noise)
-    statistical_confidence = noise.statistical_confidence
     environmental_quality = _environmental_quality(environment, noise)
 
     return ReliabilityReport(
-        statistical_confidence=statistical_confidence,
+        timing_stability=_timing_stability(noise),
         environmental_quality=environmental_quality,
         warnings=tuple(warnings),
     )
