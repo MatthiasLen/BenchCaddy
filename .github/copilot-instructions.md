@@ -7,6 +7,7 @@
 - Do not introduce helper functions that have one call site and add little semantic value. Do not add "shallow" few-line wrappers.
 - Avoid temporary internal dataclasses, tuples, or helper objects whose only job is to shuttle a few computed values to one consumer.
 - Keep changes minimal and targeted. 
+- Don't remove inline comments that clarify the intent of code, even if the code seems self-explanatory. Check them for accuracy and update them if needed!
 
 ## Architecture
 
@@ -17,3 +18,8 @@
   - the logic carries real policy that benefits from a name
   - the logic materially improves testability
   - the logic hides non-trivial complexity
+
+## After completing implementaion
+
+- Check the implementation for any violations of the above guidelines and refactor all found violations as needed.
+- Iterate checking and refactoring until no meaningful violations remain.
