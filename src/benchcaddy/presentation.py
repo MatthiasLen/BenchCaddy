@@ -1,3 +1,11 @@
+"""Presentation helpers for BenchCaddy terminal output.
+
+This module should encapsulate formatting and rendering primitives used
+by the CLI and reporters, including textual summaries, JSON rendering,
+and Rich table or panel construction. Business logic and data retrieval
+should stay out of this layer so presentation remains reusable.
+"""
+
 from __future__ import annotations
 
 import json

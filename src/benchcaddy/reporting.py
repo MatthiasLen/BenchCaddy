@@ -1,3 +1,11 @@
+"""Progress reporting interfaces for benchmark sweeps.
+
+This module should encapsulate reporter contracts and concrete reporters
+that turn sweep lifecycle events into human-readable progress output. It
+should remain focused on reporting concerns rather than executing
+benchmarks or computing statistics.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

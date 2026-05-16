@@ -1,7 +1,16 @@
+"""Benchmark sweep execution engine.
+
+This module should encapsulate the mechanics of running benchmark suites:
+expanding parameter grids, invoking targets, collecting samples and
+observations, normalizing optional return values, and persisting run
+results. It is the operational core of BenchCaddy and should avoid
+taking on presentation or long-term storage responsibilities beyond the
+minimal coordination needed to record completed runs.
+"""
+
 from __future__ import annotations
 
 import gc
-import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping
@@ -12,15 +21,13 @@ from statistics import median, stdev
 from time import perf_counter
 from typing import Any
 
-import psutil
-
 from .db import benchmark_run_payload, create_sweep_execution, get_database_path, record_benchmark_run
+from .isolation import prepare_system
 from .metadata import collect_environment_metadata, metadata_to_dict
 from .observability import collect_observations
 from .reporting import RichSweepReporter, SweepReporter
 from .return_values import StoredReturnValue, normalize_return_value
 
-_MAX_UNIX_PRIORITY = -20
 _DEFAULT_SAMPLE_COUNT = 7
 
 
@@ -28,34 +35,6 @@ def _as_script_path(target: Callable[..., Any] | str | Path) -> Path | None:
     if isinstance(target, (str, Path)):
         return Path(target)
     return None
-
-
-def prepare_system(lock_cpu_affinity: bool = True) -> None:
-    """Raise process priority, optionally preserve the current affinity set, and freeze GC state."""
-    process = psutil.Process()
-
-    try:
-        if os.name == "nt" and hasattr(psutil, "HIGH_PRIORITY_CLASS"):
-            process.nice(psutil.HIGH_PRIORITY_CLASS)
-        elif hasattr(os, "nice"):
-            # set to highest priority
-            os.nice(_MAX_UNIX_PRIORITY - os.nice(0))
-    except (PermissionError, psutil.AccessDenied, AttributeError, OSError):
-        pass
-
-    if lock_cpu_affinity and hasattr(process, "cpu_affinity"):
-        try:
-            affinity = list(process.cpu_affinity())
-            if affinity:
-                # Self-Affinity Refresh: Re-apply the current affinity to potentially lock
-                # the process to the current CPU set and avoid migrations.
-                process.cpu_affinity(affinity)
-        except (psutil.AccessDenied, NotImplementedError, ValueError):
-            pass
-
-    gc.collect()
-    if hasattr(gc, "freeze"):
-        gc.freeze()
 
 
 def _target_name(target: Callable[..., Any] | str | Path) -> str:

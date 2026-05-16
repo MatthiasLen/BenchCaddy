@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from git.exc import GitCommandError, InvalidGitRepositoryError
 
+import benchcaddy.isolation.process as isolation_process_module
 import benchcaddy.metadata as metadata_module
 from benchcaddy.db import get_run_details
 from benchcaddy.metadata import collect_environment_metadata, collect_git_state, metadata_to_dict
@@ -215,15 +216,15 @@ def test_collect_process_state_handles_access_denied(monkeypatch: pytest.MonkeyP
         pid = 321
 
         def cpu_affinity(self):
-            raise metadata_module.psutil.AccessDenied()
+            raise isolation_process_module.psutil.AccessDenied()
 
         def nice(self):
-            raise metadata_module.psutil.AccessDenied()
+            raise isolation_process_module.psutil.AccessDenied()
 
         def memory_info(self):
-            raise metadata_module.psutil.AccessDenied()
+            raise isolation_process_module.psutil.AccessDenied()
 
-    monkeypatch.setattr(metadata_module.psutil, "Process", lambda: FakeProcess())
+    monkeypatch.setattr(isolation_process_module.psutil, "Process", FakeProcess)
 
     process_state = metadata_module.collect_process_state()
 

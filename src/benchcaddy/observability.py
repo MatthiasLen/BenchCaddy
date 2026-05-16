@@ -1,3 +1,11 @@
+"""Observation hooks for instrumenting timed code paths.
+
+This module should encapsulate lightweight, opt-in observation utilities
+that record labeled sub-operations during a benchmark sample. It should
+provide the collection context, decorator-based timing hooks, and summary
+aggregation used to explain where time was spent inside a run.
+"""
+
 from __future__ import annotations
 
 import os
