@@ -20,7 +20,6 @@ from .isolation import (
     get_affinity,
     prepare_system,
     run_isolated,
-    set_affinity,
 )
 from .observability import observe
 from .reporting import RichSweepReporter, SweepReporter
@@ -42,5 +41,4 @@ __all__ = [
     "observe",
     "prepare_system",
     "run_isolated",
-    "set_affinity",
 ]

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import gc
 import json
+import operator
+import pickle
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +15,7 @@ from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
 import benchcaddy.isolation.environment as isolation_environment_module
+import benchcaddy.isolation.process as isolation_process_module
 from benchcaddy.cli import app
 from benchcaddy.isolation import (
     EnvironmentState,
@@ -21,7 +26,6 @@ from benchcaddy.isolation import (
     collect_environment_state,
     get_affinity,
     run_isolated,
-    set_affinity,
 )
 
 # ---------------------------------------------------------------------------
@@ -48,31 +52,6 @@ class TestGetAffinity:
         mock_process = MagicMock(spec=[])  # no cpu_affinity attribute
         with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
             assert get_affinity() is None
-
-
-class TestSetAffinity:
-    def test_empty_list_returns_false(self):
-        assert set_affinity([]) is False
-
-    def test_no_cpu_affinity_attribute(self):
-        mock_process = MagicMock(spec=[])  # no cpu_affinity attribute
-        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
-            assert set_affinity([0]) is False
-
-    def test_access_denied_returns_false(self):
-        import psutil
-
-        mock_process = MagicMock()
-        mock_process.cpu_affinity.side_effect = psutil.AccessDenied(0)
-        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
-            assert set_affinity([0]) is False
-
-    def test_success_returns_true(self):
-        mock_process = MagicMock()
-        mock_process.cpu_affinity.return_value = None
-        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
-            assert set_affinity([0]) is True
-            mock_process.cpu_affinity.assert_called_once_with([0])
 
 
 # ---------------------------------------------------------------------------
@@ -344,26 +323,31 @@ class TestNoiseAnalyzer:
 # ---------------------------------------------------------------------------
 
 
-def _add(a, b):
-    return a + b
+_worker_call_log: list[tuple[int, int]] = []
 
 
-def _raise_error():
-    raise ValueError("boom")
+def _record_call(a: int, b: int) -> int:
+    _worker_call_log.append((a, b))
+    return len(_worker_call_log)
 
 
 class TestRunIsolated:
     def test_direct_call(self):
-        result = run_isolated(_add, args=(2, 3), fresh_process=False)
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=False)
         assert result == 5
 
     def test_fresh_process(self):
-        result = run_isolated(_add, args=(2, 3), fresh_process=True, timeout=30)
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=30)
         assert result == 5
 
     def test_kwargs_forwarded(self):
-        result = run_isolated(_add, kwargs={"a": 10, "b": 20}, fresh_process=False)
-        assert result == 30
+        result = run_isolated(
+            json.dumps,
+            kwargs={"obj": {"b": 1, "a": 2}, "sort_keys": True},
+            fresh_process=True,
+            timeout=30,
+        )
+        assert result == '{"a": 2, "b": 1}'
 
     def test_timeout_raises(self):
         import time
@@ -372,108 +356,82 @@ class TestRunIsolated:
             run_isolated(time.sleep, args=(10,), fresh_process=True, timeout=0.1)
 
     def test_exception_in_child_raises_runtime_error(self):
-        with pytest.raises(RuntimeError, match="ValueError: boom"):
-            run_isolated(_raise_error, fresh_process=True, timeout=30)
+        with pytest.raises(RuntimeError, match="JSONDecodeError"):
+            run_isolated(json.loads, args=("{",), fresh_process=True, timeout=30)
 
     def test_disable_gc(self):
-        result = run_isolated(_add, args=(1, 1), fresh_process=True, disable_gc=True, timeout=30)
-        assert result == 2
+        result = run_isolated(gc.isenabled, fresh_process=True, disable_gc=True, timeout=30)
+        assert result is False
 
-    def test_fresh_process_uses_spawn_context(self, monkeypatch: pytest.MonkeyPatch):
-        calls: list[str] = []
+    def test_rejects_non_importable_callables_for_fresh_process(self):
+        with pytest.raises(TypeError, match="importable top-level callable"):
+            run_isolated(lambda: None, fresh_process=True)
 
-        class DummyConnection:
-            def __init__(self, payload=None):
-                self._payload = payload
-
-            def poll(self, timeout=None):
-                return True
-
-            def recv(self):
-                return self._payload
-
-            def close(self):
-                return None
-
-        class DummyProcess:
-            def __init__(self, *, target, args, daemon):
-                self.target = target
-                self.args = args
-                self.daemon = daemon
-                self.exitcode = 0
-
-            def start(self):
-                return None
-
-            def join(self, timeout=None):
-                return None
-
-            def terminate(self):
-                self.exitcode = -15
-
-            def kill(self):
-                self.exitcode = -9
-
-        class DummyContext:
-            def Pipe(self, duplex=False):
-                return DummyConnection((True, 5)), DummyConnection()
-
-            def Process(self, *, target, args, daemon):
-                return DummyProcess(target=target, args=args, daemon=daemon)
+    def test_execute_worker_request_applies_warmup_and_preparation(self, monkeypatch: pytest.MonkeyPatch):
+        prepare_calls: list[bool] = []
+        gc_disable_calls: list[str] = []
+        _worker_call_log.clear()
 
         monkeypatch.setattr(
-            "benchcaddy.isolation.process.multiprocessing.get_context",
-            lambda method: calls.append(method) or DummyContext(),
+            isolation_process_module,
+            "prepare_system",
+            lambda lock_cpu_affinity=True: prepare_calls.append(lock_cpu_affinity),
+        )
+        monkeypatch.setattr(isolation_process_module.gc, "disable", lambda: gc_disable_calls.append("disabled"))
+
+        response = isolation_process_module._execute_worker_request(
+            {
+                "module_name": __name__,
+                "qualname": "_record_call",
+                "args": (2, 3),
+                "kwargs": {},
+                "disable_gc": True,
+                "warmup_runs": 2,
+                "lock_cpu_affinity": False,
+            }
         )
 
-        assert run_isolated(_add, args=(2, 3), fresh_process=True, timeout=1.0) == 5
-        assert calls == ["spawn"]
+        assert response == {"ok": True, "payload": 3}
+        assert _worker_call_log == [(2, 3), (2, 3), (2, 3)]
+        assert prepare_calls == [False]
+        assert gc_disable_calls == ["disabled"]
+
+    def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
+        commands: list[list[str]] = []
+
+        def fake_subprocess_run(command, **kwargs):
+            commands.append(command)
+            with isolation_process_module.Path(command[4]).open("rb") as handle:
+                request = pickle.load(handle)
+            assert request["qualname"] == "add"
+            assert isolation_process_module._resolve_callable(request["module_name"], request["qualname"])(2, 3) == 5
+            with isolation_process_module.Path(command[5]).open("wb") as handle:
+                pickle.dump({"ok": True, "payload": 5}, handle)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(isolation_process_module.subprocess, "run", fake_subprocess_run)
+
+        assert run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0) == 5
+        assert commands == [
+            [
+                sys.executable,
+                "-m",
+                "benchcaddy.isolation.process",
+                isolation_process_module._WORKER_FLAG,
+                commands[0][4],
+                commands[0][5],
+            ]
+        ]
 
     def test_child_exit_before_result_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch):
-        class DummyConnection:
-            def poll(self, timeout=None):
-                return True
-
-            def recv(self):
-                raise EOFError()
-
-            def close(self):
-                return None
-
-        class DummyProcess:
-            exitcode = 0
-
-            def __init__(self, *, target, args, daemon):
-                self.target = target
-                self.args = args
-                self.daemon = daemon
-
-            def start(self):
-                return None
-
-            def join(self, timeout=None):
-                return None
-
-            def terminate(self):
-                self.exitcode = -15
-
-            def kill(self):
-                self.exitcode = -9
-
-        class DummyContext:
-            def Pipe(self, duplex=False):
-                return DummyConnection(), DummyConnection()
-
-            def Process(self, *, target, args, daemon):
-                return DummyProcess(target=target, args=args, daemon=daemon)
-
         monkeypatch.setattr(
-            "benchcaddy.isolation.process.multiprocessing.get_context",
-            lambda _method: DummyContext(),
+            isolation_process_module.subprocess,
+            "run",
+            lambda command, **kwargs: SimpleNamespace(returncode=3, stdout="", stderr=""),
         )
 
-        with pytest.raises(RuntimeError, match="exited before sending a result"):
-            run_isolated(_add, args=(2, 3), fresh_process=True, timeout=1.0)
+        with pytest.raises(RuntimeError, match="failed before sending a result"):
+            run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
 
 
 # ---------------------------------------------------------------------------
