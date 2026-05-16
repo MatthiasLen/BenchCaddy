@@ -435,6 +435,36 @@ def _assert_nested_observed_result(result: IsolatedRunResult) -> None:
     assert result.observations[3]["duration_seconds"] >= 0.0
 
 
+def _assert_realistic_workflow_result(result: IsolatedRunResult) -> None:
+    assert result.return_value == 17
+    assert result.elapsed_seconds >= 0.0
+    assert len(result.observations) == 5
+
+    assert result.observations[0]["label"] == "module_time_helper"
+    assert result.observations[0]["kind"] == "time"
+    assert result.observations[0]["duration_seconds"] >= 0.0
+
+    assert result.observations[1]["label"] == "ObservableService.static_time_helper"
+    assert result.observations[1]["kind"] == "time"
+    assert result.observations[1]["duration_seconds"] >= 0.0
+
+    assert result.observations[2] == {
+        "label": "ObservableService.class_return_helper",
+        "kind": "return",
+        "value": 10,
+    }
+
+    assert result.observations[3] == {
+        "label": "ObservableService.instance_both_helper",
+        "kind": "return",
+        "value": 17,
+    }
+
+    assert result.observations[4]["label"] == "ObservableService.instance_both_helper"
+    assert result.observations[4]["kind"] == "time"
+    assert result.observations[4]["duration_seconds"] >= 0.0
+
+
 class TestRunIsolated:
     def test_direct_call(self):
         result = run_isolated(operator.add, args=(2, 3), fresh_process=False)
@@ -455,6 +485,51 @@ class TestRunIsolated:
     def test_fresh_process_collects_nested_observations(self):
         result = run_isolated(observed_targets.nested_observed_target, args=(2,), fresh_process=True, timeout=30)
         _assert_nested_observed_result(result)
+
+    def test_fresh_process_collects_realistic_helper_and_submethod_observations(self):
+        result = run_isolated(observed_targets.realistic_observed_workflow, args=(1,), fresh_process=True, timeout=30)
+        _assert_realistic_workflow_result(result)
+
+    def test_fresh_process_supports_top_level_module_function_target(self):
+        result = run_isolated(observed_targets.top_level_module_target, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 6
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == [
+            {
+                "label": "module_time_helper",
+                "kind": "time",
+                "duration_seconds": pytest.approx(result.observations[0]["duration_seconds"], abs=0.0),
+            },
+            {
+                "label": "module_return_helper",
+                "kind": "return",
+                "value": 6,
+            },
+        ]
+
+    def test_fresh_process_supports_importable_static_method_target(self):
+        result = run_isolated(observed_targets.ObservableService.static_time_helper, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 5
+        assert result.elapsed_seconds >= 0.0
+        assert len(result.observations) == 1
+        assert result.observations[0]["label"] == "ObservableService.static_time_helper"
+        assert result.observations[0]["kind"] == "time"
+        assert result.observations[0]["duration_seconds"] >= 0.0
+
+    def test_fresh_process_supports_importable_class_method_target(self):
+        result = run_isolated(observed_targets.ObservableService.class_return_helper, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 7
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == [
+            {
+                "label": "ObservableService.class_return_helper",
+                "kind": "return",
+                "value": 7,
+            }
+        ]
 
     def test_fresh_process_warmups_do_not_leak_nested_observations(self):
         observed_targets.reset_warmup_sensitive_state()
@@ -518,8 +593,50 @@ class TestRunIsolated:
         assert result.observations == []
 
     def test_rejects_non_importable_callables_for_fresh_process(self):
-        with pytest.raises(TypeError, match="importable top-level callable"):
+        with pytest.raises(
+            TypeError,
+            match="lambdas are unsupported because they do not provide a stable import path",
+        ):
             run_isolated(lambda: None, fresh_process=True)
+
+    def test_rejects_nested_local_functions_for_fresh_process(self):
+        def local_target() -> None:
+            return None
+
+        with pytest.raises(
+            TypeError,
+            match="nested or local functions are unsupported because they are scoped to a parent frame",
+        ):
+            run_isolated(local_target, fresh_process=True)
+
+    def test_rejects_bound_instance_methods_for_fresh_process(self):
+        service = observed_targets.ObservableService()
+
+        with pytest.raises(
+            TypeError,
+            match="bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, not from a live instance",
+        ):
+            run_isolated(service.instance_both_helper, args=(1,), fresh_process=True)
+
+    def test_rejects_arbitrary_callable_instances_for_fresh_process(self):
+        with pytest.raises(
+            TypeError,
+            match="arbitrary callable instances are unsupported because the worker cannot reconstruct a live __call__ object",
+        ):
+            run_isolated(observed_targets.CallableTarget(), fresh_process=True)
+
+    def test_rejects_unresolvable_module_symbol_for_fresh_process(self):
+        original_qualname = observed_targets.top_level_module_target.__qualname__
+        observed_targets.top_level_module_target.__qualname__ = "missing_symbol"
+
+        try:
+            with pytest.raises(
+                TypeError,
+                match=r"could not resolve tests\.subprocess_observed_targets\.missing_symbol\. Ensure the symbol is importable in the child process and exposed at that module path",
+            ):
+                run_isolated(observed_targets.top_level_module_target, args=(1,), fresh_process=True)
+        finally:
+            observed_targets.top_level_module_target.__qualname__ = original_qualname
 
     def test_execute_worker_request_applies_warmup_and_preparation(self, monkeypatch: pytest.MonkeyPatch):
         prepare_calls: list[bool] = []
