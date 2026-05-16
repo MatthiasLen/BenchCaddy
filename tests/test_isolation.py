@@ -632,7 +632,7 @@ class TestRunIsolated:
         try:
             with pytest.raises(
                 TypeError,
-                match=r"could not resolve tests\.subprocess_observed_targets\.missing_symbol\. Ensure the symbol is importable in the child process and exposed at that module path",
+                match=r"could not resolve tests\.subprocess_observed_targets\.missing_symbol\. Ensure the symbol is importable in the child process and exposed at that module path"
             ):
                 run_isolated(observed_targets.top_level_module_target, args=(1,), fresh_process=True)
         finally:
