@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gc
 import importlib
+import inspect
 import os
 import pickle
 import subprocess
@@ -131,6 +132,13 @@ def _child_error_payload(exc: Exception) -> dict[str, str]:
         "message": str(exc),
         "traceback": traceback.format_exc(),
     }
+
+
+def _unsupported_target_error(reason: str) -> TypeError:
+    return TypeError(
+        "fresh isolated execution requires an importable module-level function, static method, or class method; "
+        f"{reason}"
+    )
 
 
 def _run_observed_call(
@@ -280,13 +288,35 @@ def run_isolated(
     if not fresh_process:
         return _run_observed_call(fn, args, kw)
 
+    if inspect.ismethod(fn) and getattr(fn, "__self__", None) is not None and not isinstance(fn.__self__, type):
+        raise _unsupported_target_error(
+            "bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, "
+            "not from a live instance. Wrap the method call in a module-level benchmark function that creates or receives the instance explicitly."
+        )
+
+    if not (inspect.isfunction(fn) or inspect.ismethod(fn) or inspect.isbuiltin(fn)):
+        raise _unsupported_target_error(
+            "arbitrary callable instances are unsupported because the worker cannot reconstruct a live __call__ object from module and qualname alone. "
+            "Expose a module-level function, static method, or class method instead."
+        )
+
     module_name = getattr(fn, "__module__", None)
     qualname = getattr(fn, "__qualname__", None)
 
-    if not module_name or not qualname or "<locals>" in qualname or "<lambda>" in qualname:
-        raise TypeError(
-            "fresh isolated execution requires an importable top-level callable; "
-            "nested functions and lambdas are unsupported."
+    if not module_name or not qualname:
+        raise _unsupported_target_error(
+            "the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process."
+        )
+
+    if "<lambda>" in qualname:
+        raise _unsupported_target_error(
+            "lambdas are unsupported because they do not provide a stable import path for the worker. Define a named module-level function instead."
+        )
+
+    if "<locals>" in qualname:
+        raise _unsupported_target_error(
+            "nested or local functions are unsupported because they are scoped to a parent frame and cannot be re-imported by qualname in the worker. "
+            "Move the benchmark target to module scope instead."
         )
 
     # Validate that the target is importable and callable before spawning a process, so that we can raise
@@ -294,9 +324,8 @@ def run_isolated(
     try:
         _resolve_callable(module_name, qualname)
     except Exception as exc:
-        raise TypeError(
-            "fresh isolated execution requires an importable top-level callable; "
-            f"could not resolve {module_name}.{qualname}."
+        raise _unsupported_target_error(
+            f"could not resolve {module_name}.{qualname}. Ensure the symbol is importable in the child process and exposed at that module path."
         ) from exc
 
     # The worker process will re-import the target function and execute it with the provided arguments,
