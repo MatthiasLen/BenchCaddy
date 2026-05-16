@@ -11,8 +11,6 @@ minimal coordination needed to record completed runs.
 from __future__ import annotations
 
 import gc
-import subprocess
-import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import product
@@ -31,33 +29,12 @@ from .return_values import StoredReturnValue, normalize_return_value
 _DEFAULT_SAMPLE_COUNT = 7
 
 
-def _as_script_path(target: Callable[..., Any] | str | Path) -> Path | None:
-    if isinstance(target, (str, Path)):
-        return Path(target)
-    return None
-
-
-def _target_name(target: Callable[..., Any] | str | Path) -> str:
-    if script := _as_script_path(target):
-        return script.name
+def _target_name(target: Callable[..., Any]) -> str:
     if target_name := getattr(target, "__name__", None):
         return target_name
     if callable(target) and (call_name := getattr(target.__call__, "__name__", None)):
         return call_name
     return "callable_instance"
-
-
-def _argument_tokens(configuration: Mapping[str, Any]) -> list[str]:
-    tokens: list[str] = []
-    for k, v in configuration.items():
-        flag = f"--{k.replace('_', '-')}"
-        if v is True:
-            tokens.append(flag)
-        elif v is False:
-            tokens.extend([flag, "false"])
-        elif v is not None:
-            tokens.extend([flag, str(v)])
-    return tokens
 
 
 def _report(reporter: SweepReporter | None, event: str, **payload: Any) -> None:
@@ -81,7 +58,7 @@ class BenchmarkResult:
 
 @dataclass
 class Sweep:
-    target: Callable[..., Any] | str | Path
+    target: Callable[..., Any]
     params: Mapping[str, Iterable[Any]]
     suite_name: str
     samples: int = _DEFAULT_SAMPLE_COUNT
@@ -127,11 +104,6 @@ class Sweep:
             synchronize()
 
     def _invoke_target(self, configuration: Mapping[str, Any]) -> Any:
-        script_path = _as_script_path(self.target)
-        if script_path is not None:
-            command = [sys.executable, str(script_path), *_argument_tokens(configuration)]
-            return subprocess.run(command, check=True)
-
         return self.target(**configuration)
 
     def _run_sample(
@@ -212,18 +184,15 @@ class Sweep:
             median_seconds = float(median(samples))
             min_seconds, max_seconds = float(min(samples)), float(max(samples))
             std_seconds = float(stdev(samples)) if len(samples) > 1 else 0.0
-            timing_payload = {
-                "median_seconds": median_seconds,
-                "min_seconds": min_seconds,
-                "max_seconds": max_seconds,
-                "std_seconds": std_seconds,
-            }
             run_payload = benchmark_run_payload(
                 configuration=configuration,
                 samples=samples,
                 observations=observations,
                 target_return_value=target_return_value,
-                **timing_payload,
+                median_seconds=median_seconds,
+                min_seconds=min_seconds,
+                max_seconds=max_seconds,
+                std_seconds=std_seconds,
             )
 
             benchmark_run = record_benchmark_run(

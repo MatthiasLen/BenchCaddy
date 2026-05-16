@@ -478,71 +478,7 @@ def test_verbose_sweep_prints_scientific_return_values(
     assert "[1.000000e+00, 2.500000e+00, 3.000000e+00]" in reporter_output
 
 
-def test_sweep_supports_script_targets(
-    tmp_path: Path,
-    monkeypatch,
-    environment_payload: dict[str, object],
-) -> None:
-    database_path = tmp_path / "benchcaddy.db"
-    script_path = tmp_path / "benchmark_script.py"
-    marker_path = tmp_path / "invocations.txt"
-    metadata_marker = object()
 
-    script_path.write_text(
-        "\n".join(
-            [
-                "from __future__ import annotations",
-                "import argparse",
-                "from pathlib import Path",
-                "parser = argparse.ArgumentParser()",
-                "parser.add_argument('--size', type=int, required=True)",
-                "parser.add_argument('--variant', required=True)",
-                "args = parser.parse_args()",
-                "Path(" + repr(str(marker_path)) + ").open('a', encoding='utf-8').write(f'{args.size}:{args.variant}\\n')",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    def stub_collect_environment_metadata() -> object:
-        return metadata_marker
-
-    def stub_prepare_system(lock_cpu_affinity: bool = True) -> None:
-        del lock_cpu_affinity
-
-    monkeypatch.setattr(core_module, "prepare_system", stub_prepare_system)
-    monkeypatch.setattr(core_module, "collect_environment_metadata", stub_collect_environment_metadata)
-    monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
-
-    sweep = Sweep(
-        target=script_path,
-        params={"size": [8], "variant": ["baseline", "stabilized"]},
-        suite_name="script-target-suite",
-        iterations=1,
-        warmup_runs=0,
-        lock_cpu_affinity=False,
-        database_path=database_path,
-    )
-
-    results = sweep.run()
-
-    assert len(results) == 2
-    assert marker_path.read_text(encoding="utf-8").splitlines() == [
-        "8:baseline",
-        "8:stabilized",
-    ]
-
-
-def test_script_argument_tokens_preserve_false_values() -> None:
-    assert core_module._argument_tokens(
-        {
-            "use_cache": False,
-            "dry_run": True,
-            "size": 512,
-            "label": None,
-        }
-    ) == ["--use-cache", "false", "--dry-run", "--size", "512"]
 
 
 def test_separate_sweeps_get_distinct_sweep_ids(
