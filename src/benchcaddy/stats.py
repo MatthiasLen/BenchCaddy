@@ -1,5 +1,15 @@
+"""Statistical analysis for benchmark samples and run comparisons.
+
+This module should encapsulate descriptive statistics, bootstrap-based
+confidence intervals, noise heuristics, and pairwise comparison logic for
+benchmark sample sets. Statistical policy belongs here so callers can use
+one consistent analysis model across storage, CLI inspection, and trend
+reporting.
+"""
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from math import isclose
 
@@ -61,10 +71,6 @@ class ComparisonStatistics:
         return asdict(self)
 
 
-def _as_array(samples: list[float] | tuple[float, ...]) -> np.ndarray:
-    return np.asarray(samples, dtype=float)
-
-
 def _validate_options(options: AnalysisOptions) -> None:
     if not 0.0 < options.confidence_level < 1.0:
         raise ValueError("confidence_level must be between 0 and 1.")
@@ -87,6 +93,22 @@ def _sample_std(values: np.ndarray) -> float:
     if values.size <= 1:
         return 0.0
     return float(np.std(values, ddof=1))
+
+
+def robust_relative_jitter(
+    values: Sequence[float] | np.ndarray,
+    *,
+    center: float | None = None,
+    scale_factor: float = 1.4826,
+) -> tuple[float, float]:
+    """Returns MAD over median as a robust relative jitter estimate, along with the median value used."""
+    values_array = np.asarray(values, dtype=float)
+    median_value = float(np.median(values_array)) if center is None else center
+    if median_value <= 0.0:
+        return 0.0, median_value
+
+    mad = float(np.median(np.abs(values_array - median_value)))
+    return (scale_factor * mad) / median_value, median_value
 
 
 def _bootstrap_estimates(
@@ -155,7 +177,7 @@ def analyze_samples(
 ) -> RunStatistics:
     chosen_options = options or AnalysisOptions()
     _validate_options(chosen_options)
-    values = _as_array(samples)
+    values = np.asarray(samples, dtype=float)
     mean_seconds = float(np.mean(values)) if values.size else 0.0
     median_seconds = float(np.median(values)) if values.size else 0.0
     std_seconds = _sample_std(values)
@@ -333,8 +355,8 @@ def compare_sample_sets(
 ) -> ComparisonStatistics:
     chosen_options = options or AnalysisOptions()
     _validate_options(chosen_options)
-    baseline_values = _as_array(baseline_samples)
-    candidate_values = _as_array(candidate_samples)
+    baseline_values = np.asarray(baseline_samples, dtype=float)
+    candidate_values = np.asarray(candidate_samples, dtype=float)
 
     baseline_stats = analyze_samples(list(baseline_values), chosen_options)
     candidate_stats = analyze_samples(list(candidate_values), chosen_options)

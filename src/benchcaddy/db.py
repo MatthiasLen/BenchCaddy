@@ -1,3 +1,15 @@
+"""SQLite persistence and query layer for BenchCaddy.
+
+This module should encapsulate the database schema, engine lifecycle, and
+high-level read/write helpers used by the rest of the package. It is the
+single place that should understand how benchmark runs, environments,
+sweeps, and derived comparison payloads are stored and retrieved.
+
+TODO: Split ORM model definitions from query/serialization helpers once
+the persistence surface grows further; this file currently hosts both
+schema declarations and application-facing data access logic.
+"""
+
 from __future__ import annotations
 
 import threading
@@ -681,37 +693,6 @@ def set_suite_baseline(
         session.commit()
         session.refresh(run)
         return run.to_detail_payload(analysis_options)
-
-
-def get_suite_baseline(
-    suite_name: str,
-    database_path: str | Path | None = None,
-    analysis_options: AnalysisOptions | None = None,
-) -> dict[str, Any] | None:
-    with db_session(database_path) as session:
-        suite = session.scalar(_suite_query(suite_name))
-        if suite is None:
-            return None
-        run = _resolve_suite_baseline_run(session, suite)
-        if run is None:
-            return None
-        return run.to_detail_payload(analysis_options)
-
-
-def clear_suite_baseline(
-    suite_name: str,
-    database_path: str | Path | None = None,
-) -> bool | None:
-    with db_session(database_path) as session:
-        suite = session.scalar(_suite_query(suite_name))
-        if suite is None:
-            return None
-        baseline = _get_suite_baseline_record(session, suite.id)
-        if baseline is None:
-            return False
-        session.delete(baseline)
-        session.commit()
-        return True
 
 
 def compare_suite_runs(

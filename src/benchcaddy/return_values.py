@@ -1,3 +1,11 @@
+"""Normalization and comparison helpers for benchmark return values.
+
+This module should encapsulate the supported return-value types that can
+be stored alongside benchmark runs, plus the distance and relative-error
+logic used to compare those values across runs. It should stay focused on
+value-shape validation and comparison semantics.
+"""
+
 from __future__ import annotations
 
 from math import sqrt
