@@ -19,14 +19,18 @@ import benchcaddy.isolation.process as isolation_process_module
 from benchcaddy.cli import app
 from benchcaddy.isolation import (
     EnvironmentState,
+    IsolatedRunResult,
     NoiseAnalyzer,
     NoiseCapture,
     NoiseEstimate,
     build_reliability_report,
     collect_environment_state,
+    collect_observations,
     get_affinity,
+    observe,
     run_isolated,
 )
+from tests import subprocess_observed_targets as observed_targets
 
 # ---------------------------------------------------------------------------
 # affinity
@@ -192,6 +196,80 @@ def _capture(*durations: float) -> NoiseCapture:
     )
 
 
+@observe("time")
+def _timed_increment(value: int) -> int:
+    return value + 1
+
+
+@observe("return")
+def _observed_identity(value: object) -> object:
+    return value
+
+
+@observe("time", "return")
+def _observed_add(a: int, b: int) -> int:
+    return a + b
+
+
+@observe("time")
+def _observed_failure() -> None:
+    raise RuntimeError("boom")
+
+
+class TestIsolationObservability:
+    def test_time_mode_records_duration(self):
+        with collect_observations() as collector:
+            assert _timed_increment(2) == 3
+
+        assert len(collector.records) == 1
+        assert collector.records[0]["label"] == "_timed_increment"
+        assert collector.records[0]["kind"] == "time"
+        assert collector.records[0]["duration_seconds"] >= 0.0
+
+    def test_return_mode_records_normalized_values_and_skips_unsupported_values(self):
+        with collect_observations() as collector:
+            assert _observed_identity([1, 2, 3]) == [1, 2, 3]
+            unsupported = object()
+            assert _observed_identity(unsupported) is unsupported
+
+        assert collector.records == [
+            {
+                "label": "_observed_identity",
+                "kind": "return",
+                "value": [1.0, 2.0, 3.0],
+            }
+        ]
+
+    def test_combined_modes_record_both_kinds(self):
+        with collect_observations() as collector:
+            assert _observed_add(2, 3) == 5
+
+        assert len(collector.records) == 2
+        assert collector.records[0] == {
+            "label": "_observed_add",
+            "kind": "return",
+            "value": 5,
+        }
+        assert collector.records[1]["label"] == "_observed_add"
+        assert collector.records[1]["kind"] == "time"
+        assert collector.records[1]["duration_seconds"] >= 0.0
+
+    def test_time_mode_records_exceptions(self):
+        with pytest.raises(RuntimeError, match="boom"), collect_observations() as collector:
+            _observed_failure()
+
+        assert len(collector.records) == 1
+        assert collector.records[0]["label"] == "_observed_failure"
+        assert collector.records[0]["kind"] == "time"
+
+    def test_observe_rejects_missing_or_invalid_modes(self):
+        with pytest.raises(ValueError, match="at least one mode"):
+            observe()
+
+        with pytest.raises(ValueError, match="Unsupported"):
+            observe("bogus")
+
+
 class TestNoiseAnalyzer:
     def test_capture_returns_noise_capture(self):
         class ConstantProbeNoiseAnalyzer(NoiseAnalyzer):
@@ -331,14 +409,86 @@ def _record_call(a: int, b: int) -> int:
     return len(_worker_call_log)
 
 
+def _assert_nested_observed_result(result: IsolatedRunResult) -> None:
+    assert result.return_value == 6
+    assert result.elapsed_seconds >= 0.0
+    assert len(result.observations) == 4
+
+    assert result.observations[0]["label"] == "nested_observed_target.<locals>.inner_time"
+    assert result.observations[0]["kind"] == "time"
+    assert result.observations[0]["duration_seconds"] >= 0.0
+
+    assert result.observations[1] == {
+        "label": "nested_observed_target.<locals>.inner_return",
+        "kind": "return",
+        "value": 6,
+    }
+
+    assert result.observations[2] == {
+        "label": "nested_observed_target.<locals>.inner_both",
+        "kind": "return",
+        "value": 6,
+    }
+
+    assert result.observations[3]["label"] == "nested_observed_target.<locals>.inner_both"
+    assert result.observations[3]["kind"] == "time"
+    assert result.observations[3]["duration_seconds"] >= 0.0
+
+
 class TestRunIsolated:
     def test_direct_call(self):
         result = run_isolated(operator.add, args=(2, 3), fresh_process=False)
-        assert result == 5
+        assert result.return_value == 5
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
+
+    def test_direct_call_collects_nested_observations(self):
+        result = run_isolated(observed_targets.nested_observed_target, args=(2,), fresh_process=False)
+        _assert_nested_observed_result(result)
 
     def test_fresh_process(self):
         result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=30)
-        assert result == 5
+        assert result.return_value == 5
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
+
+    def test_fresh_process_collects_nested_observations(self):
+        result = run_isolated(observed_targets.nested_observed_target, args=(2,), fresh_process=True, timeout=30)
+        _assert_nested_observed_result(result)
+
+    def test_fresh_process_warmups_do_not_leak_nested_observations(self):
+        observed_targets.reset_warmup_sensitive_state()
+
+        result = run_isolated(
+            observed_targets.warmup_sensitive_observed_target,
+            fresh_process=True,
+            warmup_runs=2,
+            timeout=30,
+        )
+
+        assert result.return_value == 3
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == [
+            {
+                "label": "warmup_sensitive_observed_target.<locals>.inner_return",
+                "kind": "return",
+                "value": 3,
+            }
+        ]
+
+    def test_fresh_process_skips_unsupported_nested_return_observations(self):
+        result = run_isolated(
+            observed_targets.unsupported_nested_return_target,
+            fresh_process=True,
+            timeout=30,
+        )
+
+        assert result.return_value == "done"
+        assert result.elapsed_seconds >= 0.0
+        assert len(result.observations) == 1
+        assert result.observations[0]["label"] == "unsupported_nested_return_target.<locals>.inner_both"
+        assert result.observations[0]["kind"] == "time"
+        assert result.observations[0]["duration_seconds"] >= 0.0
 
     def test_kwargs_forwarded(self):
         result = run_isolated(
@@ -347,7 +497,9 @@ class TestRunIsolated:
             fresh_process=True,
             timeout=30,
         )
-        assert result == '{"a": 2, "b": 1}'
+        assert result.return_value == '{"a": 2, "b": 1}'
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
 
     def test_timeout_raises(self):
         import time
@@ -361,7 +513,9 @@ class TestRunIsolated:
 
     def test_disable_gc(self):
         result = run_isolated(gc.isenabled, fresh_process=True, disable_gc=True, timeout=30)
-        assert result is False
+        assert result.return_value is False
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
 
     def test_rejects_non_importable_callables_for_fresh_process(self):
         with pytest.raises(TypeError, match="importable top-level callable"):
@@ -391,10 +545,41 @@ class TestRunIsolated:
             }
         )
 
-        assert response == {"ok": True, "payload": 3}
+        assert response["ok"] is True
+        assert isinstance(response["payload"], IsolatedRunResult)
+        assert response["payload"].return_value == 3
+        assert response["payload"].elapsed_seconds >= 0.0
+        assert response["payload"].observations == []
         assert _worker_call_log == [(2, 3), (2, 3), (2, 3)]
         assert prepare_calls == [False]
         assert gc_disable_calls == ["disabled"]
+
+    def test_execute_worker_request_collects_observations_only_for_measured_call(self):
+        response = isolation_process_module._execute_worker_request(
+            {
+                "module_name": __name__,
+                "qualname": "_observed_add",
+                "args": (2, 3),
+                "kwargs": {},
+                "disable_gc": False,
+                "warmup_runs": 2,
+                "lock_cpu_affinity": True,
+            }
+        )
+
+        assert response["ok"] is True
+        payload = response["payload"]
+        assert isinstance(payload, IsolatedRunResult)
+        assert payload.return_value == 5
+        assert payload.elapsed_seconds >= 0.0
+        assert payload.observations[0] == {
+            "label": "_observed_add",
+            "kind": "return",
+            "value": 5,
+        }
+        assert payload.observations[1]["label"] == "_observed_add"
+        assert payload.observations[1]["kind"] == "time"
+        assert len(payload.observations) == 2
 
     def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
         commands: list[list[str]] = []
@@ -406,12 +591,24 @@ class TestRunIsolated:
             assert request["qualname"] == "add"
             assert isolation_process_module._resolve_callable(request["module_name"], request["qualname"])(2, 3) == 5
             with isolation_process_module.Path(command[5]).open("wb") as handle:
-                pickle.dump({"ok": True, "payload": 5}, handle)
+                pickle.dump(
+                    {
+                        "ok": True,
+                        "payload": IsolatedRunResult(
+                            elapsed_seconds=0.125,
+                            return_value=5,
+                            observations=[],
+                        ),
+                    },
+                    handle,
+                )
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(isolation_process_module.subprocess, "run", fake_subprocess_run)
 
-        assert run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0) == 5
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+        assert result == IsolatedRunResult(elapsed_seconds=0.125, return_value=5, observations=[])
         assert commands == [
             [
                 sys.executable,
