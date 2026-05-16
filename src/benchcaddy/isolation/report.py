@@ -2,30 +2,29 @@
 
 This module should encapsulate the policy that turns raw isolation
 signals into human-readable reliability judgments and warnings. It is
-where environment state and noise estimates are combined into a concise,
-actionable report for users.
+where environment-derived risk and noise-derived classifications are
+combined into a concise, actionable report for users.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .environment import EnvironmentState
+from .environment import EnvironmentState, environment_risk_score, environment_warnings
 from .noise import NoiseEstimate
 
 # Thresholds used when classifying individual dimensions.
-_LOAD_HIGH_THRESHOLD = 0.30       # > 30 % CPU load → background load elevated
-_LOAD_MODERATE_THRESHOLD = 0.15   # > 15 % → minor background activity
 _ENVIRONMENT_FAIR_RISK = 1
 _ENVIRONMENT_LOW_RISK = 3
-_BATTERY_RISK = 2
-_THERMAL_RISK = 3
-_FREQUENCY_SCALING_RISK = 2
-_MODERATE_LOAD_RISK = 1
-_HIGH_LOAD_RISK = 2
 _MODERATE_NOISE_RISK = 1
 _HIGH_NOISE_RISK = 3
-_UNKNOWN_ENVIRONMENT_RISK = 1
+
+_NOISE_RISK_BY_LEVEL = {
+    "low": 0,
+    "moderate": _MODERATE_NOISE_RISK,
+    "high": _HIGH_NOISE_RISK,
+}
+_NOISE_LEVEL_ORDER = {"low": 0, "moderate": 1, "high": 2}
 
 
 @dataclass(frozen=True)
@@ -59,56 +58,9 @@ class ReliabilityReport:
         return "\n".join(lines)
 
 
-def _all_environment_signals_missing(env: EnvironmentState) -> bool:
-    """Return ``True`` when no environment telemetry could be collected."""
-    return (
-        env.cpu_load is None
-        and env.on_battery is None
-        and env.thermal_throttling is None
-        and env.frequency_stable is None
-    )
-
-
-def _environmental_risk_score(env: EnvironmentState, noise: NoiseEstimate) -> int:
-    """Combine environmental hazards into a monotone benchmark-risk score.
-
-    Severe single hazards such as thermal throttling or very high timing
-    jitter are enough to make the environment unsuitable on their own.
-    Moderate hazards accumulate: for example, battery power plus notable
-    background load should degrade quality even if each signal alone only
-    warrants caution.
-    """
-    risk = 0
-
-    if env.on_battery is True:
-        risk += _BATTERY_RISK
-
-    if env.thermal_throttling is True:
-        risk += _THERMAL_RISK
-
-    if env.frequency_stable is False:
-        risk += _FREQUENCY_SCALING_RISK
-
-    if env.cpu_load is not None:
-        if env.cpu_load > _LOAD_HIGH_THRESHOLD:
-            risk += _HIGH_LOAD_RISK
-        elif env.cpu_load > _LOAD_MODERATE_THRESHOLD:
-            risk += _MODERATE_LOAD_RISK
-
-    if noise.noise_level == "high":
-        risk += _HIGH_NOISE_RISK
-    elif noise.noise_level == "moderate":
-        risk += _MODERATE_NOISE_RISK
-
-    if noise.drift_level == "high":
-        risk += _HIGH_NOISE_RISK
-    elif noise.drift_level == "moderate":
-        risk += _MODERATE_NOISE_RISK
-
-    if _all_environment_signals_missing(env):
-        risk += _UNKNOWN_ENVIRONMENT_RISK
-
-    return risk
+def _noise_risk_score(noise: NoiseEstimate) -> int:
+    """Return the additive timing-noise risk that feeds report quality."""
+    return _NOISE_RISK_BY_LEVEL[noise.noise_level] + _NOISE_RISK_BY_LEVEL[noise.drift_level]
 
 
 def _environmental_quality(env: EnvironmentState, noise: NoiseEstimate) -> str:
@@ -119,7 +71,7 @@ def _environmental_quality(env: EnvironmentState, noise: NoiseEstimate) -> str:
     additive risk scoring rather than the previous first-match heuristic,
     so multiple moderate degradations can collectively lower the result.
     """
-    risk = _environmental_risk_score(env, noise)
+    risk = environment_risk_score(env) + _noise_risk_score(noise)
     if risk >= _ENVIRONMENT_LOW_RISK:
         return "LOW"
     if risk >= _ENVIRONMENT_FAIR_RISK:
@@ -157,46 +109,12 @@ def _drift_warning(noise: NoiseEstimate) -> str | None:
 
 def _timing_stability(noise: NoiseEstimate) -> str:
     """Summarize overall timing stability from noise and drift levels."""
-    if "high" in {noise.noise_level, noise.drift_level}:
+    worst_level = max(noise.noise_level, noise.drift_level, key=lambda level: _NOISE_LEVEL_ORDER[level])
+    if worst_level == "high":
         return "LOW"
-    if "moderate" in {noise.noise_level, noise.drift_level}:
+    if worst_level == "moderate":
         return "FAIR"
     return "HIGH"
-
-
-def _collect_warnings(env: EnvironmentState, noise: NoiseEstimate) -> list[str]:
-    """Collect actionable warnings explaining the reliability verdict."""
-    warnings: list[str] = []
-
-    # --- environment warnings ---
-    if env.on_battery is True:
-        warnings.append("Running on battery power — results may be throttled")
-
-    if env.thermal_throttling is True:
-        warnings.append("Thermal throttling detected — CPU may be running below rated speed")
-
-    if env.frequency_stable is False:
-        warnings.append("CPU frequency scaling active — consider disabling dynamic frequency scaling")
-
-    if env.cpu_load is not None:
-        if env.cpu_load > _LOAD_HIGH_THRESHOLD:
-            warnings.append(f"Background load elevated ({env.cpu_load:.0%}) — close competing processes for more reliable results")
-        elif env.cpu_load > _LOAD_MODERATE_THRESHOLD:
-            warnings.append(f"Minor background activity detected ({env.cpu_load:.0%})")
-
-    if _all_environment_signals_missing(env):
-        warnings.append("Environment telemetry unavailable — quality estimate is conservative")
-
-    # --- noise warnings ---
-    noise_warning = _noise_warning(noise)
-    if noise_warning is not None:
-        warnings.append(noise_warning)
-
-    drift_warning = _drift_warning(noise)
-    if drift_warning is not None:
-        warnings.append(drift_warning)
-
-    return warnings
 
 
 def build_reliability_report(
@@ -216,11 +134,13 @@ def build_reliability_report(
         A :class:`~benchcaddy.isolation.noise.NoiseEstimate` collected
         via :class:`~benchcaddy.isolation.noise.NoiseAnalyzer`.
     """
-    warnings = _collect_warnings(environment, noise)
-    environmental_quality = _environmental_quality(environment, noise)
+    warnings = environment_warnings(environment)
+    for warning in (_noise_warning(noise), _drift_warning(noise)):
+        if warning is not None:
+            warnings.append(warning)
 
     return ReliabilityReport(
         timing_stability=_timing_stability(noise),
-        environmental_quality=environmental_quality,
+        environmental_quality=_environmental_quality(environment, noise),
         warnings=tuple(warnings),
     )

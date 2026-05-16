@@ -9,11 +9,16 @@ in their implementation modules.
 from .core import Sweep
 from .isolation import (
     EnvironmentState,
+    NoiseAnalyzer,
+    NoiseCapture,
     NoiseEstimate,
+    ProcessState,
     ReliabilityReport,
     build_reliability_report,
     collect_environment_state,
+    collect_process_state,
     get_affinity,
+    prepare_system,
     run_isolated,
     set_affinity,
 )
@@ -22,15 +27,20 @@ from .reporting import RichSweepReporter, SweepReporter
 
 __all__ = [
     "EnvironmentState",
+    "NoiseAnalyzer",
+    "NoiseCapture",
     "NoiseEstimate",
+    "ProcessState",
     "ReliabilityReport",
     "RichSweepReporter",
     "Sweep",
     "SweepReporter",
     "build_reliability_report",
     "collect_environment_state",
+    "collect_process_state",
     "get_affinity",
     "observe",
+    "prepare_system",
     "run_isolated",
     "set_affinity",
 ]

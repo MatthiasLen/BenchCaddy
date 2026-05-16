@@ -98,17 +98,16 @@ def _sample_std(values: np.ndarray) -> float:
 def robust_relative_jitter(
     values: Sequence[float] | np.ndarray,
     *,
-    center: float | None = None,
     scale_factor: float = 1.4826,
 ) -> tuple[float, float]:
-    """Returns MAD over median as a robust relative jitter estimate, along with the median value used."""
+    """Return scaled MAD relative to the sample median, plus that median."""
     values_array = np.asarray(values, dtype=float)
-    median_value = float(np.median(values_array)) if center is None else center
-    if median_value <= 0.0:
-        return 0.0, median_value
+    center_value = float(np.median(values_array))
+    if center_value <= 0.0:
+        return 0.0, center_value
 
-    mad = float(np.median(np.abs(values_array - median_value)))
-    return (scale_factor * mad) / median_value, median_value
+    mad = float(np.median(np.abs(values_array - center_value)))
+    return (scale_factor * mad) / center_value, center_value
 
 
 def _bootstrap_estimates(
