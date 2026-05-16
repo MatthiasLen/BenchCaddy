@@ -695,37 +695,6 @@ def set_suite_baseline(
         return run.to_detail_payload(analysis_options)
 
 
-def get_suite_baseline(
-    suite_name: str,
-    database_path: str | Path | None = None,
-    analysis_options: AnalysisOptions | None = None,
-) -> dict[str, Any] | None:
-    with db_session(database_path) as session:
-        suite = session.scalar(_suite_query(suite_name))
-        if suite is None:
-            return None
-        run = _resolve_suite_baseline_run(session, suite)
-        if run is None:
-            return None
-        return run.to_detail_payload(analysis_options)
-
-
-def clear_suite_baseline(
-    suite_name: str,
-    database_path: str | Path | None = None,
-) -> bool | None:
-    with db_session(database_path) as session:
-        suite = session.scalar(_suite_query(suite_name))
-        if suite is None:
-            return None
-        baseline = _get_suite_baseline_record(session, suite.id)
-        if baseline is None:
-            return False
-        session.delete(baseline)
-        session.commit()
-        return True
-
-
 def compare_suite_runs(
     suite_name: str,
     reference_run_id: int | tuple[int, int] | None = None,
