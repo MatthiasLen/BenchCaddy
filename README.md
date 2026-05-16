@@ -242,6 +242,16 @@ benchcaddy trend nonlinear-transform --limit 8 --window 4
 confidence intervals, compares each run to the baseline, and labels rolling
 drift as stable, noisy, improving, or regressing.
 
+Inspect the current machine's benchmark reliability signals before recording or comparing runs:
+
+```bash
+benchcaddy env
+benchcaddy env --json
+```
+
+`env` reports timing noise, drift, affinity, and a few environment risk signals
+such as CPU load, battery state, thermal throttling, and frequency stability.
+
 ## CI/CD integration
 
 BenchCaddy can support CI-oriented benchmark checks without introducing a
