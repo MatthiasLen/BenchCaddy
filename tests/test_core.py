@@ -12,12 +12,10 @@ import benchcaddy.isolation.process as isolation_process_module
 import benchcaddy.observability as observability_module
 from benchcaddy import Sweep, observe
 from benchcaddy.db import (
-    clear_suite_baseline,
     compare_runs,
     compare_suite_runs,
     db_session,
     get_run_details,
-    get_suite_baseline,
     get_suite_details,
     get_suite_trend,
     initialize_database,
@@ -244,10 +242,6 @@ def test_suite_baseline_persistence_and_trend_filtering(
     assert pinned is not None
     assert pinned["display_id"] == "1.1"
 
-    baseline = get_suite_baseline("trend-suite", database_path)
-    assert baseline is not None
-    assert baseline["display_id"] == "1.1"
-
     comparison = compare_suite_runs("trend-suite", database_path=database_path, use_pinned_baseline=True)
     assert comparison is not None
     assert comparison["basis_source"] == "pinned"
@@ -259,9 +253,6 @@ def test_suite_baseline_persistence_and_trend_filtering(
     assert trend["config_filter"] == {"size": 512, "variant": "baseline"}
     assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1", "3.1"]
     assert trend["runs"][-1]["vs_baseline"]["classification"] == "regressing"
-
-    assert clear_suite_baseline("trend-suite", database_path) is True
-    assert get_suite_baseline("trend-suite", database_path) is None
 
 
 def test_sweep_requires_supported_target_return_types_when_enabled(

@@ -95,13 +95,6 @@ def _sample_std(values: np.ndarray) -> float:
     return float(np.std(values, ddof=1))
 
 
-def median_or_none(values: Sequence[float] | np.ndarray) -> float | None:
-    values_array = np.asarray(values, dtype=float)
-    if values_array.size == 0:
-        return None
-    return float(np.median(values_array))
-
-
 def robust_relative_jitter(
     values: Sequence[float] | np.ndarray,
     *,
@@ -115,44 +108,6 @@ def robust_relative_jitter(
 
     mad = float(np.median(np.abs(values_array - median_value)))
     return (scale_factor * mad) / median_value, median_value
-
-
-def tail_relative_jitter(
-    values: Sequence[float] | np.ndarray,
-    *,
-    center: float | None = None,
-    quantile: float = 0.95,
-) -> tuple[float, float]:
-    values_array = np.asarray(values, dtype=float)
-    median_value = float(np.median(values_array)) if center is None else center
-    if median_value <= 0.0:
-        return 0.0, median_value
-
-    upper_tail = float(np.quantile(values_array, quantile))
-    return max(0.0, (upper_tail / median_value) - 1.0), median_value
-
-
-def bootstrap_log_interval(
-    values: Sequence[float] | np.ndarray,
-    *,
-    resamples: int,
-    seed: int = 0,
-    lower_quantile: float = 0.025,
-    upper_quantile: float = 0.975,
-    epsilon: float = 1e-12,
-) -> tuple[float, float] | None:
-    values_array = np.asarray(values, dtype=float)
-    if values_array.size < 2:
-        return None
-
-    rng = np.random.default_rng(seed)
-    log_values = np.log(np.maximum(values_array, epsilon))
-    sample_indices = rng.integers(0, log_values.size, size=(resamples, log_values.size))
-    bootstrap_log_medians = np.median(log_values[sample_indices], axis=1)
-    return (
-        float(np.exp(np.quantile(bootstrap_log_medians, lower_quantile))),
-        float(np.exp(np.quantile(bootstrap_log_medians, upper_quantile))),
-    )
 
 
 def _bootstrap_estimates(
