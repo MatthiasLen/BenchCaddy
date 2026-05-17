@@ -91,8 +91,7 @@ should be interpreted alongside sample count, variance, outliers, and overall
 benchmark-environment stability.
 
 The full runnable example lives in the repository and source distribution at
-[`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py)
-and supports `--verbose`, `--database`, `--samples`, and `--warmup-iterations`.
+[`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py).
 
 ## Sweep options
 
@@ -330,7 +329,7 @@ jobs:
             - name: Record benchmark run
               run: python examples/benchmark_nonlinear_transform.py --database benchcaddy.db
             - name: Enforce regression gate
-              run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
+                            run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
 ```
 
 For a baseline-driven workflow, pin the reference run once and reuse it in CI:
