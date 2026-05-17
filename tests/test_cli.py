@@ -1099,6 +1099,16 @@ def test_trend_row_style_keeps_anchor_green_when_it_is_best() -> None:
     assert _trend_row_style(trend, trend["runs"][0]) is None
 
 
+def test_trend_sparkline_compacts_to_requested_width() -> None:
+    series = [float(index) for index in range(1, 21)]
+
+    compact = cli_module._trend_sparkline(series, max_points=6)
+
+    assert len(compact) == 6
+    assert "…" not in compact
+    assert compact[-1] == cli_module._trend_sparkline(series)[-1]
+
+
 def test_cli_compare_can_pin_and_use_baseline(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -1247,14 +1257,16 @@ def test_cli_trend_shows_time_series_for_matching_configuration(
 
     assert result.exit_code == 0
     assert "Trend Basis: trend-suite" in result.stdout
+    assert "Median Trend" in result.stdout
     assert "Trend: trend-suite" in result.stdout
     assert "Delta" in result.stdout
-    assert "Drift" in result.stdout
-    assert "Status" in result.stdout
+    assert "Vs Recent" in result.stdout
+    assert "Vs Basis" in result.stdout
     assert "1.1" in result.stdout
     assert "2.1" in result.stdout
     assert "3.1" in result.stdout
     assert "4.1" not in result.stdout
+    assert "▁▃█" in result.stdout
 
 
 def test_cli_trend_shows_summary_for_mixed_suite_without_baseline(
@@ -1303,10 +1315,10 @@ def test_cli_trend_shows_summary_for_mixed_suite_without_baseline(
     assert "Trend Summary: summary-trend-suite" in output
     assert "Per-configuration summary" in output
     assert "Vs 1st" in output
-    assert "Recent" in output
-    assert "Best" in output
+    assert "Vs Recent" in output
+    assert "Vs Best" in output
     assert "Trend Basis:" not in output
-    assert "Drift" not in output
+    assert "Vs Basis" not in output
     assert "512" in output
     assert "1024" in output
     assert "▁█" in output
@@ -1315,6 +1327,33 @@ def test_cli_trend_shows_summary_for_mixed_suite_without_baseline(
     assert "reg" in output
     assert "meaningful slowdown detected" in output
     assert "noisy" in output
+
+
+def test_cli_trend_compacts_long_median_graph_without_right_ellipsis(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    for index in range(1, 81):
+        baseline = 0.100 + ((index % 9) * 0.003) + (index * 0.0002)
+        _seed_sampled_run(
+            database_path=database_path,
+            suite_name="wide-graph-suite",
+            configuration={"size": 1, "variant": "baseline"},
+            samples=[baseline - 0.001, baseline, baseline + 0.001, baseline, baseline],
+            environment_payload=environment_payload,
+        )
+
+    result = runner.invoke(
+        app,
+        ["trend", "wide-graph-suite", "1.1", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    graph_line = next(line for line in result.stdout.splitlines() if "Graph" in line)
+    assert "…" not in graph_line
 
 
 def test_cli_compare_json_output_reports_direct_regression_gate_failure(

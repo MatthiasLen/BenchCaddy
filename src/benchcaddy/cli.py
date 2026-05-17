@@ -16,6 +16,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.measure import Measurement
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -547,21 +548,29 @@ def _trend_delta_value(run: dict[str, object]) -> str:
     return delta_value
 
 
-def _trend_sparkline(values: list[float]) -> str:
+def _trend_sparkline(values: list[float], *, max_points: int | None = None) -> str:
     if not values:
         return "-"
 
+    spark_values = values
+    if max_points is not None and max_points > 0 and len(values) > max_points:
+        if max_points == 1:
+            spark_values = [values[-1]]
+        else:
+            step = (len(values) - 1) / (max_points - 1)
+            spark_values = [values[round(index * step)] for index in range(max_points)]
+
     blocks = "▁▂▃▄▅▆▇█"
-    if len(values) == 1:
+    if len(spark_values) == 1:
         return blocks[0]
 
-    low = min(values)
-    high = max(values)
+    low = min(spark_values)
+    high = max(spark_values)
     if abs(high - low) <= 1e-12:
-        return blocks[0] * len(values)
+        return blocks[0] * len(spark_values)
 
     scale = len(blocks) - 1
-    return "".join(blocks[min(scale, max(0, round(((value - low) / (high - low)) * scale)))] for value in values)
+    return "".join(blocks[min(scale, max(0, round(((value - low) / (high - low)) * scale)))] for value in spark_values)
 
 
 def _trend_summary_signal(comparison: dict[str, object] | None) -> str:
@@ -594,11 +603,6 @@ def _trend_headroom(summary: dict[str, object]) -> str:
     return "-" if delta_seconds is None else f"{float(delta_seconds):+.6f}s"
 
 
-def _trend_latest_value(summary: dict[str, object]) -> str:
-    latest_run = summary["latest_run"]
-    return f"{latest_run['median_seconds']:.6f}"
-
-
 def _print_trend_summary(trend: dict[str, object]) -> None:
     limit = trend.get("limit")
     mode_detail = "Per-configuration summary"
@@ -621,8 +625,8 @@ def _print_trend_summary(trend: dict[str, object]) -> None:
     table.add_column("Runs", justify="right", no_wrap=True, max_width=4)
     table.add_column("Trend", no_wrap=True, min_width=12, max_width=12)
     table.add_column("Vs 1st", no_wrap=True, min_width=11, max_width=11)
-    table.add_column("Recent", no_wrap=True, min_width=11, max_width=11)
-    table.add_column("Best", justify="right", no_wrap=True, max_width=8)
+    table.add_column("Vs Recent", no_wrap=True, min_width=11, max_width=11)
+    table.add_column("Vs Best", justify="right", no_wrap=True, max_width=8)
     table.add_column("Latest", justify="right", no_wrap=True, max_width=8)
 
     for summary in trend["config_summaries"]:
@@ -636,11 +640,11 @@ def _print_trend_summary(trend: dict[str, object]) -> None:
         table.add_row(
             configuration_label,
             count_label,
-            _trend_sparkline(summary["median_series"]),
+            _trend_sparkline(summary["median_series"], max_points=12),
             _trend_summary_signal(summary["latest_vs_first"]),
             _trend_summary_signal(summary.get("recent_vs_window")),
             _trend_headroom(summary),
-            _trend_latest_value(summary),
+            f"{summary['latest_run']['median_seconds']:.6f}",
         )
 
     console.print(table)
@@ -654,8 +658,8 @@ def _print_trend_summary(trend: dict[str, object]) -> None:
                 ("reg", "meaningful slowdown detected"),
                 ("imp", "meaningful speedup detected"),
                 ("Vs 1st", "latest run compared with the first recorded run for that configuration"),
-                ("Recent", "latest run compared with the recent trailing window for that configuration"),
-                ("Best", "latest run compared with the best observed run for that configuration"),
+                ("Vs Recent", "latest run compared with the recent trailing window for that configuration"),
+                ("Vs Best", "latest run compared with the best observed run for that configuration"),
             ],
         )
     )
@@ -1079,22 +1083,35 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
 
 
 def _print_trend(trend: dict[str, object]) -> None:
-    console.print(_trend_basis_panel(trend))
-
     table = Table(title=f"Trend: {trend['suite_name']}", pad_edge=False, collapse_padding=True)
     table.add_column("Run ID", justify="right", no_wrap=True, min_width=4, max_width=4)
-    table.add_column("Median (s)", justify="right", no_wrap=True, max_width=12)
-    table.add_column("Median CI (s)", justify="right", no_wrap=True, max_width=24)
+    table.add_column("Median (s)", justify="right", no_wrap=True, max_width=10)
+    table.add_column("Median CI (s)", justify="right", no_wrap=True, max_width=20)
     table.add_column("Delta", justify="right", no_wrap=True, max_width=18)
-    table.add_column("Drift", no_wrap=True, max_width=10)
-    table.add_column("Status", no_wrap=True, max_width=10)
-    table.add_column("Recorded At", overflow="ellipsis", no_wrap=True, max_width=16)
+    table.add_column("Vs Recent", no_wrap=True, min_width=9, max_width=9)
+    table.add_column("Vs Basis", no_wrap=True, min_width=8, max_width=8)
+    table.add_column("Recorded At", overflow="ellipsis", no_wrap=True, max_width=20)
     if _STATE.verbose:
         table.add_column("Record ID", justify="right", no_wrap=True, min_width=7, max_width=7)
         table.add_column("Warnings", overflow="fold")
 
     for run in trend["runs"]:
         table.add_row(*_style_row(_trend_row(run, verbose=_STATE.verbose), _trend_row_style(trend, run)))
+
+    console.print(_trend_basis_panel(trend))
+    median_series = [run["median_seconds"] for run in trend["runs"]]
+    first_run = trend["runs"][0]
+    latest_run = trend["runs"][-1]
+    best_run = _best_run(trend["runs"])
+    table_width = Measurement.get(console, console.options, table).maximum
+    summary_label_width = max(len(label) for label in ("Graph", "First", "Best", "Latest"))
+    graph_width = max(8, table_width - summary_label_width - 6)
+    trend_summary = Table.grid(padding=(0, 2))
+    trend_summary.add_row("Graph", _trend_sparkline(median_series, max_points=graph_width))
+    trend_summary.add_row("First", f"{first_run['median_seconds']:.6f}")
+    trend_summary.add_row("Best", f"{best_run['median_seconds']:.6f}")
+    trend_summary.add_row("Latest", f"{latest_run['median_seconds']:.6f}")
+    console.print(Panel(trend_summary, title="Median Trend", width=table_width))
 
     console.print(table)
     if _STATE.verbose:
