@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from rich.text import Text
 
 from ..core import Sweep
 from ..db import get_database_path
@@ -227,24 +228,42 @@ def sweep_command(
         )
         return
 
-    if effective_verbose:
-        return
+    if not effective_verbose:
+        _console().print(
+            render_table(
+                f"Recorded Runs: {suite_name}",
+                ["Run ID", ("Record ID", "right"), "Configuration", ("Median (s)", "right"), ("Samples", "right"), "Return Value"],
+                [
+                    (
+                        result.run_id,
+                        result.record_id,
+                        dump_json(result.configuration),
+                        f"{result.median_seconds:.6f}",
+                        len(result.samples),
+                        format_return_value(result.target_return_value, compact=True),
+                    )
+                    for result in results
+                ],
+            )
+        )
 
+    run_ids = " ".join(result.run_id for result in results)
+    _console().print(f"Completed {len(results)} runs. Follow-up commands:")
     _console().print(
-        render_table(
-            f"Recorded Runs: {suite_name}",
-            ["Run ID", ("Record ID", "right"), "Configuration", ("Median (s)", "right"), ("Samples", "right"), "Return Value"],
-            [
-                (
-                    result.run_id,
-                    result.record_id,
-                    dump_json(result.configuration),
-                    f"{result.median_seconds:.6f}",
-                    len(result.samples),
-                    format_return_value(result.target_return_value, compact=True),
-                )
-                for result in results
-            ],
+        Text.assemble(
+            ("Inspect details:  ", "bold green"),
+            (f"benchcaddy show {run_ids} --database {database_path}", ),
         )
     )
-    _console().print(f"Stored {len(results)} run(s) in {database_path}.")
+    _console().print(
+        Text.assemble(
+            ("Compare runs:     ", "bold yellow"),
+            (f"benchcaddy compare {suite_name} --database {database_path}",),
+        )
+    )
+    _console().print(
+        Text.assemble(
+            ("Trend history:    ", "bold magenta"),
+            (f"benchcaddy trend {suite_name} --database {database_path}", ),
+        )
+    )

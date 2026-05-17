@@ -495,6 +495,11 @@ def test_cli_sweep_runs_importable_target_and_records_results(
     assert "1.2" in result.stdout
     assert "baseline" in result.stdout
     assert "candidate" in result.stdout
+    normalized_output = " ".join(result.stdout.split())
+    assert "Inspect details: benchcaddy show 1.1 1.2 --database" in normalized_output
+    assert "Compare runs: benchcaddy compare cli-sweep-suite --database" in normalized_output
+    assert "Trend history: benchcaddy trend cli-sweep-suite --database" in normalized_output
+    assert database_path.name in normalized_output
 
     show_result = runner.invoke(app, ["show", "cli-sweep-suite", "--database", str(database_path)])
     run_show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])

@@ -102,7 +102,7 @@ class RichSweepReporter:
         total: int,
         configuration: dict[str, object],
     ) -> None:
-        self.console.print(json_panel(f"Configuration {index}/{total}", configuration, fit=True))
+        self.console.print(json_panel(f"Configuration {index}/{total}", configuration, fit=False))
 
     def on_sample_completed(
         self,
