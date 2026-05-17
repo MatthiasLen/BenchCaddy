@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -448,6 +449,287 @@ def test_direct_sweep_persists_and_displays_return_values(
     assert "Return Error" in compare_result.stdout
     assert "1.1" in compare_result.stdout
     assert "1.2" in compare_result.stdout
+
+
+def test_cli_sweep_runs_importable_target_and_records_results(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _stub_sweep_runtime(monkeypatch, environment_payload)
+    monkeypatch.setattr(
+        core_module,
+        "run_isolated",
+        lambda target, kwargs, **rest: IsolatedRunResult(
+            0.100 if kwargs["variant"] == "baseline" else 0.150,
+            target(**kwargs),
+            [],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "tests.test_cli:cli_variant_benchmark_target",
+            "--suite-name",
+            "cli-sweep-suite",
+            "--param",
+            "variant=baseline,candidate",
+            "--samples",
+            "1",
+            "--warmup-iterations",
+            "0",
+            "--store-target-return-value",
+            "--database",
+            str(database_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Recorded Runs: cli-sweep-suite" in result.stdout
+    assert "1.1" in result.stdout
+    assert "1.2" in result.stdout
+    assert "baseline" in result.stdout
+    assert "candidate" in result.stdout
+
+    show_result = runner.invoke(app, ["show", "cli-sweep-suite", "--database", str(database_path)])
+    run_show_result = runner.invoke(app, ["show", "1.1", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "Suite: cli-sweep-suite" in show_result.stdout
+    assert "1.1" in show_result.stdout
+    assert "1.2" in show_result.stdout
+
+    assert run_show_result.exit_code == 0
+    assert "Run: 1.1" in run_show_result.stdout
+    assert "Return Value" in run_show_result.stdout
+
+
+def test_cli_sweep_rejects_invalid_target_reference_syntax() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["sweep", "tests.test_cli.cli_variant_benchmark_target", "--suite-name", "cli-sweep-suite"])
+
+    assert result.exit_code == 2
+    assert "module:qualname" in result.stdout
+
+
+def test_cli_sweep_rejects_duplicate_param_keys() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "tests.test_cli:cli_variant_benchmark_target",
+            "--suite-name",
+            "cli-sweep-suite",
+            "--param",
+            "variant=baseline",
+            "--param",
+            "variant=candidate",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Duplicate --param key 'variant'." in result.stdout
+
+
+def test_cli_sweep_rejects_malformed_json_array_param() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "tests.test_cli:cli_variant_benchmark_target",
+            "--suite-name",
+            "cli-sweep-suite",
+            "--param",
+            "size=[1,",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "valid JSON" in result.stdout
+
+
+def test_cli_sweep_json_output_reports_recorded_runs(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _stub_sweep_runtime(monkeypatch, environment_payload)
+    monkeypatch.setattr(
+        core_module,
+        "run_isolated",
+        lambda target, kwargs, **rest: IsolatedRunResult(
+            0.100 if kwargs["variant"] == "baseline" else 0.200,
+            target(**kwargs),
+            [{"label": "inner", "duration_seconds": 0.01}],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "tests.test_cli:cli_variant_benchmark_target",
+            "--suite-name",
+            "cli-sweep-json-suite",
+            "--param",
+            'variant=["baseline", "candidate"]',
+            "--samples",
+            "1",
+            "--warmup-iterations",
+            "0",
+            "--store-target-return-value",
+            "--json",
+            "--database",
+            str(database_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "sweep"
+    assert payload["target_reference"] == "tests.test_cli:cli_variant_benchmark_target"
+    assert payload["suite_name"] == "cli-sweep-json-suite"
+    assert payload["run_count"] == 2
+    assert payload["params"] == {"variant": ["baseline", "candidate"]}
+    assert payload["runs"][0]["display_id"] == "1.1"
+    assert payload["runs"][1]["display_id"] == "1.2"
+    assert payload["runs"][0]["target_return_value"] == pytest.approx(10.0)
+
+
+def test_cli_sweep_rejects_json_with_verbose() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "--verbose",
+            "sweep",
+            "tests.test_cli:cli_variant_benchmark_target",
+            "--suite-name",
+            "cli-sweep-suite",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "--json cannot be combined with --verbose." in result.stdout
+
+
+def test_cli_sweep_subcommand_verbose_forwards_to_sweep_runtime(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _stub_sweep_runtime(monkeypatch, environment_payload)
+    monkeypatch.setattr(
+        core_module,
+        "run_isolated",
+        lambda target, kwargs, **rest: IsolatedRunResult(
+            0.100 if kwargs["variant"] == "baseline" else 0.150,
+            target(**kwargs),
+            [],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "tests.test_cli:cli_variant_benchmark_target",
+            "--suite-name",
+            "cli-sweep-verbose-suite",
+            "--param",
+            'variant=["baseline", "candidate"]',
+            "--samples",
+            "1",
+            "--warmup-iterations",
+            "0",
+            "--verbose",
+            "--database",
+            str(database_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "BenchCaddy Run" in result.stdout
+    assert "Configuration 1/2" in result.stdout
+    assert "BenchCaddy Summary" in result.stdout
+
+
+def test_cli_sweep_imports_target_from_current_working_directory(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    package_dir = tmp_path / "examples"
+    package_dir.mkdir()
+    (package_dir / "benchmark_local.py").write_text(
+        "def benchmark_case(size: int, variant: str) -> float:\n"
+        "    return float(size) if variant == 'baseline' else float(size) * 1.5\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [entry for entry in sys.path if entry not in {"", str(tmp_path)}],
+    )
+    _stub_sweep_runtime(monkeypatch, environment_payload)
+    monkeypatch.setattr(
+        core_module,
+        "run_isolated",
+        lambda target, kwargs, **rest: IsolatedRunResult(
+            0.100 if kwargs["variant"] == "baseline" else 0.150,
+            target(**kwargs),
+            [],
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sweep",
+            "examples.benchmark_local:benchmark_case",
+            "--suite-name",
+            "cwd-import-suite",
+            "--param",
+            "size=[512]",
+            "--param",
+            'variant=["baseline", "candidate"]',
+            "--samples",
+            "1",
+            "--warmup-iterations",
+            "0",
+            "--json",
+            "--database",
+            str(tmp_path / "benchcaddy.db"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["target_reference"] == "examples.benchmark_local:benchmark_case"
+    assert payload["run_count"] == 2
+    assert payload["runs"][0]["display_id"] == "1.1"
+    assert payload["runs"][1]["display_id"] == "1.2"
 
 
 def test_compare_does_not_alias_missing_dotted_run_id_to_record_id(
@@ -1242,9 +1524,11 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
 
     show_result = test_runner.invoke(app, ["show", "--help"])
     compare_result = test_runner.invoke(app, ["compare", "--help"])
+    sweep_result = test_runner.invoke(app, ["sweep", "--help"])
     trend_result = test_runner.invoke(app, ["trend", "--help"])
     show_output = _plain_output(show_result.stdout)
     compare_output = _plain_output(compare_result.stdout)
+    sweep_output = _plain_output(sweep_result.stdout)
     trend_output = _plain_output(trend_result.stdout)
 
     assert show_result.exit_code == 0
@@ -1264,6 +1548,15 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
     assert "compare, and trend" in compare_output
     assert "--json" in compare_output
     assert "--fail-if-regression" in compare_output
+
+    assert sweep_result.exit_code == 0
+    assert "importable target reference" in sweep_output
+    assert "module:function" in sweep_output
+    assert "module:Class.method" in sweep_output
+    assert "--suite-name" in sweep_output
+    assert "--param" in sweep_output
+    assert "--json" in sweep_output
+    assert "--verbose" in sweep_output
 
     assert trend_result.exit_code == 0
     assert "--json" in trend_output
