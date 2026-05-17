@@ -245,7 +245,7 @@ Direct run comparisons include **Return Value** and **Return Error**:
 
 In other words, numeric return errors are reported relative to the reference run's return value (or reference vector magnitude), not as a raw absolute distance.
 
-`compare` now also prints an additive statistical assessment panel for direct
+`compare` also prints an statistical assessment panel for direct
 run comparisons and a compact findings panel for suite comparisons. These are
 derived from the stored samples and include bootstrap delta confidence
 intervals, significance estimates, and regression probabilities.
