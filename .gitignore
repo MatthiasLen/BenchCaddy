@@ -4,3 +4,4 @@ __pycache__/
 benchcaddy.db
 .venv/
 *.txt
+*.db
