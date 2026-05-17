@@ -20,6 +20,7 @@ import traceback
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -226,8 +227,8 @@ def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list
     return module_name, qualname, import_paths
 
 
-def validate_isolated_target(fn: Callable[..., Any]) -> tuple[str, str, list[str]]:
-    """Validate that the provided callable is a supported target for fresh subprocess isolation and return its module and qualname for later import."""
+@lru_cache(maxsize=None)
+def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple[str, ...]]:
     if inspect.ismethod(fn) and getattr(fn, "__self__", None) is not None and not isinstance(fn.__self__, type):
         raise _unsupported_target_error(
             "bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, "
@@ -253,7 +254,6 @@ def validate_isolated_target(fn: Callable[..., Any]) -> tuple[str, str, list[str
             "Move the benchmark target to module scope instead."
         )
 
-    # Validate that the target is importable before spawning a process so callers can fail synchronously.
     try:
         _resolve_callable(module_name, qualname)
     except Exception as exc:
@@ -261,7 +261,13 @@ def validate_isolated_target(fn: Callable[..., Any]) -> tuple[str, str, list[str
             f"could not resolve {module_name}.{qualname}. Ensure the symbol is importable in the child process and exposed at that module path."
         ) from exc
 
-    return module_name, qualname, import_paths
+    return module_name, qualname, tuple(import_paths)
+
+
+def validate_isolated_target(fn: Callable[..., Any]) -> tuple[str, str, list[str]]:
+    """Validate that the provided callable is a supported target for fresh subprocess isolation and return its module and qualname for later import."""
+    module_name, qualname, import_paths = _validated_target_reference(fn)
+    return module_name, qualname, list(import_paths)
 
 
 def _run_observed_call(
@@ -293,15 +299,17 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
     kwargs = dict(request.get("kwargs", {}))
     warmup_runs = int(request.get("warmup_runs", 0))
 
-    # 1. Prepare the system to reduce avoidable interference, applying CPU affinity if requested.
+    # Prepare the worker process before any warmups or measured execution.
     prepare_system(lock_cpu_affinity=bool(request.get("lock_cpu_affinity", True)))
 
-    # 2. Optionally disable GC to avoid unpredictable collection during timing.
+    # When GC stays enabled, force a collection up front so warmups and measurement start from a stable point.
     if bool(request.get("disable_gc", False)):
         gc.disable()
+    else:
+        gc.collect()
 
-    # 3. Optionally perform untimed warmup runs to allow JIT optimizations and other one-time effects to occur before the measured execution.
     try:
+        # Warmups happen outside the measured call so one-time effects do not contaminate timing.
         for _ in range(warmup_runs):
             fn(*args, **kwargs)
         return {"ok": True, "payload": _run_observed_call(fn, args, kwargs)}
@@ -417,8 +425,9 @@ def run_isolated(
     if not fresh_process:
         return _run_observed_call(fn, args, kw)
 
-    module_name, qualname, import_paths = validate_isolated_target(fn)
+    module_name, qualname, import_paths = _validated_target_reference(fn)
 
+    # Pass the resolved import reference into the worker request so the child can re-import the target without inspecting the host process.
     # The worker process will re-import the target function and execute it with the provided arguments,
     # then send back a structured result or error payload. We use temporary files and pickle for
     # inter-process communication (IPC) to keep the implementation simple and robust across platforms.
@@ -428,7 +437,7 @@ def run_isolated(
             "qualname": qualname,
             "args": args,
             "kwargs": kw,
-            "import_paths": import_paths,
+            "import_paths": list(import_paths),
             "disable_gc": disable_gc,
             "warmup_runs": warmup_runs,
             "lock_cpu_affinity": lock_cpu_affinity,
@@ -464,14 +473,35 @@ def _main(argv: list[str]) -> int:
     response: dict[str, Any]
 
     try:
-        # Read the request, execute it, and write back a structured response.
+        # The worker reads one request, executes it, and writes back one structured response.
         with request_path.open("rb") as handle:
             response = _execute_worker_request(pickle.load(handle))
     except Exception as exc:
         response = {"ok": False, "payload": _child_error_payload(exc)}
 
-    with suppress(OSError), response_path.open("wb") as handle:
-        pickle.dump(response, handle)
+    try:
+        with response_path.open("wb") as handle:
+            pickle.dump(response, handle)
+    except (AttributeError, TypeError, pickle.PickleError) as exc:
+        response = {
+            "ok": False,
+            "payload": {
+                "type": "SerializationError",
+                "message": (
+                    "Worker could not serialize the isolated result payload. "
+                    "Ensure the benchmark return value and recorded observations are pickle-serializable. "
+                    f"Original error: {exc}"
+                ),
+                "traceback": traceback.format_exc(),
+            },
+        }
+        try:
+            with response_path.open("wb") as handle:
+                pickle.dump(response, handle)
+        except OSError:
+            return 1
+    except OSError:
+        return 1
 
     return 0 if response.get("ok") else 1
 

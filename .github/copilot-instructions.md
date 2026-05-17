@@ -7,7 +7,10 @@
 - Do not introduce helper functions that have one call site and add little semantic value. Do not add "shallow" few-line wrappers.
 - Avoid temporary internal dataclasses, tuples, or helper objects whose only job is to shuttle a few computed values to one consumer.
 - Keep changes minimal and targeted. 
-- Don't remove inline comments that clarify the intent of code, even if the code seems self-explanatory. Check them for accuracy and update them if needed!
+
+## Comments and docstrings
+- Add compact comments to clarify non-obvious code, especially if it contains non-trivial logic or policy.
+- IMPORTANT: Don't remove existing inline comments unless they are incorrect! Check them for accuracy and update them if needed!
 
 ## Architecture
 

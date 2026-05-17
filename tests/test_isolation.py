@@ -411,6 +411,10 @@ def _record_call(a: int, b: int) -> int:
     return len(_worker_call_log)
 
 
+def _return_unpickleable_value():
+    return lambda: None
+
+
 def _assert_nested_observed_result(result: IsolatedRunResult) -> None:
     assert result.return_value == 6
     assert result.elapsed_seconds >= 0.0
@@ -659,6 +663,7 @@ class TestRunIsolated:
             run_isolated(observed_targets.CallableTarget(), fresh_process=True)
 
     def test_rejects_unresolvable_module_symbol_for_fresh_process(self):
+        isolation_process_module._validated_target_reference.cache_clear()
         original_qualname = observed_targets.top_level_module_target.__qualname__
         observed_targets.top_level_module_target.__qualname__ = "missing_symbol"
 
@@ -670,6 +675,7 @@ class TestRunIsolated:
                 run_isolated(observed_targets.top_level_module_target, args=(1,), fresh_process=True)
         finally:
             observed_targets.top_level_module_target.__qualname__ = original_qualname
+            isolation_process_module._validated_target_reference.cache_clear()
 
     def test_execute_worker_request_applies_warmup_and_preparation(self, monkeypatch: pytest.MonkeyPatch):
         prepare_calls: list[bool] = []
@@ -731,6 +737,56 @@ class TestRunIsolated:
         assert payload.observations[1]["kind"] == "time"
         assert len(payload.observations) == 2
 
+    def test_run_isolated_reuses_cached_target_validation(self, monkeypatch: pytest.MonkeyPatch):
+        isolation_process_module._validated_target_reference.cache_clear()
+        validation_calls: list[Callable[..., object]] = []
+        original_reference_lookup = isolation_process_module._importable_target_reference
+
+        monkeypatch.setattr(
+            isolation_process_module,
+            "_importable_target_reference",
+            lambda fn: validation_calls.append(fn) or original_reference_lookup(fn),
+        )
+        monkeypatch.setattr(
+            isolation_process_module,
+            "_run_subprocess_worker",
+            lambda request, timeout: {
+                "ok": True,
+                "payload": IsolatedRunResult(
+                    elapsed_seconds=0.1,
+                    return_value=5,
+                    observations=[],
+                ),
+            },
+        )
+
+        isolation_process_module.validate_isolated_target(operator.add)
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+        assert result == IsolatedRunResult(elapsed_seconds=0.1, return_value=5, observations=[])
+        assert validation_calls == [operator.add]
+
+    def test_execute_worker_request_collects_gc_before_warmups_when_gc_stays_enabled(self, monkeypatch: pytest.MonkeyPatch):
+        events: list[str] = []
+
+        monkeypatch.setattr(isolation_process_module, "prepare_system", lambda lock_cpu_affinity=True: events.append("prepare"))
+        monkeypatch.setattr(isolation_process_module.gc, "collect", lambda: events.append("gc"))
+
+        response = isolation_process_module._execute_worker_request(
+            {
+                "module_name": __name__,
+                "qualname": "_record_call",
+                "args": (2, 3),
+                "kwargs": {},
+                "disable_gc": False,
+                "warmup_runs": 2,
+                "lock_cpu_affinity": True,
+            }
+        )
+
+        assert response["ok"] is True
+        assert events == ["prepare", "gc"]
+
     def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
         commands: list[list[str]] = []
 
@@ -779,6 +835,10 @@ class TestRunIsolated:
 
         with pytest.raises(RuntimeError, match="failed before sending a result"):
             run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+    def test_unpickleable_worker_result_raises_structured_runtime_error(self):
+        with pytest.raises(RuntimeError, match="could not serialize the isolated result payload"):
+            run_isolated(_return_unpickleable_value, fresh_process=True, timeout=30)
 
 
 # ---------------------------------------------------------------------------
