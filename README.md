@@ -86,8 +86,9 @@ BenchCaddy writes samples, medians, observations, and environment metadata to
 `benchcaddy.db` in the current working directory. Those persisted raw samples also drive richer analysis during inspection,
 including bootstrap confidence intervals, 
 outlier diagnostics, noise warnings, and regression classification.
-The methodology and interpretation guidance for those
-statistics are documented in [`statistics.md`](statistics.md).
+Those statistics are intended as decision support rather than proof, and they
+should be interpreted alongside sample count, variance, outliers, and overall
+benchmark-environment stability.
 
 The full runnable example lives in the repository and source distribution at
 [`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py)
@@ -322,8 +323,11 @@ benchcaddy --verbose trend nonlinear-transform
 - observation tables report per-label timing aggregated across samples
 - `Total (s)` in observation tables is the sum across all samples for that label
 
-For the exact statistical model, default thresholds, and guidance on when to
-trust or distrust those findings, see [`statistics.md`](statistics.md).
+These signals are conservative heuristics rather than guarantees. Treat
+`regressing` as a strong prompt to investigate, `noisy` as a sign to collect
+more samples or stabilize the environment, and `stable` as "no meaningful
+evidence of change under the current setup" rather than proof that nothing
+changed.
 
 ## Environment metadata
 

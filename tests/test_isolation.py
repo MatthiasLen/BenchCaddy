@@ -9,6 +9,7 @@ import pickle
 import runpy
 import sys
 import textwrap
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
