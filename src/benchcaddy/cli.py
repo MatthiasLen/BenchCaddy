@@ -1402,8 +1402,8 @@ def compare_command(
 @app.command(
     "trend",
     help=(
-        "Inspect one suite configuration over time. With a positional baseline run, trend shows the matching configuration timeline. "
-        "Without a baseline, mixed suites show a compact per-configuration trend summary."
+        "Inspect one suite configuration over time. With a positional baseline run or --pinned, trend shows the matching configuration timeline. "
+        "Without either, mixed suites show a compact per-configuration trend summary."
     ),
 )
 def trend_command(
@@ -1416,10 +1416,18 @@ def trend_command(
         typer.Argument(
             help=(
                 "Optional baseline run ID to anchor a single-configuration timeline. "
-                "If omitted, trend shows a mixed-suite summary when multiple configurations are present."
+                "If omitted, trend shows a mixed-suite summary when multiple configurations are present unless --pinned is used."
             ),
         ),
     ] = None,
+    use_pinned_baseline: Annotated[
+        bool,
+        typer.Option(
+            "--pinned",
+            "-p",
+            help="Use the pinned suite baseline as the trend anchor instead of showing the mixed-suite summary.",
+        ),
+    ] = False,
     limit: Annotated[
         int | None,
         typer.Option(
@@ -1468,6 +1476,7 @@ def trend_command(
         database_path,
         analysis_options=analysis_options,
         baseline_run_id=baseline_run_id,
+        use_pinned_baseline=use_pinned_baseline,
         limit=limit,
     )
     if trend is None:
@@ -1478,6 +1487,9 @@ def trend_command(
         raise typer.Exit(code=1)
     if trend.get("error") == "reference_run_wrong_suite":
         console.print(f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'.")
+        raise typer.Exit(code=1)
+    if trend.get("error") == "baseline_not_found":
+        console.print(f"Suite '{suite_name}' does not have a pinned baseline in {database_path}.")
         raise typer.Exit(code=1)
     if trend.get("mode") != "summary" and trend.get("basis_run") is None:
         console.print(f"Suite '{suite_name}' does not have any recorded runs in {database_path}.")

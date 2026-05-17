@@ -923,6 +923,7 @@ def get_suite_trend(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
     baseline_run_id: int | tuple[int, int] | None = None,
+    use_pinned_baseline: bool = False,
     limit: int | None = None,
 ) -> dict[str, Any] | None:
     chosen_options = analysis_options or AnalysisOptions()
@@ -949,23 +950,6 @@ def get_suite_trend(
                 "runs": [],
             }
 
-        grouped_runs: dict[str, list[BenchmarkRun]] = {}
-        for run in runs:
-            grouped_runs.setdefault(_configuration_group_key(run.configuration), []).append(run)
-
-        if baseline_run_id is None and len(grouped_runs) > 1:
-            return {
-                "mode": "summary",
-                "suite_name": suite.name,
-                "target_name": suite.target_name,
-                "configuration_count": len(grouped_runs),
-                "limit": limit,
-                "config_summaries": [
-                    _configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit)
-                    for key in grouped_runs
-                ],
-            }
-
         if baseline_run_id is not None:
             basis_run = _resolve_run(session, baseline_run_id)
             if basis_run is None:
@@ -981,11 +965,33 @@ def get_suite_trend(
             basis_source = "explicit"
         else:
             basis_run = _resolve_suite_baseline_run(session, suite)
-            if basis_run is not None:
+            if use_pinned_baseline:
+                if basis_run is None:
+                    return {"error": "baseline_not_found", "suite_name": suite.name}
                 basis_source = "pinned"
             else:
-                basis_run = runs[-1]
-                basis_source = "latest"
+                grouped_runs: dict[str, list[BenchmarkRun]] = {}
+                for run in runs:
+                    grouped_runs.setdefault(_configuration_group_key(run.configuration), []).append(run)
+
+                if basis_run is None and len(grouped_runs) > 1:
+                    return {
+                        "mode": "summary",
+                        "suite_name": suite.name,
+                        "target_name": suite.target_name,
+                        "configuration_count": len(grouped_runs),
+                        "limit": limit,
+                        "config_summaries": [
+                            _configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit)
+                            for key in grouped_runs
+                        ],
+                    }
+
+                if basis_run is not None:
+                    basis_source = "pinned"
+                else:
+                    basis_run = runs[-1]
+                    basis_source = "latest"
 
         config_filter = dict(basis_run.configuration)
         filtered_runs = [run for run in runs if run.configuration == config_filter]

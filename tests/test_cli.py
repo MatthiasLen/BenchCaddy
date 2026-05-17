@@ -1212,6 +1212,7 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
 
     assert trend_result.exit_code == 0
     assert "--json" in trend_output
+    assert "--pinned" in trend_output
 
 
 def test_cli_trend_shows_time_series_for_matching_configuration(
@@ -1327,6 +1328,80 @@ def test_cli_trend_shows_summary_for_mixed_suite_without_baseline(
     assert "reg" in output
     assert "meaningful slowdown detected" in output
     assert "noisy" in output
+
+
+def test_cli_trend_uses_pinned_baseline_for_mixed_suite_when_requested(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="pinned-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="pinned-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="pinned-trend-suite",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.199, 0.200, 0.201, 0.200, 0.199],
+        environment_payload=environment_payload,
+    )
+
+    pin_result = runner.invoke(
+        app,
+        ["compare", "pinned-trend-suite", "1.1", "--pin-baseline", "--database", str(database_path)],
+    )
+
+    assert pin_result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        ["trend", "pinned-trend-suite", "--pinned", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Trend Basis: pinned-trend-suite" in result.stdout
+    assert "Trend Summary:" not in result.stdout
+    assert "1.1" in result.stdout
+    assert "2.1" in result.stdout
+    assert "3.1" not in result.stdout
+    assert "pinned" in result.stdout
+
+
+def test_cli_trend_pinned_requires_existing_pinned_baseline(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="unpinned-cli-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["trend", "unpinned-cli-trend-suite", "--pinned", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "does not have a pinned baseline" in result.stdout
 
 
 def test_cli_trend_compacts_long_median_graph_without_right_ellipsis(
