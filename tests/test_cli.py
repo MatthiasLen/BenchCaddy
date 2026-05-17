@@ -1257,6 +1257,66 @@ def test_cli_trend_shows_time_series_for_matching_configuration(
     assert "4.1" not in result.stdout
 
 
+def test_cli_trend_shows_summary_for_mixed_suite_without_baseline(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="summary-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="summary-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="summary-trend-suite",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.199, 0.200, 0.201, 0.200, 0.199],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="summary-trend-suite",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.219, 0.220, 0.221, 0.220, 0.219],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["trend", "summary-trend-suite", "--database", str(database_path)],
+    )
+
+    output = _plain_output(result.stdout)
+    assert result.exit_code == 0
+    assert "Trend Summary: summary-trend-suite" in output
+    assert "Per-configuration summary" in output
+    assert "Vs 1st" in output
+    assert "Recent" in output
+    assert "Best" in output
+    assert "Trend Basis:" not in output
+    assert "Drift" not in output
+    assert "512" in output
+    assert "1024" in output
+    assert "▁█" in output
+    assert "([" not in output
+    assert "Label Guide" in output
+    assert "reg" in output
+    assert "meaningful slowdown detected" in output
+    assert "noisy" in output
+
+
 def test_cli_compare_json_output_reports_direct_regression_gate_failure(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -1437,3 +1497,47 @@ def test_cli_trend_json_output_is_machine_readable(
     assert payload["basis_run"]["display_id"] == "1.1"
     assert len(payload["runs"]) == 3
     assert "Trend Basis:" not in result.stdout
+
+
+def test_cli_trend_json_output_summarizes_mixed_configurations(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="summary-json-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="summary-json-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="summary-json-suite",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.199, 0.200, 0.201, 0.200, 0.199],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["trend", "summary-json-suite", "--json", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["mode"] == "summary"
+    assert payload["suite_name"] == "summary-json-suite"
+    assert payload["configuration_count"] == 2
+    assert len(payload["config_summaries"]) == 2
+    assert payload["config_summaries"][0]["latest_vs_first"]["classification"] == "regressing"
+    assert "Trend Summary:" not in result.stdout

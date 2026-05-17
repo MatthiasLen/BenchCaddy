@@ -547,6 +547,120 @@ def _trend_delta_value(run: dict[str, object]) -> str:
     return delta_value
 
 
+def _trend_sparkline(values: list[float]) -> str:
+    if not values:
+        return "-"
+
+    blocks = "▁▂▃▄▅▆▇█"
+    if len(values) == 1:
+        return blocks[0]
+
+    low = min(values)
+    high = max(values)
+    if abs(high - low) <= 1e-12:
+        return blocks[0] * len(values)
+
+    scale = len(blocks) - 1
+    return "".join(blocks[min(scale, max(0, round(((value - low) / (high - low)) * scale)))] for value in values)
+
+
+def _trend_summary_signal(comparison: dict[str, object] | None) -> str:
+    if comparison is None:
+        return "n/a"
+
+    classification = {
+        "regressing": "reg",
+        "improving": "imp",
+        "stable": "stbl",
+        "noisy": "noisy",
+    }.get(str(comparison.get("classification", "-")), str(comparison.get("classification", "-")))
+    percent_change = comparison.get("percent_change")
+    if percent_change is not None:
+        return f"{classification} {float(percent_change):+.1f}%"
+
+    delta_seconds = comparison.get("delta_seconds")
+    if delta_seconds is None:
+        return classification
+    return f"{classification} {float(delta_seconds):+.4f}s"
+
+
+def _trend_headroom(summary: dict[str, object]) -> str:
+    comparison = summary["latest_vs_best"]
+    percent_change = comparison.get("percent_change")
+    if percent_change is not None:
+        return "at best" if abs(float(percent_change)) <= 0.005 else f"{float(percent_change):+.2f}%"
+
+    delta_seconds = comparison.get("delta_seconds")
+    return "-" if delta_seconds is None else f"{float(delta_seconds):+.6f}s"
+
+
+def _trend_latest_value(summary: dict[str, object]) -> str:
+    latest_run = summary["latest_run"]
+    return f"{latest_run['median_seconds']:.6f}"
+
+
+def _print_trend_summary(trend: dict[str, object]) -> None:
+    limit = trend.get("limit")
+    mode_detail = "Per-configuration summary"
+    if limit is not None:
+        mode_detail = f"Per-configuration summary (most recent {int(limit)} runs per configuration)"
+
+    console.print(
+        summary_panel(
+            f"Trend Summary: {trend['suite_name']}",
+            [
+                ("Configurations", str(trend["configuration_count"])),
+                ("Mode", mode_detail),
+                ("Hint", "Pass a baseline run ID to inspect one configuration timeline."),
+            ],
+        )
+    )
+
+    table = Table(title=f"Trend Summary: {trend['suite_name']}", pad_edge=False, collapse_padding=True)
+    table.add_column("Config", overflow="fold", max_width=14)
+    table.add_column("Runs", justify="right", no_wrap=True, max_width=4)
+    table.add_column("Trend", no_wrap=True, min_width=12, max_width=12)
+    table.add_column("Vs 1st", no_wrap=True, min_width=11, max_width=11)
+    table.add_column("Recent", no_wrap=True, min_width=11, max_width=11)
+    table.add_column("Best", justify="right", no_wrap=True, max_width=8)
+    table.add_column("Latest", justify="right", no_wrap=True, max_width=8)
+
+    for summary in trend["config_summaries"]:
+        run_count = summary["run_count"]
+        total_run_count = summary.get("total_run_count", run_count)
+        count_label = str(run_count) if run_count == total_run_count else f"{run_count}/{total_run_count}"
+        configuration_label = ", ".join(
+            f"{key}={summary['configuration'][key]}"
+            for key in sorted(summary["configuration"])
+        )
+        table.add_row(
+            configuration_label,
+            count_label,
+            _trend_sparkline(summary["median_series"]),
+            _trend_summary_signal(summary["latest_vs_first"]),
+            _trend_summary_signal(summary.get("recent_vs_window")),
+            _trend_headroom(summary),
+            _trend_latest_value(summary),
+        )
+
+    console.print(table)
+    console.print(
+        summary_panel(
+            "Label Guide",
+            [
+                ("Trend", "sparkline of median timings from oldest to newest run for that configuration"),
+                ("stbl", "no meaningful shift detected relative to the comparison basis"),
+                ("noisy", "variance or confidence interval is too wide to call the direction cleanly"),
+                ("reg", "meaningful slowdown detected"),
+                ("imp", "meaningful speedup detected"),
+                ("Vs 1st", "latest run compared with the first recorded run for that configuration"),
+                ("Recent", "latest run compared with the recent trailing window for that configuration"),
+                ("Best", "latest run compared with the best observed run for that configuration"),
+            ],
+        )
+    )
+
+
 def _trend_row(run: dict[str, object], *, verbose: bool) -> tuple[object, ...]:
     row: list[object] = [
         run["display_id"],
@@ -1270,7 +1384,10 @@ def compare_command(
 
 @app.command(
     "trend",
-    help=("Inspect one suite configuration over time. Uses the positional baseline run when provided, otherwise the pinned suite baseline, otherwise the latest matching run."),
+    help=(
+        "Inspect one suite configuration over time. With a positional baseline run, trend shows the matching configuration timeline. "
+        "Without a baseline, mixed suites show a compact per-configuration trend summary."
+    ),
 )
 def trend_command(
     suite_name: Annotated[
@@ -1280,7 +1397,10 @@ def trend_command(
     baseline: Annotated[
         str | None,
         typer.Argument(
-            help=("Optional baseline run ID to anchor the trend output. If omitted, trend uses the pinned suite baseline when set, otherwise the latest matching run."),
+            help=(
+                "Optional baseline run ID to anchor a single-configuration timeline. "
+                "If omitted, trend shows a mixed-suite summary when multiple configurations are present."
+            ),
         ),
     ] = None,
     limit: Annotated[
@@ -1342,12 +1462,16 @@ def trend_command(
     if trend.get("error") == "reference_run_wrong_suite":
         console.print(f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'.")
         raise typer.Exit(code=1)
-    if trend.get("basis_run") is None:
+    if trend.get("mode") != "summary" and trend.get("basis_run") is None:
         console.print(f"Suite '{suite_name}' does not have any recorded runs in {database_path}.")
         raise typer.Exit(code=1)
 
     if json_output:
         _emit_json(trend)
+        return
+
+    if trend.get("mode") == "summary":
+        _print_trend_summary(trend)
         return
 
     _print_trend(trend)

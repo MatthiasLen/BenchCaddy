@@ -309,6 +309,126 @@ def test_suite_baseline_persistence_and_trend_filtering(
     assert trend["runs"][-1]["vs_baseline"]["classification"] == "regressing"
 
 
+def test_suite_trend_without_baseline_summarizes_mixed_configurations(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="summary-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        observations=[],
+        median_seconds=0.100,
+        min_seconds=0.099,
+        max_seconds=0.102,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="summary-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        observations=[],
+        median_seconds=0.110,
+        min_seconds=0.109,
+        max_seconds=0.112,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="summary-suite",
+        target_name="benchmark_target",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.199, 0.200, 0.201, 0.200, 0.199],
+        observations=[],
+        median_seconds=0.200,
+        min_seconds=0.199,
+        max_seconds=0.201,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="summary-suite",
+        target_name="benchmark_target",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.219, 0.220, 0.221, 0.220, 0.219],
+        observations=[],
+        median_seconds=0.220,
+        min_seconds=0.219,
+        max_seconds=0.221,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    trend = get_suite_trend("summary-suite", database_path)
+
+    assert trend is not None
+    assert trend["mode"] == "summary"
+    assert trend["suite_name"] == "summary-suite"
+    assert len(trend["config_summaries"]) == 2
+
+    summaries_by_size = {
+        row["configuration"]["size"]: row
+        for row in trend["config_summaries"]
+    }
+    assert summaries_by_size[512]["run_count"] == 2
+    assert summaries_by_size[512]["first_run"]["display_id"] == "1.1"
+    assert summaries_by_size[512]["latest_run"]["display_id"] == "2.1"
+    assert summaries_by_size[1024]["run_count"] == 2
+    assert summaries_by_size[1024]["first_run"]["display_id"] == "3.1"
+    assert summaries_by_size[1024]["latest_run"]["display_id"] == "4.1"
+
+
+def test_suite_trend_without_baseline_keeps_timeline_for_single_configuration(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="single-config-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        observations=[],
+        median_seconds=0.100,
+        min_seconds=0.099,
+        max_seconds=0.102,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="single-config-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        observations=[],
+        median_seconds=0.110,
+        min_seconds=0.109,
+        max_seconds=0.112,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    trend = get_suite_trend("single-config-suite", database_path)
+
+    assert trend is not None
+    assert trend["mode"] == "timeline"
+    assert trend["basis_source"] == "latest"
+    assert trend["config_filter"] == {"size": 512, "variant": "baseline"}
+    assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1"]
+
+
 def test_sweep_requires_supported_target_return_types_when_enabled(
     tmp_path: Path,
     monkeypatch,

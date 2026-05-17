@@ -228,9 +228,12 @@ benchcaddy trend nonlinear-transform 2.4
 benchcaddy trend nonlinear-transform --limit 8 --window 4
 ```
 
-`trend` follows the selected baseline configuration over time, shows median
-confidence intervals, compares each run to the baseline, and labels rolling
-drift as stable, noisy, improving, or regressing.
+`trend` shows a single-configuration timeline when you provide an explicit
+baseline run ID. Without a baseline, mixed-configuration suites render a
+compact per-configuration trend summary instead of implicitly choosing one
+configuration. Timeline output shows median confidence intervals, compares each
+run to the baseline, and labels rolling drift as stable, noisy, improving, or
+regressing.
 
 Inspect the current machine's benchmark reliability signals before recording or comparing runs:
 

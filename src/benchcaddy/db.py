@@ -12,6 +12,7 @@ schema declarations and application-facing data access logic.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Sequence
 from contextlib import contextmanager
@@ -881,6 +882,42 @@ def compare_runs(
     }
 
 
+def _configuration_group_key(configuration: dict[str, Any]) -> str:
+    return json.dumps(configuration, sort_keys=True, separators=(",", ":"))
+
+
+def _configuration_trend_summary_payload(
+    runs: Sequence[BenchmarkRun],
+    analysis_options: AnalysisOptions,
+    *,
+    limit: int | None,
+) -> dict[str, Any]:
+    visible_runs = list(runs[-limit:] if limit is not None else runs)
+    first_run = visible_runs[0]
+    latest_run = visible_runs[-1]
+    best_run = min(visible_runs, key=lambda candidate: (candidate.median_seconds, candidate.id))
+    prior_runs = visible_runs[:-1]
+    recent_vs_window = None
+    if prior_runs:
+        recent_window = prior_runs[-analysis_options.drift_window_size :]
+        recent_samples = [sample for run in recent_window for sample in run.samples]
+        if recent_samples:
+            recent_vs_window = compare_sample_sets(recent_samples, latest_run.samples, analysis_options).to_payload()
+
+    return {
+        "configuration": dict(first_run.configuration),
+        "run_count": len(visible_runs),
+        "total_run_count": len(runs),
+        "median_series": [run.median_seconds for run in visible_runs],
+        "first_run": first_run.to_payload(analysis_options),
+        "latest_run": latest_run.to_payload(analysis_options),
+        "best_run": best_run.to_payload(analysis_options),
+        "latest_vs_first": compare_sample_sets(first_run.samples, latest_run.samples, analysis_options).to_payload(),
+        "recent_vs_window": recent_vs_window,
+        "latest_vs_best": compare_sample_sets(best_run.samples, latest_run.samples, analysis_options).to_payload(),
+    }
+
+
 def get_suite_trend(
     suite_name: str,
     database_path: str | Path | None = None,
@@ -903,12 +940,30 @@ def get_suite_trend(
         )
         if not runs:
             return {
+                "mode": "timeline",
                 "suite_name": suite.name,
                 "target_name": suite.target_name,
                 "basis_run": None,
                 "basis_source": "empty",
                 "config_filter": None,
                 "runs": [],
+            }
+
+        grouped_runs: dict[str, list[BenchmarkRun]] = {}
+        for run in runs:
+            grouped_runs.setdefault(_configuration_group_key(run.configuration), []).append(run)
+
+        if baseline_run_id is None and len(grouped_runs) > 1:
+            return {
+                "mode": "summary",
+                "suite_name": suite.name,
+                "target_name": suite.target_name,
+                "configuration_count": len(grouped_runs),
+                "limit": limit,
+                "config_summaries": [
+                    _configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit)
+                    for key in grouped_runs
+                ],
             }
 
         if baseline_run_id is not None:
@@ -965,6 +1020,7 @@ def get_suite_trend(
         )
 
     return {
+        "mode": "timeline",
         "suite_name": suite_name,
         "target_name": basis_payload["target_name"],
         "basis_run": basis_payload,
