@@ -167,7 +167,7 @@ benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
 
 `--json` cannot be combined with `--verbose`, because verbose mode emits live Rich progress output during the run.
 
-## CLI and inspect results
+## Inspecting results using the CLI
 
 List all recorded suites:
 
