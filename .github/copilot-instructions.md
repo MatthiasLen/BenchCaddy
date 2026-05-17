@@ -19,7 +19,7 @@
   - the logic materially improves testability
   - the logic hides non-trivial complexity
 
-## After completing implementaion
+## After completing implementation
 
 - Check the implementation for any violations of the above guidelines and refactor all found violations as needed.
 - Iterate checking and refactoring until no meaningful violations remain.
