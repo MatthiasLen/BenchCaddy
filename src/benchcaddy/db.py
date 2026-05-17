@@ -1057,5 +1057,7 @@ def _resolve_run(session: Session, run_id: int | tuple[int, int]) -> BenchmarkRu
         )
     )
     if run is None and run_index == 1:
-        return session.get(BenchmarkRun, sweep_id)
+        legacy_run = session.get(BenchmarkRun, sweep_id)
+        if legacy_run is not None and legacy_run.sweep_execution_id is None and legacy_run.run_index in (None, 1):
+            return legacy_run
     return run

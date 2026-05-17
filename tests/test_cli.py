@@ -16,6 +16,12 @@ from benchcaddy.db import compare_runs, get_run_details, get_suite_details, reco
 from benchcaddy.isolation import IsolatedRunResult
 from benchcaddy.presentation import format_return_error, format_return_value
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
 
 def cli_variant_benchmark_target(variant: str) -> float:
     return 10.0 if variant == "baseline" else 13.5
@@ -444,6 +450,59 @@ def test_direct_sweep_persists_and_displays_return_values(
     assert "1.2" in compare_result.stdout
 
 
+def test_compare_does_not_alias_missing_dotted_run_id_to_record_id(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="alias-guard-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    record_benchmark_run(
+        suite_name="alias-guard-suite",
+        target_name="benchmark_target",
+        configuration={"size": 768, "variant": "baseline"},
+        samples=[0.110, 0.110],
+        observations=[],
+        **_uniform_run_kwargs(0.110),
+        environment=environment_payload,
+        sweep_execution_id=1,
+        run_index=2,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="alias-guard-suite",
+        target_name="benchmark_target",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.120, 0.120],
+        observations=[],
+        **_uniform_run_kwargs(0.120),
+        environment=environment_payload,
+        sweep_execution_id=1,
+        run_index=3,
+        database_path=database_path,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="alias-guard-suite",
+        configuration={"size": 2048, "variant": "baseline"},
+        median_seconds=0.130,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["compare", "2.1", "3.1", "--database", str(database_path)])
+
+    assert result.exit_code == 1
+    assert "Run comparison" in result.stdout
+    assert "1.3" not in result.stdout
+
+
 def test_cli_end_to_end_compare_and_trend_json_support_regression_gate(
     tmp_path: Path,
     monkeypatch,
@@ -658,9 +717,8 @@ def test_show_without_arguments_skips_statistical_analysis(
     assert "All Runs" in show_result.stdout
 
 
-def test_show_run_supports_no_stats_fast_path(
+def test_show_rejects_removed_stats_flags(
     tmp_path: Path,
-    monkeypatch,
     environment_payload: dict[str, object],
 ) -> None:
     database_path = tmp_path / "benchcaddy.db"
@@ -674,18 +732,12 @@ def test_show_run_supports_no_stats_fast_path(
         environment_payload=environment_payload,
     )
 
-    monkeypatch.setattr(
-        db_module,
-        "analyze_samples",
-        _raise_if_analysis_called,
-    )
-
     show_result = runner.invoke(app, ["show", "1.1", "--no-stats", "--database", str(database_path)])
+    normalized_output = _strip_ansi(show_result.output)
 
-    assert show_result.exit_code == 0
-    assert "Run: 1.1" in show_result.stdout
-    assert "Statistical Summary" not in show_result.stdout
-    assert "Median CI (s)" not in show_result.stdout
+    assert show_result.exit_code == 2
+    assert "--no-stats" in normalized_output
+    assert "No such option" in normalized_output
 
 
 @pytest.mark.parametrize(
@@ -1200,6 +1252,9 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
     assert "Omit" in show_output
     assert "identifiers to list all recorded runs." in show_output
     assert "pinned baseline" in show_output
+    assert "--no-stats" not in show_output
+    assert "--confidence-level" not in show_output
+    assert "--bootstrap-resamples" not in show_output
 
     assert compare_result.exit_code == 0
     assert "Compare two runs directly" in compare_output
