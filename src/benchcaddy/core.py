@@ -100,6 +100,8 @@ class Sweep:
         sample_total: int,
     ) -> tuple[float, dict[str, Any], StoredReturnValue | None]:
         gc.collect()
+
+        # Run the target in an isolated environment, passing the current configuration as keyword arguments.
         isolated_result = run_isolated(
             self.target,
             kwargs=dict(configuration),
@@ -160,7 +162,7 @@ class Sweep:
             observations: list[dict[str, Any]] = []
             target_return_value: StoredReturnValue | None = None
 
-            # Run the configured number of samples for this configuration, collecting timings, observations, and the target return value from each sample.
+            # Run samples for the current configuration, collecting timing and observations.
             for sample_index in range(1, sample_count + 1):
                 elapsed, observation, sample_return_value = self._run_sample(configuration, reporter, sample_index, sample_count)
                 samples.append(elapsed)
