@@ -44,7 +44,7 @@ def initial_signal(size: int) -> list[float]:
     ]
 
 
-@observe("nonlinear_iteration")
+@observe("time")
 def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     next_values: list[float] = []
     for value in values:
@@ -61,6 +61,7 @@ def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     return next_values
 
 
+@observe("time")
 def benchmark_case(size: int, variant: str) -> float:
     values = initial_signal(size)
     for _ in range(8):
@@ -92,18 +93,12 @@ The full runnable example lives in the repository and source distribution at
 [`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py)
 and supports `--verbose`, `--database`, `--samples`, and `--warmup-iterations`.
 
-`Sweep` also accepts a script path as the target. In that mode, parameter keys
-are mapped to CLI flags such as `size -> --size` and `warmup_runs` / `iterations`
-can be used as aliases for `warmup_iterations` / `samples`.
-
 ## Sweep options
 
 The main public `Sweep(...)` options are:
 
 - `samples`: number of measured samples per configuration
-- `iterations`: alias for `samples`
 - `warmup_iterations`: warmup runs before sampling begins
-- `warmup_runs`: alias for `warmup_iterations`
 - `database_path`: store results in a specific SQLite file instead of `./benchcaddy.db`
 - `lock_cpu_affinity`: preserve the current CPU affinity set before benchmarking
 - `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`, or 1D numeric vectors from list/tuple/numpy arrays)
@@ -122,34 +117,19 @@ target wait for completion before it returns. For example, GPU benchmarks should
 perform any required device synchronization inside the benchmarked function so
 that BenchCaddy measures the full workload rather than only the launch overhead.
 
-## Script targets
+`Sweep` executes targets in a fresh worker process. That means the target must
+be importable in the child process: use a module-level function, static method,
+or class method. Lambdas, nested or local functions, bound instance methods,
+arbitrary callable instances, and script-path targets are not supported by
+`Sweep`.
 
-You can benchmark a standalone script instead of a Python callable:
+The public `observe(...)` decorator records isolated observations by mode:
 
-```python
-from benchcaddy import Sweep
+- `@observe("time")` records call duration
+- `@observe("return")` records a normalized return value when supported
+- `@observe("time", "return")` records both
 
-
-Sweep(
-    target="./workload.py",
-    params={
-        "size": [512, 2048],
-        "variant": ["baseline", "stabilized"],
-        "use_cache": [True, False],
-    },
-    suite_name="workload",
-    samples=5,
-).run()
-```
-
-BenchCaddy converts configuration keys to CLI flags:
-
-- `size=512` becomes `--size 512`
-- `use_cache=True` becomes `--use-cache`
-- `use_cache=False` becomes `--use-cache false`
-
-That mode works best with scripts that parse explicit values for non-presence
-flags and exit with status code `0` on success.
+Observation labels come from the decorated function name or qualname.
 
 ## CLI and inspect results
 

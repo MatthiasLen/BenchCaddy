@@ -6,7 +6,9 @@ import gc
 import json
 import operator
 import pickle
+import runpy
 import sys
+import textwrap
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -507,6 +509,37 @@ class TestRunIsolated:
                 "value": 6,
             },
         ]
+
+    def test_fresh_process_supports_top_level_script_target_loaded_as_main(self, tmp_path, monkeypatch):
+        script_path = tmp_path / "script_target_example.py"
+        script_path.write_text(
+            textwrap.dedent(
+                """
+                from benchcaddy import observe
+
+                @observe("time")
+                def script_main_target(value: int) -> int:
+                    return value + 4
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        namespace = runpy.run_path(str(script_path), run_name="__main__")
+        script_main_target = namespace["script_main_target"]
+
+        assert script_main_target.__module__ == "__main__"
+
+        result = run_isolated(script_main_target, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 6
+        assert result.elapsed_seconds >= 0.0
+        assert len(result.observations) == 1
+        assert result.observations[0]["label"] == "script_main_target"
+        assert result.observations[0]["kind"] == "time"
+        assert result.observations[0]["duration_seconds"] >= 0.0
 
     def test_fresh_process_supports_importable_static_method_target(self):
         result = run_isolated(observed_targets.ObservableService.static_time_helper, args=(2,), fresh_process=True, timeout=30)

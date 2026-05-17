@@ -10,7 +10,7 @@ support layer around the core sweep engine.
 from .environment import EnvironmentState, collect_environment_state
 from .noise import NoiseAnalyzer, NoiseCapture, NoiseEstimate
 from .observability import IsolatedRunResult, ObservationCollector, collect_observations, observe
-from .process import ProcessState, collect_process_state, get_affinity, prepare_system, run_isolated
+from .process import ProcessState, collect_process_state, get_affinity, prepare_system, run_isolated, validate_isolated_target
 from .report import ReliabilityReport, build_reliability_report
 
 __all__ = [
@@ -30,4 +30,5 @@ __all__ = [
     "observe",
     "prepare_system",
     "run_isolated",
+    "validate_isolated_target",
 ]

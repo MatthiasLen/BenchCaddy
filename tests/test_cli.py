@@ -13,7 +13,28 @@ import benchcaddy.core as core_module
 import benchcaddy.db as db_module
 from benchcaddy.cli import _suite_row_style, _trend_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
+from benchcaddy.isolation import IsolatedRunResult
 from benchcaddy.presentation import format_return_error, format_return_value
+
+
+def cli_variant_benchmark_target(variant: str) -> float:
+    return 10.0 if variant == "baseline" else 13.5
+
+
+def cli_e2e_benchmark_target() -> float:
+    return 42.0
+
+
+def cli_bool_target() -> bool:
+    return True
+
+
+def cli_float_vector_target() -> list[float]:
+    return [2.0, 1.0, 0.5]
+
+
+def cli_bool_vector_target() -> tuple[bool, bool, bool]:
+    return (True, False, True)
 
 
 def _uniform_run_kwargs(
@@ -390,11 +411,8 @@ def test_direct_sweep_persists_and_displays_return_values(
 
     _stub_sweep_runtime(monkeypatch, environment_payload)
 
-    def benchmark_target(variant: str) -> float:
-        return 10.0 if variant == "baseline" else 13.5
-
     sweep = build_single_sample_sweep(
-        target=benchmark_target,
+        target=cli_variant_benchmark_target,
         params={"variant": ["baseline", "candidate"]},
         suite_name="direct-return-value-suite",
         database_path=database_path,
@@ -463,16 +481,17 @@ def test_cli_end_to_end_compare_and_trend_json_support_regression_gate(
     current_time = 0.0
     for samples in run_samples:
         for duration in samples:
-            perf_counter_values.extend([current_time, current_time + duration])
+            perf_counter_values.append(duration)
             current_time += duration + 1.0
     perf_counter_iter = iter(perf_counter_values)
-    monkeypatch.setattr(core_module, "perf_counter", lambda: next(perf_counter_iter))
-
-    def benchmark_target() -> float:
-        return 42.0
+    monkeypatch.setattr(
+        core_module,
+        "run_isolated",
+        lambda target, **kwargs: IsolatedRunResult(next(perf_counter_iter), cli_e2e_benchmark_target(), []),
+    )
 
     sweep = core_module.Sweep(
-        target=benchmark_target,
+        target=cli_e2e_benchmark_target,
         params={},
         suite_name="e2e-json-suite",
         samples=5,
@@ -672,9 +691,9 @@ def test_show_run_supports_no_stats_fast_path(
 @pytest.mark.parametrize(
     ("suite_name", "target", "expected_return_value"),
     [
-        ("return-type-bool", lambda: True, True),
-        ("return-type-float-vector", lambda: [2.0, 1.0, 0.5], [2.0, 1.0, 0.5]),
-        ("return-type-bool-vector", lambda: (True, False, True), [1.0, 0.0, 1.0]),
+        ("return-type-bool", cli_bool_target, True),
+        ("return-type-float-vector", cli_float_vector_target, [2.0, 1.0, 0.5]),
+        ("return-type-bool-vector", cli_bool_vector_target, [1.0, 0.0, 1.0]),
     ],
 )
 def test_direct_sweep_supports_return_value_types(
