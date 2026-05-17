@@ -22,6 +22,7 @@ Column = str | tuple[str, str]
 Row = Sequence[object]
 
 
+
 def dump_json(value: object, *, indent: int | None = 0) -> str:
     n_ind = 0 if indent is None else indent
     if isinstance(value, dict):
@@ -117,8 +118,8 @@ def format_return_error(value: object) -> str:
     return str(value)
 
 
-def render_table(title: str, columns: Sequence[Column], rows: Iterable[Row]) -> Table:
-    table = Table(title=title)
+def render_table(title: str, columns: Sequence[Column], rows: Iterable[Row], min_width: int | None = None) -> Table:
+    table = Table(title=title, pad_edge=True, collapse_padding=False, min_width=min_width)
     for column in columns:
         if isinstance(column, tuple):
             table.add_column(column[0], justify=column[1])
@@ -130,11 +131,11 @@ def render_table(title: str, columns: Sequence[Column], rows: Iterable[Row]) -> 
 
 
 def json_panel(title: str, value: object, *, indent: int | None = None, fit: bool = False) -> Panel:
-    return (Panel.fit if fit else Panel)(dump_json(value, indent=indent), title=title)
+    return (Panel.fit if fit else Panel)(dump_json(value, indent=indent), title=title, width=100)
 
 
-def summary_panel(title: str, rows: Sequence[tuple[str, object]]) -> Panel:
+def summary_panel(title: str, rows: Sequence[tuple[str, object]], fit: bool = False, width: int = 100) -> Panel:
     summary = Table.grid(padding=(0, 2))
     for label, value in rows:
         summary.add_row(label, value if isinstance(value, Text) else str(value))
-    return Panel.fit(summary, title=title)
+    return (Panel.fit if fit else Panel)(summary, title=title, width=width)

@@ -20,7 +20,7 @@ from ..presentation import (
     summary_panel,
 )
 from ._rendering import _format_optional_seconds, _styled
-from ._shared import _STATE, DatabaseOption, _analysis_options, _as_run_id, _console, _require_run_id, app
+from ._shared import _STATE, DatabaseOption, _as_run_id, _console, _require_run_id, app
 
 
 def _has_analysis(run: dict[str, object]) -> bool:
@@ -41,7 +41,7 @@ def _run_analysis_panel(run: dict[str, object], title: str = "Statistical Summar
     )
 
 
-def _render_observation_table(observations: list[dict[str, object]], title: str) -> Table:
+def _render_observation_table(observations: list[dict[str, object]], title: str, min_width: int | None = None) -> Table:
     summary = summarize_observations(observations)
 
     return render_table(
@@ -56,6 +56,7 @@ def _render_observation_table(observations: list[dict[str, object]], title: str)
             )
             for label, stats in summary.items()
         ],
+        min_width=min_width,
     )
 
 
@@ -166,12 +167,13 @@ def _show_run(run: dict[str, object]) -> None:
             f"Run: {run['display_id']}",
             ["Field", "Value"],
             detail_rows,
+            min_width=100,
         )
     )
     if _has_analysis(run):
         _console().print(_run_analysis_panel(run))
-    _console().print(_render_observation_table(run["observations"], title="Observed Timings"))
-    _console().print(json_panel("Environment", run["environment"], indent=2))
+    _console().print(_render_observation_table(run["observations"], title="Observed Timings", min_width=100))
+    _console().print(json_panel("Environment", run["environment"], indent=2, fit=False))
 
 
 def _show_suite(details: dict[str, object]) -> None:
@@ -223,37 +225,9 @@ def show_command(
             help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1). Omit identifiers to list all recorded runs.",
         ),
     ] = None,
-    skip_stats: Annotated[
-        bool,
-        typer.Option(
-            "--no-stats",
-            help="Skip per-run statistical analysis when showing run or suite details for a faster view.",
-        ),
-    ] = False,
-    confidence_level: Annotated[
-        float,
-        typer.Option(
-            "--confidence-level",
-            min=0.5,
-            max=0.99,
-            help="Bootstrap confidence level used for per-run median confidence intervals.",
-        ),
-    ] = 0.95,
-    bootstrap_resamples: Annotated[
-        int,
-        typer.Option(
-            "--bootstrap-resamples",
-            min=100,
-            help="Bootstrap resample count used for per-run median confidence intervals.",
-        ),
-    ] = 2000,
     database: DatabaseOption = None,
 ) -> None:
     database_path = get_database_path(database)
-    analysis_options = None if skip_stats else _analysis_options(
-        confidence_level=confidence_level,
-        bootstrap_resamples=bootstrap_resamples,
-    )
 
     if not identifiers:
         _show_all_runs(get_all_run_details(database_path))
@@ -266,8 +240,7 @@ def show_command(
             run = get_run_details(
                 run_id,
                 database_path,
-                analysis_options=analysis_options,
-                include_analysis=not skip_stats,
+                include_analysis=True,
             )
             if run is None:
                 _console().print(f"Run '{identifier}' was not found in {database_path}.")
@@ -278,8 +251,7 @@ def show_command(
         details = get_suite_details(
             identifier,
             database_path,
-            analysis_options=analysis_options,
-            include_analysis=not skip_stats,
+            include_analysis=True,
         )
         if details is None:
             _console().print(f"Suite '{identifier}' was not found in {database_path}.")

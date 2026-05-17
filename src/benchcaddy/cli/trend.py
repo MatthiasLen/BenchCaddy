@@ -53,6 +53,7 @@ def _trend_basis_panel(trend: dict[str, object]) -> Panel:
             ("Configuration", dump_json(trend.get("config_filter"))),
             ("Median CI (s)", format_interval(basis_run.get("ci_lower_seconds"), basis_run.get("ci_upper_seconds"))),
         ],
+        width=102,
     )
 
 
@@ -136,7 +137,7 @@ def _print_trend_summary(trend: dict[str, object]) -> None:
         )
     )
 
-    table = Table(title=f"Trend Summary: {trend['suite_name']}", pad_edge=False, collapse_padding=True)
+    table = Table(title=f"Trend Summary: {trend['suite_name']}", pad_edge=False, collapse_padding=True, min_width=100)
     table.add_column("Config", overflow="fold", max_width=14)
     table.add_column("Runs", justify="right", no_wrap=True, max_width=4)
     table.add_column("Trend", no_wrap=True, min_width=12, max_width=12)
@@ -216,7 +217,7 @@ def _trend_row_style(trend: dict[str, object], run: dict[str, object]) -> str | 
 
 def _print_trend(trend: dict[str, object]) -> None:
     table = Table(title=f"Trend: {trend['suite_name']}", pad_edge=False, collapse_padding=True)
-    table.add_column("Run ID", justify="right", no_wrap=True, min_width=4, max_width=4)
+    table.add_column("Run", justify="right", no_wrap=True, min_width=4, max_width=4)
     table.add_column("Median (s)", justify="right", no_wrap=True, max_width=10)
     table.add_column("Median CI (s)", justify="right", no_wrap=True, max_width=20)
     table.add_column("Delta", justify="right", no_wrap=True, max_width=18)
