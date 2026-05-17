@@ -48,11 +48,7 @@ def initial_signal(size: int) -> list[float]:
 def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     next_values: list[float] = []
     for value in values:
-        transformed = (
-            math.tanh(value * 1.4)
-            + 0.75 * math.sin(value * value + 0.2)
-            + 0.25 * math.cos(value - 0.1)
-        )
+        transformed = math.tanh(value * 1.4) + math.sin(value * 0.8)
         if variant == "stabilized":
             transformed += 0.05 * value * value
         else:
