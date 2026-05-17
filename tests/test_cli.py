@@ -16,6 +16,12 @@ from benchcaddy.db import compare_runs, get_run_details, get_suite_details, reco
 from benchcaddy.isolation import IsolatedRunResult
 from benchcaddy.presentation import format_return_error, format_return_value
 
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
 
 def cli_variant_benchmark_target(variant: str) -> float:
     return 10.0 if variant == "baseline" else 13.5
@@ -727,10 +733,11 @@ def test_show_rejects_removed_stats_flags(
     )
 
     show_result = runner.invoke(app, ["show", "1.1", "--no-stats", "--database", str(database_path)])
+    normalized_output = _strip_ansi(show_result.output)
 
     assert show_result.exit_code == 2
-    assert "--no-stats" in show_result.output
-    assert "No such option" in show_result.output
+    assert "--no-stats" in normalized_output
+    assert "No such option" in normalized_output
 
 
 @pytest.mark.parametrize(
