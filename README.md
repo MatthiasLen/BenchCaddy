@@ -44,7 +44,7 @@ def initial_signal(size: int) -> list[float]:
     ]
 
 
-@observe("nonlinear_iteration")
+@observe("time")
 def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     next_values: list[float] = []
     for value in values:
@@ -61,6 +61,7 @@ def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     return next_values
 
 
+@observe("time")
 def benchmark_case(size: int, variant: str) -> float:
     values = initial_signal(size)
     for _ in range(8):
@@ -85,62 +86,51 @@ BenchCaddy writes samples, medians, observations, and environment metadata to
 `benchcaddy.db` in the current working directory. Those persisted raw samples also drive richer analysis during inspection,
 including bootstrap confidence intervals, 
 outlier diagnostics, noise warnings, and regression classification.
-The methodology and interpretation guidance for those
-statistics are documented in [`statistics.md`](statistics.md).
+Those statistics are intended as decision support rather than proof, and they
+should be interpreted alongside sample count, variance, outliers, and overall
+benchmark-environment stability.
 
 The full runnable example lives in the repository and source distribution at
 [`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py)
 and supports `--verbose`, `--database`, `--samples`, and `--warmup-iterations`.
-
-`Sweep` also accepts a script path as the target. In that mode, parameter keys
-are mapped to CLI flags such as `size -> --size` and `warmup_runs` / `iterations`
-can be used as aliases for `warmup_iterations` / `samples`.
 
 ## Sweep options
 
 The main public `Sweep(...)` options are:
 
 - `samples`: number of measured samples per configuration
-- `iterations`: alias for `samples`
 - `warmup_iterations`: warmup runs before sampling begins
-- `warmup_runs`: alias for `warmup_iterations`
 - `database_path`: store results in a specific SQLite file instead of `./benchcaddy.db`
 - `lock_cpu_affinity`: preserve the current CPU affinity set before benchmarking
-- `sync`: callable used to synchronize async device work after each invocation
 - `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`, or 1D numeric vectors from list/tuple/numpy arrays)
 - `return_value_postprocessor`: map complex target return values to a supported type before storage
   - when multiple samples are collected, the first measured sample return value is stored for the run
 - `reporter`: custom reporter implementing the `SweepReporter` protocol
 - `verbose=True`: use the built-in Rich reporter during execution
 
-## Script targets
+## Benchmark target contract
 
-You can benchmark a standalone script instead of a Python callable:
+A benchmark target must be synchronous from BenchCaddy's perspective: it should
+return only after the measured work is complete.
 
-```python
-from benchcaddy import Sweep
+If your workload schedules asynchronous device or background work, make the
+target wait for completion before it returns. For example, GPU benchmarks should
+perform any required device synchronization inside the benchmarked function so
+that BenchCaddy measures the full workload rather than only the launch overhead.
 
+`Sweep` executes targets in a fresh worker process. That means the target must
+be importable in the child process: use a module-level function, static method,
+or class method. Lambdas, nested or local functions, bound instance methods,
+arbitrary callable instances, and script-path targets are not supported by
+`Sweep`.
 
-Sweep(
-    target="./workload.py",
-    params={
-        "size": [512, 2048],
-        "variant": ["baseline", "stabilized"],
-        "use_cache": [True, False],
-    },
-    suite_name="workload",
-    samples=5,
-).run()
-```
+The public `observe(...)` decorator records isolated observations by mode:
 
-BenchCaddy converts configuration keys to CLI flags:
+- `@observe("time")` records call duration
+- `@observe("return")` records a normalized return value when supported
+- `@observe("time", "return")` records both
 
-- `size=512` becomes `--size 512`
-- `use_cache=True` becomes `--use-cache`
-- `use_cache=False` becomes `--use-cache false`
-
-That mode works best with scripts that parse explicit values for non-presence
-flags and exit with status code `0` on success.
+Observation labels come from the decorated function name or qualname.
 
 ## CLI and inspect results
 
@@ -333,8 +323,11 @@ benchcaddy --verbose trend nonlinear-transform
 - observation tables report per-label timing aggregated across samples
 - `Total (s)` in observation tables is the sum across all samples for that label
 
-For the exact statistical model, default thresholds, and guidance on when to
-trust or distrust those findings, see [`statistics.md`](statistics.md).
+These signals are conservative heuristics rather than guarantees. Treat
+`regressing` as a strong prompt to investigate, `noisy` as a sign to collect
+more samples or stabilize the environment, and `stable` as "no meaningful
+evidence of change under the current setup" rather than proof that nothing
+changed.
 
 ## Environment metadata
 

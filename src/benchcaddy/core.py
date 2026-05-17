@@ -11,53 +11,28 @@ minimal coordination needed to record completed runs.
 from __future__ import annotations
 
 import gc
-import subprocess
-import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from statistics import median, stdev
-from time import perf_counter
 from typing import Any
 
 from .db import benchmark_run_payload, create_sweep_execution, get_database_path, record_benchmark_run
-from .isolation import prepare_system
+from .isolation import prepare_system, run_isolated, validate_isolated_target
 from .metadata import collect_environment_metadata, metadata_to_dict
-from .observability import collect_observations
 from .reporting import RichSweepReporter, SweepReporter
 from .return_values import StoredReturnValue, normalize_return_value
 
 _DEFAULT_SAMPLE_COUNT = 7
 
 
-def _as_script_path(target: Callable[..., Any] | str | Path) -> Path | None:
-    if isinstance(target, (str, Path)):
-        return Path(target)
-    return None
-
-
-def _target_name(target: Callable[..., Any] | str | Path) -> str:
-    if script := _as_script_path(target):
-        return script.name
+def _target_name(target: Callable[..., Any]) -> str:
     if target_name := getattr(target, "__name__", None):
         return target_name
     if callable(target) and (call_name := getattr(target.__call__, "__name__", None)):
         return call_name
     return "callable_instance"
-
-
-def _argument_tokens(configuration: Mapping[str, Any]) -> list[str]:
-    tokens: list[str] = []
-    for k, v in configuration.items():
-        flag = f"--{k.replace('_', '-')}"
-        if v is True:
-            tokens.append(flag)
-        elif v is False:
-            tokens.extend([flag, "false"])
-        elif v is not None:
-            tokens.extend([flag, str(v)])
-    return tokens
 
 
 def _report(reporter: SweepReporter | None, event: str, **payload: Any) -> None:
@@ -81,16 +56,13 @@ class BenchmarkResult:
 
 @dataclass
 class Sweep:
-    target: Callable[..., Any] | str | Path
+    target: Callable[..., Any]
     params: Mapping[str, Iterable[Any]]
     suite_name: str
     samples: int = _DEFAULT_SAMPLE_COUNT
-    iterations: int | None = None
     warmup_iterations: int = 1
-    warmup_runs: int | None = None
     lock_cpu_affinity: bool = True
     database_path: str | Path | None = None
-    sync: Callable[[], None] | None = None
     store_target_return_value: bool = False
     return_value_postprocessor: Callable[[Any], Any] | None = None
     verbose: bool = False
@@ -120,20 +92,6 @@ class Sweep:
         param_values = [list(values) for values in self.params.values()]
         return [dict(zip(param_names, combination, strict=True)) for combination in product(*param_values)]
 
-    def _sync_if_needed(self, result: Any) -> None:
-        if self.sync is not None:
-            self.sync()
-        elif callable(synchronize := getattr(result, "synchronize", None)):
-            synchronize()
-
-    def _invoke_target(self, configuration: Mapping[str, Any]) -> Any:
-        script_path = _as_script_path(self.target)
-        if script_path is not None:
-            command = [sys.executable, str(script_path), *_argument_tokens(configuration)]
-            return subprocess.run(command, check=True)
-
-        return self.target(**configuration)
-
     def _run_sample(
         self,
         configuration: Mapping[str, Any],
@@ -142,34 +100,38 @@ class Sweep:
         sample_total: int,
     ) -> tuple[float, dict[str, Any], StoredReturnValue | None]:
         gc.collect()
-        with collect_observations() as collector:
-            start = perf_counter()
-            result = self._invoke_target(configuration)
-            self._sync_if_needed(result)
-            elapsed = perf_counter() - start
-            stored_return_value = self._prepare_return_value(result)
+
+        # Run the target in an isolated environment, passing the current configuration as keyword arguments.
+        isolated_result = run_isolated(
+            self.target,
+            kwargs=dict(configuration),
+            warmup_runs=self.warmup_iterations,
+            lock_cpu_affinity=self.lock_cpu_affinity,
+        )
+        stored_return_value = self._prepare_return_value(isolated_result.return_value)
 
         _report(
             reporter,
             "on_sample_completed",
             sample_index=sample_index,
             sample_total=sample_total,
-            elapsed_seconds=elapsed,
-            observation_count=len(collector.records),
+            elapsed_seconds=isolated_result.elapsed_seconds,
+            observation_count=len(isolated_result.observations),
         )
-        return elapsed, {"sample": sample_index, "records": collector.records}, stored_return_value
+        return (
+            isolated_result.elapsed_seconds,
+            {"sample": sample_index, "records": isolated_result.observations},
+            stored_return_value,
+        )
 
-    def run(self, sync: Callable[[], None] | None = None) -> list[BenchmarkResult]:
+    def run(self) -> list[BenchmarkResult]:
         prepare_system(lock_cpu_affinity=self.lock_cpu_affinity)
         environment = metadata_to_dict(collect_environment_metadata())
         configurations = self._configurations()
         reporter = self.reporter or (RichSweepReporter() if self.verbose else None)
         results: list[BenchmarkResult] = []
-        sample_count = self.iterations if self.iterations is not None else self.samples
-        warmup_count = self.warmup_runs if self.warmup_runs is not None else self.warmup_iterations
-
-        if sync is not None:
-            self.sync = sync
+        sample_count = self.samples
+        validate_isolated_target(self.target)
 
         _report(
             reporter,
@@ -177,7 +139,7 @@ class Sweep:
             suite_name=self.suite_name,
             total_configurations=len(configurations),
             samples=sample_count,
-            warmup_iterations=warmup_count,
+            warmup_iterations=self.warmup_iterations,
             database_path=get_database_path(self.database_path),
         )
 
@@ -196,12 +158,11 @@ class Sweep:
                 configuration=configuration,
             )
 
-            for _ in range(warmup_count):
-                self._sync_if_needed(self._invoke_target(configuration))
-
             samples: list[float] = []
             observations: list[dict[str, Any]] = []
             target_return_value: StoredReturnValue | None = None
+
+            # Run samples for the current configuration, collecting timing and observations.
             for sample_index in range(1, sample_count + 1):
                 elapsed, observation, sample_return_value = self._run_sample(configuration, reporter, sample_index, sample_count)
                 samples.append(elapsed)
@@ -212,18 +173,15 @@ class Sweep:
             median_seconds = float(median(samples))
             min_seconds, max_seconds = float(min(samples)), float(max(samples))
             std_seconds = float(stdev(samples)) if len(samples) > 1 else 0.0
-            timing_payload = {
-                "median_seconds": median_seconds,
-                "min_seconds": min_seconds,
-                "max_seconds": max_seconds,
-                "std_seconds": std_seconds,
-            }
             run_payload = benchmark_run_payload(
                 configuration=configuration,
                 samples=samples,
                 observations=observations,
                 target_return_value=target_return_value,
-                **timing_payload,
+                median_seconds=median_seconds,
+                min_seconds=min_seconds,
+                max_seconds=max_seconds,
+                std_seconds=std_seconds,
             )
 
             benchmark_run = record_benchmark_run(

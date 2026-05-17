@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import gc
 import json
+import operator
+import pickle
+import runpy
+import sys
+import textwrap
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -11,18 +18,22 @@ from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
 import benchcaddy.isolation.environment as isolation_environment_module
+import benchcaddy.isolation.process as isolation_process_module
 from benchcaddy.cli import app
 from benchcaddy.isolation import (
     EnvironmentState,
+    IsolatedRunResult,
     NoiseAnalyzer,
     NoiseCapture,
     NoiseEstimate,
     build_reliability_report,
     collect_environment_state,
+    collect_observations,
     get_affinity,
+    observe,
     run_isolated,
-    set_affinity,
 )
+from tests import subprocess_observed_targets as observed_targets
 
 # ---------------------------------------------------------------------------
 # affinity
@@ -48,31 +59,6 @@ class TestGetAffinity:
         mock_process = MagicMock(spec=[])  # no cpu_affinity attribute
         with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
             assert get_affinity() is None
-
-
-class TestSetAffinity:
-    def test_empty_list_returns_false(self):
-        assert set_affinity([]) is False
-
-    def test_no_cpu_affinity_attribute(self):
-        mock_process = MagicMock(spec=[])  # no cpu_affinity attribute
-        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
-            assert set_affinity([0]) is False
-
-    def test_access_denied_returns_false(self):
-        import psutil
-
-        mock_process = MagicMock()
-        mock_process.cpu_affinity.side_effect = psutil.AccessDenied(0)
-        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
-            assert set_affinity([0]) is False
-
-    def test_success_returns_true(self):
-        mock_process = MagicMock()
-        mock_process.cpu_affinity.return_value = None
-        with patch("benchcaddy.isolation.process.psutil.Process", return_value=mock_process):
-            assert set_affinity([0]) is True
-            mock_process.cpu_affinity.assert_called_once_with([0])
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +199,80 @@ def _capture(*durations: float) -> NoiseCapture:
     )
 
 
+@observe("time")
+def _timed_increment(value: int) -> int:
+    return value + 1
+
+
+@observe("return")
+def _observed_identity(value: object) -> object:
+    return value
+
+
+@observe("time", "return")
+def _observed_add(a: int, b: int) -> int:
+    return a + b
+
+
+@observe("time")
+def _observed_failure() -> None:
+    raise RuntimeError("boom")
+
+
+class TestIsolationObservability:
+    def test_time_mode_records_duration(self):
+        with collect_observations() as collector:
+            assert _timed_increment(2) == 3
+
+        assert len(collector.records) == 1
+        assert collector.records[0]["label"] == "_timed_increment"
+        assert collector.records[0]["kind"] == "time"
+        assert collector.records[0]["duration_seconds"] >= 0.0
+
+    def test_return_mode_records_normalized_values_and_skips_unsupported_values(self):
+        with collect_observations() as collector:
+            assert _observed_identity([1, 2, 3]) == [1, 2, 3]
+            unsupported = object()
+            assert _observed_identity(unsupported) is unsupported
+
+        assert collector.records == [
+            {
+                "label": "_observed_identity",
+                "kind": "return",
+                "value": [1.0, 2.0, 3.0],
+            }
+        ]
+
+    def test_combined_modes_record_both_kinds(self):
+        with collect_observations() as collector:
+            assert _observed_add(2, 3) == 5
+
+        assert len(collector.records) == 2
+        assert collector.records[0] == {
+            "label": "_observed_add",
+            "kind": "return",
+            "value": 5,
+        }
+        assert collector.records[1]["label"] == "_observed_add"
+        assert collector.records[1]["kind"] == "time"
+        assert collector.records[1]["duration_seconds"] >= 0.0
+
+    def test_time_mode_records_exceptions(self):
+        with pytest.raises(RuntimeError, match="boom"), collect_observations() as collector:
+            _observed_failure()
+
+        assert len(collector.records) == 1
+        assert collector.records[0]["label"] == "_observed_failure"
+        assert collector.records[0]["kind"] == "time"
+
+    def test_observe_rejects_missing_or_invalid_modes(self):
+        with pytest.raises(ValueError, match="at least one mode"):
+            observe()
+
+        with pytest.raises(ValueError, match="Unsupported"):
+            observe("bogus")
+
+
 class TestNoiseAnalyzer:
     def test_capture_returns_noise_capture(self):
         class ConstantProbeNoiseAnalyzer(NoiseAnalyzer):
@@ -344,26 +404,215 @@ class TestNoiseAnalyzer:
 # ---------------------------------------------------------------------------
 
 
-def _add(a, b):
-    return a + b
+_worker_call_log: list[tuple[int, int]] = []
 
 
-def _raise_error():
-    raise ValueError("boom")
+def _record_call(a: int, b: int) -> int:
+    _worker_call_log.append((a, b))
+    return len(_worker_call_log)
+
+
+def _return_unpickleable_value():
+    return lambda: None
+
+
+def _assert_nested_observed_result(result: IsolatedRunResult) -> None:
+    assert result.return_value == 6
+    assert result.elapsed_seconds >= 0.0
+    assert len(result.observations) == 4
+
+    assert result.observations[0]["label"] == "nested_observed_target.<locals>.inner_time"
+    assert result.observations[0]["kind"] == "time"
+    assert result.observations[0]["duration_seconds"] >= 0.0
+
+    assert result.observations[1] == {
+        "label": "nested_observed_target.<locals>.inner_return",
+        "kind": "return",
+        "value": 6,
+    }
+
+    assert result.observations[2] == {
+        "label": "nested_observed_target.<locals>.inner_both",
+        "kind": "return",
+        "value": 6,
+    }
+
+    assert result.observations[3]["label"] == "nested_observed_target.<locals>.inner_both"
+    assert result.observations[3]["kind"] == "time"
+    assert result.observations[3]["duration_seconds"] >= 0.0
+
+
+def _assert_realistic_workflow_result(result: IsolatedRunResult) -> None:
+    assert result.return_value == 17
+    assert result.elapsed_seconds >= 0.0
+    assert len(result.observations) == 5
+
+    assert result.observations[0]["label"] == "module_time_helper"
+    assert result.observations[0]["kind"] == "time"
+    assert result.observations[0]["duration_seconds"] >= 0.0
+
+    assert result.observations[1]["label"] == "ObservableService.static_time_helper"
+    assert result.observations[1]["kind"] == "time"
+    assert result.observations[1]["duration_seconds"] >= 0.0
+
+    assert result.observations[2] == {
+        "label": "ObservableService.class_return_helper",
+        "kind": "return",
+        "value": 10,
+    }
+
+    assert result.observations[3] == {
+        "label": "ObservableService.instance_both_helper",
+        "kind": "return",
+        "value": 17,
+    }
+
+    assert result.observations[4]["label"] == "ObservableService.instance_both_helper"
+    assert result.observations[4]["kind"] == "time"
+    assert result.observations[4]["duration_seconds"] >= 0.0
 
 
 class TestRunIsolated:
     def test_direct_call(self):
-        result = run_isolated(_add, args=(2, 3), fresh_process=False)
-        assert result == 5
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=False)
+        assert result.return_value == 5
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
+
+    def test_direct_call_collects_nested_observations(self):
+        result = run_isolated(observed_targets.nested_observed_target, args=(2,), fresh_process=False)
+        _assert_nested_observed_result(result)
 
     def test_fresh_process(self):
-        result = run_isolated(_add, args=(2, 3), fresh_process=True, timeout=30)
-        assert result == 5
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=30)
+        assert result.return_value == 5
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
+
+    def test_fresh_process_collects_nested_observations(self):
+        result = run_isolated(observed_targets.nested_observed_target, args=(2,), fresh_process=True, timeout=30)
+        _assert_nested_observed_result(result)
+
+    def test_fresh_process_collects_realistic_helper_and_submethod_observations(self):
+        result = run_isolated(observed_targets.realistic_observed_workflow, args=(1,), fresh_process=True, timeout=30)
+        _assert_realistic_workflow_result(result)
+
+    def test_fresh_process_supports_top_level_module_function_target(self):
+        result = run_isolated(observed_targets.top_level_module_target, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 6
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == [
+            {
+                "label": "module_time_helper",
+                "kind": "time",
+                "duration_seconds": pytest.approx(result.observations[0]["duration_seconds"], abs=0.0),
+            },
+            {
+                "label": "module_return_helper",
+                "kind": "return",
+                "value": 6,
+            },
+        ]
+
+    def test_fresh_process_supports_top_level_script_target_loaded_as_main(self, tmp_path, monkeypatch):
+        script_path = tmp_path / "script_target_example.py"
+        script_path.write_text(
+            textwrap.dedent(
+                """
+                from benchcaddy import observe
+
+                @observe("time")
+                def script_main_target(value: int) -> int:
+                    return value + 4
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.syspath_prepend(str(tmp_path))
+
+        namespace = runpy.run_path(str(script_path), run_name="__main__")
+        script_main_target = namespace["script_main_target"]
+
+        assert script_main_target.__module__ == "__main__"
+
+        result = run_isolated(script_main_target, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 6
+        assert result.elapsed_seconds >= 0.0
+        assert len(result.observations) == 1
+        assert result.observations[0]["label"] == "script_main_target"
+        assert result.observations[0]["kind"] == "time"
+        assert result.observations[0]["duration_seconds"] >= 0.0
+
+    def test_fresh_process_supports_importable_static_method_target(self):
+        result = run_isolated(observed_targets.ObservableService.static_time_helper, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 5
+        assert result.elapsed_seconds >= 0.0
+        assert len(result.observations) == 1
+        assert result.observations[0]["label"] == "ObservableService.static_time_helper"
+        assert result.observations[0]["kind"] == "time"
+        assert result.observations[0]["duration_seconds"] >= 0.0
+
+    def test_fresh_process_supports_importable_class_method_target(self):
+        result = run_isolated(observed_targets.ObservableService.class_return_helper, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 7
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == [
+            {
+                "label": "ObservableService.class_return_helper",
+                "kind": "return",
+                "value": 7,
+            }
+        ]
+
+    def test_fresh_process_warmups_do_not_leak_nested_observations(self):
+        observed_targets.reset_warmup_sensitive_state()
+
+        result = run_isolated(
+            observed_targets.warmup_sensitive_observed_target,
+            fresh_process=True,
+            warmup_runs=2,
+            timeout=30,
+        )
+
+        assert result.return_value == 3
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == [
+            {
+                "label": "warmup_sensitive_observed_target.<locals>.inner_return",
+                "kind": "return",
+                "value": 3,
+            }
+        ]
+
+    def test_fresh_process_skips_unsupported_nested_return_observations(self):
+        result = run_isolated(
+            observed_targets.unsupported_nested_return_target,
+            fresh_process=True,
+            timeout=30,
+        )
+
+        assert result.return_value == "done"
+        assert result.elapsed_seconds >= 0.0
+        assert len(result.observations) == 1
+        assert result.observations[0]["label"] == "unsupported_nested_return_target.<locals>.inner_both"
+        assert result.observations[0]["kind"] == "time"
+        assert result.observations[0]["duration_seconds"] >= 0.0
 
     def test_kwargs_forwarded(self):
-        result = run_isolated(_add, kwargs={"a": 10, "b": 20}, fresh_process=False)
-        assert result == 30
+        result = run_isolated(
+            json.dumps,
+            kwargs={"obj": {"b": 1, "a": 2}, "sort_keys": True},
+            fresh_process=True,
+            timeout=30,
+        )
+        assert result.return_value == '{"a": 2, "b": 1}'
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
 
     def test_timeout_raises(self):
         import time
@@ -372,108 +621,225 @@ class TestRunIsolated:
             run_isolated(time.sleep, args=(10,), fresh_process=True, timeout=0.1)
 
     def test_exception_in_child_raises_runtime_error(self):
-        with pytest.raises(RuntimeError, match="ValueError: boom"):
-            run_isolated(_raise_error, fresh_process=True, timeout=30)
+        with pytest.raises(RuntimeError, match="JSONDecodeError"):
+            run_isolated(json.loads, args=("{",), fresh_process=True, timeout=30)
 
     def test_disable_gc(self):
-        result = run_isolated(_add, args=(1, 1), fresh_process=True, disable_gc=True, timeout=30)
-        assert result == 2
+        result = run_isolated(gc.isenabled, fresh_process=True, disable_gc=True, timeout=30)
+        assert result.return_value is False
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
 
-    def test_fresh_process_uses_spawn_context(self, monkeypatch: pytest.MonkeyPatch):
-        calls: list[str] = []
+    def test_rejects_non_importable_callables_for_fresh_process(self):
+        with pytest.raises(
+            TypeError,
+            match="lambdas are unsupported because they do not provide a stable import path",
+        ):
+            run_isolated(lambda: None, fresh_process=True)
 
-        class DummyConnection:
-            def __init__(self, payload=None):
-                self._payload = payload
+    def test_rejects_nested_local_functions_for_fresh_process(self):
+        def local_target() -> None:
+            return None
 
-            def poll(self, timeout=None):
-                return True
+        with pytest.raises(
+            TypeError,
+            match="nested or local functions are unsupported because they are scoped to a parent frame",
+        ):
+            run_isolated(local_target, fresh_process=True)
 
-            def recv(self):
-                return self._payload
+    def test_rejects_bound_instance_methods_for_fresh_process(self):
+        service = observed_targets.ObservableService()
 
-            def close(self):
-                return None
+        with pytest.raises(
+            TypeError,
+            match="bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, not from a live instance",
+        ):
+            run_isolated(service.instance_both_helper, args=(1,), fresh_process=True)
 
-        class DummyProcess:
-            def __init__(self, *, target, args, daemon):
-                self.target = target
-                self.args = args
-                self.daemon = daemon
-                self.exitcode = 0
+    def test_rejects_arbitrary_callable_instances_for_fresh_process(self):
+        with pytest.raises(
+            TypeError,
+            match="arbitrary callable instances are unsupported because the worker cannot reconstruct a live __call__ object",
+        ):
+            run_isolated(observed_targets.CallableTarget(), fresh_process=True)
 
-            def start(self):
-                return None
+    def test_rejects_unresolvable_module_symbol_for_fresh_process(self):
+        isolation_process_module._validated_target_reference.cache_clear()
+        original_qualname = observed_targets.top_level_module_target.__qualname__
+        observed_targets.top_level_module_target.__qualname__ = "missing_symbol"
 
-            def join(self, timeout=None):
-                return None
+        try:
+            with pytest.raises(
+                TypeError,
+                match=r"could not resolve tests\.subprocess_observed_targets\.missing_symbol\. Ensure the symbol is importable in the child process and exposed at that module path"
+            ):
+                run_isolated(observed_targets.top_level_module_target, args=(1,), fresh_process=True)
+        finally:
+            observed_targets.top_level_module_target.__qualname__ = original_qualname
+            isolation_process_module._validated_target_reference.cache_clear()
 
-            def terminate(self):
-                self.exitcode = -15
-
-            def kill(self):
-                self.exitcode = -9
-
-        class DummyContext:
-            def Pipe(self, duplex=False):
-                return DummyConnection((True, 5)), DummyConnection()
-
-            def Process(self, *, target, args, daemon):
-                return DummyProcess(target=target, args=args, daemon=daemon)
+    def test_execute_worker_request_applies_warmup_and_preparation(self, monkeypatch: pytest.MonkeyPatch):
+        prepare_calls: list[bool] = []
+        gc_disable_calls: list[str] = []
+        _worker_call_log.clear()
 
         monkeypatch.setattr(
-            "benchcaddy.isolation.process.multiprocessing.get_context",
-            lambda method: calls.append(method) or DummyContext(),
+            isolation_process_module,
+            "prepare_system",
+            lambda lock_cpu_affinity=True: prepare_calls.append(lock_cpu_affinity),
+        )
+        monkeypatch.setattr(isolation_process_module.gc, "disable", lambda: gc_disable_calls.append("disabled"))
+
+        response = isolation_process_module._execute_worker_request(
+            {
+                "module_name": __name__,
+                "qualname": "_record_call",
+                "args": (2, 3),
+                "kwargs": {},
+                "disable_gc": True,
+                "warmup_runs": 2,
+                "lock_cpu_affinity": False,
+            }
         )
 
-        assert run_isolated(_add, args=(2, 3), fresh_process=True, timeout=1.0) == 5
-        assert calls == ["spawn"]
+        assert response["ok"] is True
+        assert isinstance(response["payload"], IsolatedRunResult)
+        assert response["payload"].return_value == 3
+        assert response["payload"].elapsed_seconds >= 0.0
+        assert response["payload"].observations == []
+        assert _worker_call_log == [(2, 3), (2, 3), (2, 3)]
+        assert prepare_calls == [False]
+        assert gc_disable_calls == ["disabled"]
+
+    def test_execute_worker_request_collects_observations_only_for_measured_call(self):
+        response = isolation_process_module._execute_worker_request(
+            {
+                "module_name": __name__,
+                "qualname": "_observed_add",
+                "args": (2, 3),
+                "kwargs": {},
+                "disable_gc": False,
+                "warmup_runs": 2,
+                "lock_cpu_affinity": True,
+            }
+        )
+
+        assert response["ok"] is True
+        payload = response["payload"]
+        assert isinstance(payload, IsolatedRunResult)
+        assert payload.return_value == 5
+        assert payload.elapsed_seconds >= 0.0
+        assert payload.observations[0] == {
+            "label": "_observed_add",
+            "kind": "return",
+            "value": 5,
+        }
+        assert payload.observations[1]["label"] == "_observed_add"
+        assert payload.observations[1]["kind"] == "time"
+        assert len(payload.observations) == 2
+
+    def test_run_isolated_reuses_cached_target_validation(self, monkeypatch: pytest.MonkeyPatch):
+        isolation_process_module._validated_target_reference.cache_clear()
+        validation_calls: list[Callable[..., object]] = []
+        original_reference_lookup = isolation_process_module._importable_target_reference
+
+        monkeypatch.setattr(
+            isolation_process_module,
+            "_importable_target_reference",
+            lambda fn: validation_calls.append(fn) or original_reference_lookup(fn),
+        )
+        monkeypatch.setattr(
+            isolation_process_module,
+            "_run_subprocess_worker",
+            lambda request, timeout: {
+                "ok": True,
+                "payload": IsolatedRunResult(
+                    elapsed_seconds=0.1,
+                    return_value=5,
+                    observations=[],
+                ),
+            },
+        )
+
+        isolation_process_module.validate_isolated_target(operator.add)
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+        assert result == IsolatedRunResult(elapsed_seconds=0.1, return_value=5, observations=[])
+        assert validation_calls == [operator.add]
+
+    def test_execute_worker_request_collects_gc_before_warmups_when_gc_stays_enabled(self, monkeypatch: pytest.MonkeyPatch):
+        events: list[str] = []
+
+        monkeypatch.setattr(isolation_process_module, "prepare_system", lambda lock_cpu_affinity=True: events.append("prepare"))
+        monkeypatch.setattr(isolation_process_module.gc, "collect", lambda: events.append("gc"))
+
+        response = isolation_process_module._execute_worker_request(
+            {
+                "module_name": __name__,
+                "qualname": "_record_call",
+                "args": (2, 3),
+                "kwargs": {},
+                "disable_gc": False,
+                "warmup_runs": 2,
+                "lock_cpu_affinity": True,
+            }
+        )
+
+        assert response["ok"] is True
+        assert events == ["prepare", "gc"]
+
+    def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
+        commands: list[list[str]] = []
+
+        def fake_subprocess_run(command, **kwargs):
+            commands.append(command)
+            with isolation_process_module.Path(command[4]).open("rb") as handle:
+                request = pickle.load(handle)
+            assert request["qualname"] == "add"
+            assert isolation_process_module._resolve_callable(request["module_name"], request["qualname"])(2, 3) == 5
+            with isolation_process_module.Path(command[5]).open("wb") as handle:
+                pickle.dump(
+                    {
+                        "ok": True,
+                        "payload": IsolatedRunResult(
+                            elapsed_seconds=0.125,
+                            return_value=5,
+                            observations=[],
+                        ),
+                    },
+                    handle,
+                )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(isolation_process_module.subprocess, "run", fake_subprocess_run)
+
+        result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+        assert result == IsolatedRunResult(elapsed_seconds=0.125, return_value=5, observations=[])
+        assert commands == [
+            [
+                sys.executable,
+                "-m",
+                "benchcaddy.isolation.process",
+                isolation_process_module._WORKER_FLAG,
+                commands[0][4],
+                commands[0][5],
+            ]
+        ]
 
     def test_child_exit_before_result_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch):
-        class DummyConnection:
-            def poll(self, timeout=None):
-                return True
-
-            def recv(self):
-                raise EOFError()
-
-            def close(self):
-                return None
-
-        class DummyProcess:
-            exitcode = 0
-
-            def __init__(self, *, target, args, daemon):
-                self.target = target
-                self.args = args
-                self.daemon = daemon
-
-            def start(self):
-                return None
-
-            def join(self, timeout=None):
-                return None
-
-            def terminate(self):
-                self.exitcode = -15
-
-            def kill(self):
-                self.exitcode = -9
-
-        class DummyContext:
-            def Pipe(self, duplex=False):
-                return DummyConnection(), DummyConnection()
-
-            def Process(self, *, target, args, daemon):
-                return DummyProcess(target=target, args=args, daemon=daemon)
-
         monkeypatch.setattr(
-            "benchcaddy.isolation.process.multiprocessing.get_context",
-            lambda _method: DummyContext(),
+            isolation_process_module.subprocess,
+            "run",
+            lambda command, **kwargs: SimpleNamespace(returncode=3, stdout="", stderr=""),
         )
 
-        with pytest.raises(RuntimeError, match="exited before sending a result"):
-            run_isolated(_add, args=(2, 3), fresh_process=True, timeout=1.0)
+        with pytest.raises(RuntimeError, match="failed before sending a result"):
+            run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+    def test_unpickleable_worker_result_raises_structured_runtime_error(self):
+        with pytest.raises(RuntimeError, match="could not serialize the isolated result payload"):
+            run_isolated(_return_unpickleable_value, fresh_process=True, timeout=30)
 
 
 # ---------------------------------------------------------------------------
