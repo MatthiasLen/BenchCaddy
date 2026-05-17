@@ -20,7 +20,7 @@ import traceback
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -227,7 +227,7 @@ def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list
     return module_name, qualname, import_paths
 
 
-@lru_cache(maxsize=None)
+@cache
 def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple[str, ...]]:
     if inspect.ismethod(fn) and getattr(fn, "__self__", None) is not None and not isinstance(fn.__self__, type):
         raise _unsupported_target_error(
