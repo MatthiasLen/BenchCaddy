@@ -17,7 +17,7 @@ def initial_signal(size: int) -> list[float]:
     ]
 
 
-@observe("nonlinear_iteration")
+@observe("time")
 def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     next_values: list[float] = []
     for value in values:
@@ -34,7 +34,7 @@ def nonlinear_iteration(values: list[float], variant: str) -> list[float]:
     return next_values
 
 
-@observe("outer_loop")
+@observe("time")
 def benchmark_case(size: int, variant: str) -> float:
     values = initial_signal(size)
     for _ in range(8):
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--warmup-iterations",
         type=int,
-        default=1,
+        default=2,
         help="Number of warmup iterations per configuration.",
     )
     return parser.parse_args()
@@ -77,7 +77,7 @@ def main() -> None:
     sweep = Sweep(
         target=benchmark_case,
         params={
-            "size": [512, 1024, 2048],
+            "size": [512, 1024],
             "variant": ["baseline", "stabilized"],
         },
         suite_name="nonlinear-transform",

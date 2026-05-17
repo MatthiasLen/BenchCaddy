@@ -3,14 +3,15 @@ from __future__ import annotations
 import threading
 from io import StringIO
 from pathlib import Path
+from typing import Any
 
 import pytest
 from rich.console import Console
 
+import benchcaddy
 import benchcaddy.core as core_module
 import benchcaddy.isolation.process as isolation_process_module
-import benchcaddy.observability as observability_module
-from benchcaddy import Sweep, observe
+from benchcaddy import Sweep
 from benchcaddy.db import (
     compare_runs,
     compare_suite_runs,
@@ -23,8 +24,68 @@ from benchcaddy.db import (
     record_benchmark_run,
     set_suite_baseline,
 )
-from benchcaddy.observability import collect_observations, summarize_observations
+from benchcaddy.isolation import IsolatedRunResult
+from benchcaddy.isolation import observe as isolated_observe
+from benchcaddy.observability import summarize_observations
 from benchcaddy.reporting import RichSweepReporter
+
+
+@isolated_observe("time")
+def core_measured_step(size: int, bias: float) -> float:
+    total = 0.0
+    for index in range(size * 200):
+        total += ((index % 11) * 0.01) + bias
+    return total
+
+
+def core_benchmark_target(size: int, variant: str) -> float:
+    bias = 0.01 if variant == "baseline" else 0.015
+    return core_measured_step(size, bias)
+
+
+def unsupported_payload_target() -> dict[str, str]:
+    return {"complex": "payload"}
+
+
+def invalid_matrix_target():
+    import numpy as np
+
+    return np.asarray([[1.0, 2.0], [3.0, 4.0]])
+
+
+def scalar_target() -> float:
+    return 1.0
+
+
+def ninety_nine_target() -> float:
+    return 99.0
+
+
+def zero_target() -> float:
+    return 0.0
+
+
+def none_target() -> None:
+    return None
+
+
+def variant_score_target(variant: str) -> float:
+    return 1.0 if variant == "baseline" else 2.0
+
+
+@isolated_observe("time")
+def core_inner_step(scale: int) -> int:
+    return scale * 2
+
+
+@isolated_observe("time")
+def core_outer_step(scale: int) -> int:
+    return core_inner_step(scale) + scale
+
+
+class ResultWithSynchronize:
+    def synchronize(self) -> None:
+        raise AssertionError("synchronize() should not be called by Sweep")
 
 
 def test_sweep_records_results_and_observations(
@@ -45,19 +106,8 @@ def test_sweep_records_results_and_observations(
     monkeypatch.setattr(core_module, "collect_environment_metadata", stub_collect_environment_metadata)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
-    @observe("inner-step")
-    def measured_step(size: int, bias: float) -> float:
-        total = 0.0
-        for index in range(size * 200):
-            total += ((index % 11) * 0.01) + bias
-        return total
-
-    def benchmark_target(size: int, variant: str) -> float:
-        bias = 0.01 if variant == "baseline" else 0.015
-        return measured_step(size, bias)
-
     sweep = Sweep(
-        target=benchmark_target,
+        target=core_benchmark_target,
         params={"size": [8], "variant": ["baseline", "stabilized"]},
         suite_name="core-test-suite",
         samples=2,
@@ -71,26 +121,30 @@ def test_sweep_records_results_and_observations(
     assert len(results) == 2
     assert all(len(result.samples) == 2 for result in results)
     assert all(len(result.observations) == 2 for result in results)
-    assert all(result.observations[0]["records"][0]["label"] == "inner-step" for result in results)
+    assert all(result.observations[0]["records"][0]["label"] == "core_measured_step" for result in results)
 
     summaries = list_suite_summaries(database_path)
     assert summaries == [
         {
             "suite_name": "core-test-suite",
-            "target_name": "benchmark_target",
+            "target_name": "core_benchmark_target",
             "run_count": 2,
             "last_run_at": summaries[0]["last_run_at"],
-            "observation_labels": ["inner-step"],
+            "observation_labels": ["core_measured_step"],
         }
     ]
 
     details = get_suite_details("core-test-suite", database_path)
     assert details is not None
-    assert details["target_name"] == "benchmark_target"
+    assert details["target_name"] == "core_benchmark_target"
     assert len(details["runs"]) == 2
     assert [run["display_id"] for run in details["runs"]] == ["1.2", "1.1"]
     assert details["environment"]["python_version"] == "3.12.0"
     assert details["environment"]["total_memory_bytes"] == 17179869184
+
+
+def test_public_observe_export_points_to_isolation_decorator() -> None:
+    assert benchcaddy.observe is isolated_observe
 
 
 def _stringifiable_return_value(size: int) -> dict[str, object]:
@@ -269,7 +323,7 @@ def test_sweep_requires_supported_target_return_types_when_enabled(
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
     sweep = build_single_sample_sweep(
-        target=lambda: {"complex": "payload"},
+        target=unsupported_payload_target,
         suite_name="unsupported-return-value-suite",
         database_path=database_path,
         store_target_return_value=True,
@@ -285,7 +339,6 @@ def test_sweep_rejects_non_vector_array_shapes(
     environment_payload: dict[str, object],
     build_single_sample_sweep,
 ) -> None:
-    import numpy as np
 
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
@@ -295,7 +348,7 @@ def test_sweep_rejects_non_vector_array_shapes(
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
     sweep = build_single_sample_sweep(
-        target=lambda: np.asarray([[1.0, 2.0], [3.0, 4.0]]),
+        target=invalid_matrix_target,
         suite_name="invalid-vector-return-suite",
         database_path=database_path,
         store_target_return_value=True,
@@ -418,7 +471,7 @@ def test_verbose_sweep_uses_reporter(
     monkeypatch.setattr(core_module, "RichSweepReporter", reporter_factory)
 
     sweep = Sweep(
-        target=lambda: 1.0,
+        target=scalar_target,
         params={},
         suite_name="verbose-test-suite",
         samples=2,
@@ -457,7 +510,7 @@ def test_verbose_sweep_prints_scientific_return_values(
     )
 
     sweep = Sweep(
-        target=lambda: (1.0, 2.5, 3.0),
+        target=_vector_return_value,
         params={},
         suite_name="verbose-return-suite",
         samples=1,
@@ -494,7 +547,7 @@ def test_separate_sweeps_get_distinct_sweep_ids(
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
     sweep = Sweep(
-        target=lambda variant: 1.0 if variant == "baseline" else 2.0,
+        target=variant_score_target,
         params={"variant": ["baseline", "candidate"]},
         suite_name="grouped-suite",
         samples=1,
@@ -523,16 +576,8 @@ def test_multiple_observe_labels_are_recorded_and_compared(
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
 
-    @observe("outer")
-    def outer_step(scale: int) -> int:
-        return inner_step(scale) + scale
-
-    @observe("inner")
-    def inner_step(scale: int) -> int:
-        return scale * 2
-
     sweep = Sweep(
-        target=outer_step,
+        target=core_outer_step,
         params={"scale": [1, 2]},
         suite_name="observe-suite",
         samples=2,
@@ -547,11 +592,11 @@ def test_multiple_observe_labels_are_recorded_and_compared(
     second_run = get_run_details((1, 2), database_path)
     assert first_run is not None
     assert second_run is not None
-    assert all({record["label"] for record in sample["records"]} == {"inner", "outer"} for sample in first_run["observations"])
+    assert all({record["label"] for record in sample["records"]} == {"core_inner_step", "core_outer_step"} for sample in first_run["observations"])
 
     comparison = compare_runs((1, 1), (1, 2), database_path)
     assert comparison is not None
-    assert [row["label"] for row in comparison["observation_rows"]] == ["inner", "outer"]
+    assert [row["label"] for row in comparison["observation_rows"]] == ["core_inner_step", "core_outer_step"]
 
 
 def test_observation_summary_tracks_mean_and_std_per_sample_total() -> None:
@@ -566,6 +611,31 @@ def test_observation_summary_tracks_mean_and_std_per_sample_total() -> None:
     assert summary["inner"].total_seconds == 0.09
     assert summary["inner"].mean_seconds == 0.045
     assert round(summary["inner"].std_seconds, 6) == 0.021213
+
+
+def test_observation_summary_ignores_return_records() -> None:
+    summary = summarize_observations(
+        [
+            {
+                "sample": 1,
+                "records": [
+                    {"label": "core_inner_step", "kind": "return", "value": 3.0},
+                    {"label": "core_inner_step", "kind": "time", "duration_seconds": 0.2},
+                ],
+            },
+            {
+                "sample": 2,
+                "records": [
+                    {"label": "core_inner_step", "kind": "return", "value": 4.0},
+                    {"label": "core_inner_step", "kind": "time", "duration_seconds": 0.4},
+                ],
+            },
+        ]
+    )
+
+    assert summary["core_inner_step"].calls == 2
+    assert summary["core_inner_step"].total_seconds == pytest.approx(0.6)
+    assert summary["core_inner_step"].mean_seconds == pytest.approx(0.3)
 
 
 def test_prepare_system_keeps_current_affinity_set(monkeypatch) -> None:
@@ -622,37 +692,37 @@ def test_prepare_system_skips_affinity_refresh_when_disabled(monkeypatch) -> Non
 
 def test_run_sample_measures_target_with_gc_outside_timing(monkeypatch) -> None:
     events: list[str] = []
-    timer_values = iter([10.0, 10.125])
-    sweep = Sweep(target=lambda: None, params={}, suite_name="timing-boundary-suite", warmup_iterations=0)
+    sweep = Sweep(target=none_target, params={}, suite_name="timing-boundary-suite", warmup_iterations=0)
 
     monkeypatch.setattr(core_module.gc, "collect", lambda: events.append("gc"))
-    monkeypatch.setattr(core_module, "perf_counter", lambda: events.append("timer") or next(timer_values))
-    monkeypatch.setattr(sweep, "_invoke_target", lambda configuration: events.append("target") or object())
+    monkeypatch.setattr(core_module, "run_isolated", lambda target, **kwargs: events.append("isolated") or IsolatedRunResult(0.125, object(), []))
 
     elapsed, observation, stored_return_value = sweep._run_sample({}, None, 1, 1)
 
-    assert events == ["gc", "timer", "target", "timer"]
+    assert events == ["gc", "isolated"]
     assert elapsed == pytest.approx(0.125)
     assert observation == {"sample": 1, "records": []}
     assert stored_return_value is None
 
 
-def test_run_sample_does_not_use_result_synchronize(monkeypatch) -> None:
+def test_run_sample_uses_worker_result_and_does_not_touch_synchronize(monkeypatch) -> None:
     events: list[str] = []
-    timer_values = iter([20.0, 20.05])
-    sweep = Sweep(target=lambda: None, params={}, suite_name="result-sync-suite", warmup_iterations=0)
+    sweep = Sweep(target=none_target, params={}, suite_name="result-sync-suite", warmup_iterations=0)
 
     class ResultWithSynchronize:
         def synchronize(self) -> None:
             events.append("result-sync")
 
     monkeypatch.setattr(core_module.gc, "collect", lambda: events.append("gc"))
-    monkeypatch.setattr(core_module, "perf_counter", lambda: events.append("timer") or next(timer_values))
-    monkeypatch.setattr(sweep, "_invoke_target", lambda configuration: events.append("target") or ResultWithSynchronize())
+    monkeypatch.setattr(
+        core_module,
+        "run_isolated",
+        lambda target, **kwargs: events.append("isolated") or IsolatedRunResult(0.05, ResultWithSynchronize(), []),
+    )
 
     elapsed, observation, stored_return_value = sweep._run_sample({}, None, 1, 1)
 
-    assert events == ["gc", "timer", "target", "timer"]
+    assert events == ["gc", "isolated"]
     assert elapsed == pytest.approx(0.05)
     assert observation == {"sample": 1, "records": []}
     assert stored_return_value is None
@@ -666,7 +736,7 @@ def test_sweep_run_computes_summary_metrics_from_sample_times(
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
     sweep = Sweep(
-        target=lambda: 99.0,
+        target=ninety_nine_target,
         params={},
         suite_name="timing-summary-suite",
         samples=3,
@@ -716,7 +786,7 @@ def test_sweep_warmup_calls_are_not_persisted_as_samples(
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
     sweep = Sweep(
-        target=lambda: 0.0,
+        target=zero_target,
         params={},
         suite_name="warmup-isolation-suite",
         samples=2,
@@ -736,7 +806,7 @@ def test_sweep_warmup_calls_are_not_persisted_as_samples(
     monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
-    monkeypatch.setattr(sweep, "_invoke_target", lambda configuration: events.append("warmup-target") or object())
+    monkeypatch.setattr(core_module, "validate_isolated_target", lambda target: ("tests.test_core", "fake_target"))
     monkeypatch.setattr(
         sweep,
         "_run_sample",
@@ -746,7 +816,7 @@ def test_sweep_warmup_calls_are_not_persisted_as_samples(
     results = sweep.run()
     run = get_run_details((1, 1), database_path)
 
-    assert events == ["warmup-target", "warmup-target", "sample-1", "sample-2"]
+    assert events == ["sample-1", "sample-2"]
     assert len(results) == 1
     assert results[0].samples == [0.21, 0.19]
     assert results[0].target_return_value == pytest.approx(11.0)
@@ -762,48 +832,6 @@ def test_sweep_warmup_calls_are_not_persisted_as_samples(
         {"sample": 1, "records": [{"label": "measured", "duration_seconds": 0.05}]},
         {"sample": 2, "records": [{"label": "measured", "duration_seconds": 0.04}]},
     ]
-
-
-def test_collect_observations_records_exceptions_and_resets_context(monkeypatch) -> None:
-    timer_values = iter([1.0, 1.25, 2.0, 2.1])
-
-    @observe("fragile")
-    def fragile_step() -> None:
-        raise RuntimeError("boom")
-
-    @observe("healthy")
-    def healthy_step() -> str:
-        return "ok"
-
-    monkeypatch.setattr(observability_module, "perf_counter", lambda: next(timer_values))
-
-    with pytest.raises(RuntimeError, match="boom"), collect_observations() as collector:
-        fragile_step()
-
-    assert len(collector.records) == 1
-    assert collector.records[0]["label"] == "fragile"
-    assert collector.records[0]["duration_seconds"] == pytest.approx(0.25)
-    assert observability_module._ACTIVE_COLLECTOR.get() is None
-    assert observability_module._BENCH_ACTIVE.get() is False
-
-    with collect_observations() as next_collector:
-        assert healthy_step() == "ok"
-
-    assert next_collector.records == [{"label": "healthy", "duration_seconds": pytest.approx(0.1)}]
-
-
-def test_observe_does_not_leak_records_across_threads() -> None:
-    @observe("threaded")
-    def observed_step() -> None:
-        return None
-
-    with collect_observations() as collector:
-        observed_step()
-        worker = threading.Thread(target=observed_step)
-        worker.start()
-        worker.join()
-
-    assert [record["label"] for record in collector.records] == ["threaded"]
 
 
 def test_database_initialization_runs_once(tmp_path: Path, monkeypatch) -> None:
@@ -1047,7 +1075,7 @@ def test_concurrent_writes_update_single_suite_summary_consistently(
     assert {run["configuration"]["variant"] for run in details["runs"]} == {"seed", "baseline", "candidate"}
 
 
-def test_run_prefers_iterations_and_warmup_runs_over_default_counts(
+def test_run_uses_configured_sample_count(
     tmp_path: Path,
     monkeypatch,
     environment_payload: dict[str, object],
@@ -1055,13 +1083,11 @@ def test_run_prefers_iterations_and_warmup_runs_over_default_counts(
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
     sweep = Sweep(
-        target=lambda: object(),
+        target=scalar_target,
         params={},
         suite_name="count-override-suite",
-        samples=5,
-        iterations=2,
-        warmup_iterations=4,
-        warmup_runs=1,
+        samples=2,
+        warmup_iterations=1,
         lock_cpu_affinity=False,
         database_path=database_path,
     )
@@ -1076,7 +1102,7 @@ def test_run_prefers_iterations_and_warmup_runs_over_default_counts(
     monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
-    monkeypatch.setattr(sweep, "_invoke_target", lambda configuration: events.append("warmup-target") or object())
+    monkeypatch.setattr(core_module, "validate_isolated_target", lambda target: ("tests.test_core", "fake_target"))
     monkeypatch.setattr(
         sweep,
         "_run_sample",
@@ -1085,9 +1111,34 @@ def test_run_prefers_iterations_and_warmup_runs_over_default_counts(
 
     results = sweep.run()
 
-    assert events == ["warmup-target", "sample-1-of-2", "sample-2-of-2"]
+    assert events == ["sample-1-of-2", "sample-2-of-2"]
     assert len(results) == 1
     assert results[0].samples == [0.11, 0.12]
+
+
+def test_run_sample_forwards_worker_warmups(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    sweep = Sweep(target=none_target, params={}, suite_name="worker-warmup-suite", warmup_iterations=3, lock_cpu_affinity=False)
+
+    monkeypatch.setattr(core_module.gc, "collect", lambda: None)
+
+    def fake_run_isolated(target, **kwargs):
+        del target
+        captured.update(kwargs)
+        return IsolatedRunResult(0.2, 1.0, [{"label": "inner", "kind": "time", "duration_seconds": 0.05}])
+
+    monkeypatch.setattr(core_module, "run_isolated", fake_run_isolated)
+
+    elapsed, observation, stored_return_value = sweep._run_sample({"size": 8}, None, 1, 1)
+
+    assert elapsed == pytest.approx(0.2)
+    assert observation == {"sample": 1, "records": [{"label": "inner", "kind": "time", "duration_seconds": 0.05}]}
+    assert stored_return_value is None
+    assert captured == {
+        "kwargs": {"size": 8},
+        "warmup_runs": 3,
+        "lock_cpu_affinity": False,
+    }
 
 
 def test_run_ignores_result_synchronize_behavior(
@@ -1099,20 +1150,17 @@ def test_run_ignores_result_synchronize_behavior(
     metadata_marker = object()
     events: list[str] = []
 
-    class ResultWithSynchronize:
-        def synchronize(self) -> None:
-            events.append("result-sync")
-
-    def target() -> ResultWithSynchronize:
-        events.append("target")
-        return ResultWithSynchronize()
-
     monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: None)
     monkeypatch.setattr(core_module, "collect_environment_metadata", lambda: metadata_marker)
     monkeypatch.setattr(core_module, "metadata_to_dict", lambda metadata: environment_payload)
+    monkeypatch.setattr(
+        core_module,
+        "run_isolated",
+        lambda target, **kwargs: events.append("isolated") or IsolatedRunResult(0.05, ResultWithSynchronize(), []),
+    )
 
     results = Sweep(
-        target=target,
+        target=scalar_target,
         params={},
         suite_name="sync-override-suite",
         samples=1,
@@ -1122,7 +1170,7 @@ def test_run_ignores_result_synchronize_behavior(
     ).run()
 
     assert len(results) == 1
-    assert events == ["target"]
+    assert events == ["isolated"]
 
 
 def test_sweep_does_not_persist_partial_run_when_sample_fails(
@@ -1133,7 +1181,7 @@ def test_sweep_does_not_persist_partial_run_when_sample_fails(
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
     sweep = Sweep(
-        target=lambda: 1.0,
+        target=scalar_target,
         params={"variant": ["broken"]},
         suite_name="failure-isolation-suite",
         samples=2,
@@ -1169,7 +1217,7 @@ def test_sweep_keeps_first_return_value_when_later_samples_differ(
     database_path = tmp_path / "benchcaddy.db"
     metadata_marker = object()
     sweep = Sweep(
-        target=lambda: 0.0,
+        target=zero_target,
         params={},
         suite_name="first-return-suite",
         samples=3,

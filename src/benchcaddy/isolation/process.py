@@ -141,6 +141,129 @@ def _unsupported_target_error(reason: str) -> TypeError:
     )
 
 
+def _module_reference_from_source_path(source_path: str | None) -> tuple[str, list[str]] | None:
+    """Attempt to map a source file path back to an importable module reference."""
+    if not source_path:
+        return None
+
+    resolved_source = Path(source_path).resolve()
+    candidate_roots: list[Path] = []
+    for entry in sys.path:
+        try:
+            candidate_roots.append((Path.cwd() if not entry else Path(entry)).resolve())
+        except OSError:
+            continue
+
+    for root in candidate_roots:
+        with suppress(ValueError):
+            relative_path = resolved_source.relative_to(root)
+            module_parts = relative_path.with_suffix("").parts
+            if not module_parts:
+                continue
+            if module_parts[-1] == "__init__":
+                module_parts = module_parts[:-1]
+            if module_parts:
+                return ".".join(module_parts), [str(root)]
+
+    return None
+
+
+def _import_paths_for_module_name(source_path: str | None, module_name: str) -> list[str]:
+    """Determine potential import paths for a module, given its source file path and module name."""
+
+    if not source_path:
+        return []
+
+    resolved_source = Path(source_path).resolve()
+    module_parts = module_name.split(".")
+    module_file = Path(*module_parts).with_suffix(".py")
+    package_file = Path(*module_parts) / "__init__.py"
+    import_roots: list[str] = []
+
+    for entry in sys.path:
+        try:
+            root = (Path.cwd() if not entry else Path(entry)).resolve()
+        except OSError:
+            continue
+
+        if resolved_source == root / module_file or resolved_source == root / package_file:
+            root_text = str(root)
+            if root_text not in import_roots:
+                import_roots.append(root_text)
+
+    return import_roots
+
+
+def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list[str]]:
+    """Extract the module name, qualname, and potential import paths for a callable target, validating that it is suitable for subprocess isolation."""
+
+    resolved_target = inspect.unwrap(fn)
+    module_name = getattr(resolved_target, "__module__", None)
+    qualname = getattr(resolved_target, "__qualname__", None)
+
+    with suppress(OSError, TypeError):
+        source_path = inspect.getsourcefile(resolved_target) or inspect.getfile(resolved_target)
+
+    if "source_path" not in locals():
+        source_path = None
+
+    if not module_name or not qualname:
+        raise _unsupported_target_error(
+            "the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process."
+        )
+
+    if module_name == "__main__":
+        if resolved_reference := _module_reference_from_source_path(source_path):
+            module_name, import_paths = resolved_reference
+        else:
+            raise _unsupported_target_error(
+                "the target is defined in __main__ and could not be mapped back to an importable module path. "
+                "Run the benchmark from a directory where the script is importable, or move the target into an importable module."
+            )
+    else:
+        import_paths = _import_paths_for_module_name(source_path, module_name)
+
+    return module_name, qualname, import_paths
+
+
+def validate_isolated_target(fn: Callable[..., Any]) -> tuple[str, str, list[str]]:
+    """Validate that the provided callable is a supported target for fresh subprocess isolation and return its module and qualname for later import."""
+    if inspect.ismethod(fn) and getattr(fn, "__self__", None) is not None and not isinstance(fn.__self__, type):
+        raise _unsupported_target_error(
+            "bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, "
+            "not from a live instance. Wrap the method call in a module-level benchmark function that creates or receives the instance explicitly."
+        )
+
+    if not (inspect.isfunction(fn) or inspect.ismethod(fn) or inspect.isbuiltin(fn)):
+        raise _unsupported_target_error(
+            "arbitrary callable instances are unsupported because the worker cannot reconstruct a live __call__ object from module and qualname alone. "
+            "Expose a module-level function, static method, or class method instead."
+        )
+
+    module_name, qualname, import_paths = _importable_target_reference(fn)
+
+    if "<lambda>" in qualname:
+        raise _unsupported_target_error(
+            "lambdas are unsupported because they do not provide a stable import path for the worker. Define a named module-level function instead."
+        )
+
+    if "<locals>" in qualname:
+        raise _unsupported_target_error(
+            "nested or local functions are unsupported because they are scoped to a parent frame and cannot be re-imported by qualname in the worker. "
+            "Move the benchmark target to module scope instead."
+        )
+
+    # Validate that the target is importable before spawning a process so callers can fail synchronously.
+    try:
+        _resolve_callable(module_name, qualname)
+    except Exception as exc:
+        raise _unsupported_target_error(
+            f"could not resolve {module_name}.{qualname}. Ensure the symbol is importable in the child process and exposed at that module path."
+        ) from exc
+
+    return module_name, qualname, import_paths
+
+
 def _run_observed_call(
     fn: Callable[..., Any],
     args: tuple[Any, ...],
@@ -159,6 +282,12 @@ def _run_observed_call(
 
 def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
     """Execute one isolated request inside the worker process."""
+
+    import_paths = [str(path) for path in request.get("import_paths", ()) if path]
+    for import_path in reversed(import_paths):
+        if import_path not in sys.path:
+            sys.path.insert(0, import_path)
+
     fn = _resolve_callable(request["module_name"], request["qualname"])
     args = tuple(request.get("args", ()))
     kwargs = dict(request.get("kwargs", {}))
@@ -288,45 +417,7 @@ def run_isolated(
     if not fresh_process:
         return _run_observed_call(fn, args, kw)
 
-    if inspect.ismethod(fn) and getattr(fn, "__self__", None) is not None and not isinstance(fn.__self__, type):
-        raise _unsupported_target_error(
-            "bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, "
-            "not from a live instance. Wrap the method call in a module-level benchmark function that creates or receives the instance explicitly."
-        )
-
-    if not (inspect.isfunction(fn) or inspect.ismethod(fn) or inspect.isbuiltin(fn)):
-        raise _unsupported_target_error(
-            "arbitrary callable instances are unsupported because the worker cannot reconstruct a live __call__ object from module and qualname alone. "
-            "Expose a module-level function, static method, or class method instead."
-        )
-
-    module_name = getattr(fn, "__module__", None)
-    qualname = getattr(fn, "__qualname__", None)
-
-    if not module_name or not qualname:
-        raise _unsupported_target_error(
-            "the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process."
-        )
-
-    if "<lambda>" in qualname:
-        raise _unsupported_target_error(
-            "lambdas are unsupported because they do not provide a stable import path for the worker. Define a named module-level function instead."
-        )
-
-    if "<locals>" in qualname:
-        raise _unsupported_target_error(
-            "nested or local functions are unsupported because they are scoped to a parent frame and cannot be re-imported by qualname in the worker. "
-            "Move the benchmark target to module scope instead."
-        )
-
-    # Validate that the target is importable and callable before spawning a process, so that we can raise
-    # errors synchronously instead of via the subprocess channel.
-    try:
-        _resolve_callable(module_name, qualname)
-    except Exception as exc:
-        raise _unsupported_target_error(
-            f"could not resolve {module_name}.{qualname}. Ensure the symbol is importable in the child process and exposed at that module path."
-        ) from exc
+    module_name, qualname, import_paths = validate_isolated_target(fn)
 
     # The worker process will re-import the target function and execute it with the provided arguments,
     # then send back a structured result or error payload. We use temporary files and pickle for
@@ -337,6 +428,7 @@ def run_isolated(
             "qualname": qualname,
             "args": args,
             "kwargs": kw,
+            "import_paths": import_paths,
             "disable_gc": disable_gc,
             "warmup_runs": warmup_runs,
             "lock_cpu_affinity": lock_cpu_affinity,

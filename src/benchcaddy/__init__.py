@@ -18,10 +18,10 @@ from .isolation import (
     collect_environment_state,
     collect_process_state,
     get_affinity,
+    observe,
     prepare_system,
     run_isolated,
 )
-from .observability import observe
 from .reporting import RichSweepReporter, SweepReporter
 
 __all__ = [

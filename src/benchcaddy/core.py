@@ -16,13 +16,11 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from statistics import median, stdev
-from time import perf_counter
 from typing import Any
 
 from .db import benchmark_run_payload, create_sweep_execution, get_database_path, record_benchmark_run
-from .isolation import prepare_system
+from .isolation import prepare_system, run_isolated, validate_isolated_target
 from .metadata import collect_environment_metadata, metadata_to_dict
-from .observability import collect_observations
 from .reporting import RichSweepReporter, SweepReporter
 from .return_values import StoredReturnValue, normalize_return_value
 
@@ -62,9 +60,7 @@ class Sweep:
     params: Mapping[str, Iterable[Any]]
     suite_name: str
     samples: int = _DEFAULT_SAMPLE_COUNT
-    iterations: int | None = None
     warmup_iterations: int = 1
-    warmup_runs: int | None = None
     lock_cpu_affinity: bool = True
     database_path: str | Path | None = None
     store_target_return_value: bool = False
@@ -96,9 +92,6 @@ class Sweep:
         param_values = [list(values) for values in self.params.values()]
         return [dict(zip(param_names, combination, strict=True)) for combination in product(*param_values)]
 
-    def _invoke_target(self, configuration: Mapping[str, Any]) -> Any:
-        return self.target(**configuration)
-
     def _run_sample(
         self,
         configuration: Mapping[str, Any],
@@ -107,21 +100,27 @@ class Sweep:
         sample_total: int,
     ) -> tuple[float, dict[str, Any], StoredReturnValue | None]:
         gc.collect()
-        with collect_observations() as collector:
-            start = perf_counter()
-            result = self._invoke_target(configuration)
-            elapsed = perf_counter() - start
-            stored_return_value = self._prepare_return_value(result)
+        isolated_result = run_isolated(
+            self.target,
+            kwargs=dict(configuration),
+            warmup_runs=self.warmup_iterations,
+            lock_cpu_affinity=self.lock_cpu_affinity,
+        )
+        stored_return_value = self._prepare_return_value(isolated_result.return_value)
 
         _report(
             reporter,
             "on_sample_completed",
             sample_index=sample_index,
             sample_total=sample_total,
-            elapsed_seconds=elapsed,
-            observation_count=len(collector.records),
+            elapsed_seconds=isolated_result.elapsed_seconds,
+            observation_count=len(isolated_result.observations),
         )
-        return elapsed, {"sample": sample_index, "records": collector.records}, stored_return_value
+        return (
+            isolated_result.elapsed_seconds,
+            {"sample": sample_index, "records": isolated_result.observations},
+            stored_return_value,
+        )
 
     def run(self) -> list[BenchmarkResult]:
         prepare_system(lock_cpu_affinity=self.lock_cpu_affinity)
@@ -129,8 +128,8 @@ class Sweep:
         configurations = self._configurations()
         reporter = self.reporter or (RichSweepReporter() if self.verbose else None)
         results: list[BenchmarkResult] = []
-        sample_count = self.iterations if self.iterations is not None else self.samples
-        warmup_count = self.warmup_runs if self.warmup_runs is not None else self.warmup_iterations
+        sample_count = self.samples
+        validate_isolated_target(self.target)
 
         _report(
             reporter,
@@ -138,7 +137,7 @@ class Sweep:
             suite_name=self.suite_name,
             total_configurations=len(configurations),
             samples=sample_count,
-            warmup_iterations=warmup_count,
+            warmup_iterations=self.warmup_iterations,
             database_path=get_database_path(self.database_path),
         )
 
@@ -157,12 +156,11 @@ class Sweep:
                 configuration=configuration,
             )
 
-            for _ in range(warmup_count):
-                self._invoke_target(configuration)
-
             samples: list[float] = []
             observations: list[dict[str, Any]] = []
             target_return_value: StoredReturnValue | None = None
+
+            # Run the configured number of samples for this configuration, collecting timings, observations, and the target return value from each sample.
             for sample_index in range(1, sample_count + 1):
                 elapsed, observation, sample_return_value = self._run_sample(configuration, reporter, sample_index, sample_count)
                 samples.append(elapsed)
