@@ -12,6 +12,7 @@ from . import compare as _compare
 from . import environment as _environment  # noqa: F401
 from . import listing as _listing  # noqa: F401
 from . import show as _show  # noqa: F401
+from . import sweep as _sweep  # noqa: F401
 from . import trend as _trend
 from ._shared import REGRESSION_EXIT_CODE, app, console
 

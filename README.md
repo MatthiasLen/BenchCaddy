@@ -132,6 +132,41 @@ The public `observe(...)` decorator records isolated observations by mode:
 
 Observation labels come from the decorated function name or qualname.
 
+## Run a sweep from the CLI
+
+If your benchmark target is importable, you can launch a sweep directly from the CLI instead of writing a small driver script. From the repository root, `examples/benchmark_nonlinear_transform.py` defines `benchmark_case` as an importable module-level target, so the equivalent CLI command is:
+
+```bash
+benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
+    --suite-name nonlinear-transform \
+    --param 'size=[512, 1024]' \
+    --param 'variant=["baseline", "stabilized"]' \
+    --samples 20 \
+    --warmup-iterations 5 \
+    --store-target-return-value \
+    --verbose
+```
+
+`benchcaddy sweep` accepts targets in `module:qualname` form and applies the same isolation rules as the Python API. In practice that means module-level functions, static methods, and class methods are supported when the worker process can import them.
+
+The command intentionally does not support lambdas, nested functions, bound instance methods, arbitrary callable objects, or inline code strings. If your target is currently defined in a script-local or non-importable form, move it into an importable module first.
+
+Parameter grids are passed with repeated `--param` flags. Each entry accepts either a JSON array such as `size=[512, 2048]` or a compact scalar list such as `variant=baseline,stabilized`.
+
+Use a JSON array when you need structured values, quoted strings, or stricter validation. Malformed JSON arrays are rejected early instead of being treated as plain strings.
+
+For CI or automation, `benchcaddy sweep` also supports machine-readable output:
+
+```bash
+benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
+    --suite-name nonlinear-transform \
+    --param 'size=[512, 1024]' \
+    --param 'variant=["baseline", "stabilized"]' \
+    --json
+```
+
+`--json` cannot be combined with `--verbose`, because verbose mode emits live Rich progress output during the run.
+
 ## CLI and inspect results
 
 List all recorded suites:
