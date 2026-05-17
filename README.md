@@ -28,7 +28,7 @@ BenchCaddy is designed around two steps:
 1. Run a benchmark sweep over one or more configurations.
 2. Inspect or compare the recorded results from the database (e.g. using the CLI).
 
-This example stays self-contained and benchmarks a nonlinear iterative transform
+This self-contained example benchmarks a nonlinear transform
 with two variants and two input sizes.
 
 ```python
