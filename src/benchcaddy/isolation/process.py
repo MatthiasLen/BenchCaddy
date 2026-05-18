@@ -11,8 +11,10 @@ from __future__ import annotations
 import gc
 import importlib
 import inspect
+import logging
 import os
 import pickle
+import signal
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,7 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from time import perf_counter
+from types import SimpleNamespace
 from typing import Any
 
 import psutil
@@ -319,42 +322,103 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
 
 def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> dict[str, Any]:
     """Run a worker subprocess to execute one isolated request and return its structured response."""
-
-    with tempfile.TemporaryDirectory(prefix="benchcaddy-isolated-") as temp_dir:
+    temp_dir_ctx = tempfile.TemporaryDirectory(prefix="benchcaddy-isolated-")
+    with temp_dir_ctx as temp_dir:
         request_path = Path(temp_dir) / "request.pkl"
         response_path = Path(temp_dir) / "response.pkl"
 
-        # Write the request payload to a temporary file for the worker to read.
+        # Write the request payload for the worker to read.
         with request_path.open("wb") as handle:
             pickle.dump(request, handle)
 
+        cmd = [
+            sys.executable,
+            "-m",
+            "benchcaddy.isolation.process",
+            _WORKER_FLAG,
+            str(request_path),
+            str(response_path),
+        ]
+
+        popen_kwargs = {
+            "stdout": subprocess.PIPE, 
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "close_fds": True,
+        }
+
+        # Windows: avoid creating a visible console for the child. POSIX: create
+        # a new session so we can terminate the whole group if the child spawns children.
+        if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        else:
+            popen_kwargs["preexec_fn"] = os.setsid
+
+        logger = logging.getLogger(__name__)
+        logger.debug("Spawning worker: %s", cmd)
+
+        # Spawn the worker process. If this fails, there's no subprocess to clean up, so we can just raise.
         try:
-            # Spawn a worker process to read the request, execute it, and write back a structured response.
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "benchcaddy.isolation.process",
-                    _WORKER_FLAG,
-                    str(request_path),
-                    str(response_path),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+        except Exception as exc:
+            raise RuntimeError(f"failed to spawn worker process: {exc}") from exc
+
+        def _terminate_gracefully(p: subprocess.Popen) -> None:
+            if os.name != "nt":
+                with suppress(Exception):
+                    os.killpg(p.pid, signal.SIGTERM)
+            else:
+                with suppress(Exception):
+                    p.terminate()
+
+        def _kill_forcefully(p: subprocess.Popen) -> None:
+            if os.name != "nt":
+                with suppress(Exception):
+                    os.killpg(p.pid, signal.SIGKILL)
+            else:
+                with suppress(Exception):
+                    p.kill()
+
+        # Wait for the worker to finish or time out. If the timeout expires, attempt a graceful 
+        # termination first, then escalate to a forceful kill if the worker does not exit.
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            completed = SimpleNamespace(returncode=proc.returncode, stdout=stdout, stderr=stderr)
+        except subprocess.TimeoutExpired as e:
+            logger.debug("Worker timed out after %s seconds", timeout)
+            _terminate_gracefully(proc)
             
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError(f"run_isolated timed out after {timeout}s") from exc
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                logger.debug("Worker did not exit after terminate; killing")
+                _kill_forcefully(proc)
+                proc.communicate()
+            
+            raise TimeoutError(f"run_isolated timed out after {timeout}s") from e
 
+        # If the worker wrote a response, return it. Otherwise surface
+        # the child's stderr/stdout as an error.
         if response_path.exists():
-            with response_path.open("rb") as handle:
-                return pickle.load(handle)
+            try:
+                with response_path.open("rb") as handle:
+                    return pickle.load(handle)
+            except Exception as exc:
+                # The worker wrote a response file but it could not be
+                # deserialized. Surface a clear error including stderr/stdout
+                # to aid diagnosis.
+                stderr = getattr(completed, "stderr", "") or ""
+                stdout = getattr(completed, "stdout", "") or ""
+                details = (stderr.strip() or stdout.strip())
+                raise RuntimeError(
+                    f"Could not deserialize worker response: {exc}. Child output: {details}"
+                ) from exc
 
-        stderr = completed.stderr.strip()
-        stdout = completed.stdout.strip()
-        details = stderr or stdout or f"worker exited with code {completed.returncode}"
+        stderr = getattr(completed, "stderr", "") or ""
+        stdout = getattr(completed, "stdout", "") or ""
+        stderr = stderr.strip()
+        stdout = stdout.strip()
+        details = stderr or stdout or f"worker exited with code {getattr(completed, 'returncode', 'unknown')}"
         raise RuntimeError(f"Isolated worker failed before sending a result: {details}")
 
 
