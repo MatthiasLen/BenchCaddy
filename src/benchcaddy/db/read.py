@@ -8,6 +8,7 @@ from ..stats import AnalysisOptions
 from ._sqlalchemy.session import db_session
 from ._sqlalchemy.store import (
     _collect_observation_labels,
+    _count_all_runs,
     _get_suite,
     _list_all_runs_latest_first,
     _list_all_suites,
@@ -106,10 +107,11 @@ def get_all_run_details(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
     *,
+    limit: int | None = None,
     include_analysis: bool = False,
 ) -> list[dict[str, Any]]:
     with db_session(database_path) as session:
-        runs = _list_all_runs_latest_first(session)
+        runs = _list_all_runs_latest_first(session, limit=limit)
         return [
             {
                 **run.to_payload(analysis_options, include_analysis=include_analysis),
@@ -118,3 +120,8 @@ def get_all_run_details(
             }
             for run in runs
         ]
+
+
+def get_all_run_count(database_path: str | Path | None = None) -> int:
+    with db_session(database_path) as session:
+        return _count_all_runs(session)

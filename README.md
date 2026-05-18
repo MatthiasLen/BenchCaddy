@@ -176,12 +176,14 @@ Show all recorded runs across the database:
 
 ```bash
 benchcaddy show
+benchcaddy show --numitems 10
 ```
 
 Show the recorded runs and environment for a suite:
 
 ```bash
 benchcaddy show nonlinear-transform
+benchcaddy show nonlinear-transform --numitems 5
 ```
 
 Show the detailed timings for a single recorded run:
@@ -199,6 +201,8 @@ Show multiple runs side by side in a suite-style view:
 ```bash
 benchcaddy show 4 2.3 1.2
 ```
+
+`show` limits list-style output to the latest 100 matching entries by record ID by default. Use `--numitems` / `-n` to change that cap, and when the output is capped BenchCaddy prints the exact rerun command with `-n <total>` needed to show all entries.
 
 When stored, `show` includes a **Return Value** field/column and displays `-` for missing values.
 

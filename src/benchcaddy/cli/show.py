@@ -5,8 +5,9 @@ from typing import Annotated
 import typer
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
-from ..db import get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details
+from ..db import get_all_run_count, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details
 from ..observability import summarize_observations
 from ..presentation import (
     dump_json,
@@ -217,6 +218,24 @@ def _show_all_runs(runs: list[dict[str, object]]) -> None:
     _console().print(_render_run_table("All Runs", runs, include_suite=True))
 
 
+def _limit_runs(runs: list[dict[str, object]], numitems: int | None) -> tuple[list[dict[str, object]], bool]:
+    if numitems is None or len(runs) <= numitems:
+        return runs, False
+    return runs[:numitems], True
+
+
+def _print_numitems_notice(*, shown_count: int, total_count: int, identifiers: list[str] | None) -> None:
+    command = f"benchcaddy show{' ' if identifiers else ''}{' '.join(identifiers or [])} -n {total_count}"
+    _console().print(
+        Text.assemble(
+            (f"Output capped to the latest {shown_count} entries by record ID. ", "bold bright_cyan"),
+            ("Run ", "bright_black"),
+            (command, "bold yellow"),
+            (" to show all entries.", "bright_black"),
+        )
+    )
+
+
 @app.command("show", help="Inspect all recorded runs, a suite, or specific run IDs. When a suite has a pinned baseline, it is shown in the suite view.")
 def show_command(
     identifiers: Annotated[
@@ -225,12 +244,26 @@ def show_command(
             help="Suite name or one or more run IDs to inspect (for example 3.2 5 7.1). Omit identifiers to list all recorded runs.",
         ),
     ] = None,
+    numitems: Annotated[
+        int | None,
+        typer.Option(
+            "--numitems",
+            "-n",
+            min=1,
+            help="Limit list-style show output to the latest N entries by record ID.",
+        ),
+    ] = 100,
     database: DatabaseOption = None,
 ) -> None:
     database_path = get_database_path(database)
 
     if not identifiers:
-        _show_all_runs(get_all_run_details(database_path))
+        runs = get_all_run_details(database_path, limit=numitems)
+        _show_all_runs(runs)
+        if numitems is not None and len(runs) == numitems:
+            total_count = get_all_run_count(database_path)
+            if total_count > numitems:
+                _print_numitems_notice(shown_count=numitems, total_count=total_count, identifiers=None)
         return
 
     if len(identifiers) == 1:
@@ -256,13 +289,24 @@ def show_command(
         if details is None:
             _console().print(f"Suite '{identifier}' was not found in {database_path}.")
             raise typer.Exit(code=1)
+        
+        total_count = len(details["runs"])
+        details["runs"], was_limited = _limit_runs(details["runs"], numitems)
         _show_suite(details)
+
+        if was_limited:
+            _print_numitems_notice(shown_count=len(details["runs"]), total_count=total_count, identifiers=identifiers)
         return
 
     run_ids = [_require_run_id(identifier) for identifier in identifiers]
-
     runs = get_selected_run_details(run_ids, database_path)
+
     if runs is None:
         _console().print(f"One or more runs were not found in {database_path}.")
         raise typer.Exit(code=1)
-    _show_selected_runs(runs)
+    
+    visible_runs, was_limited = _limit_runs(runs, numitems)
+    _show_selected_runs(visible_runs)
+
+    if was_limited:
+        _print_numitems_notice(total_count=len(runs), identifiers=identifiers)
