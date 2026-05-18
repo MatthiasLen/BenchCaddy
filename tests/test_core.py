@@ -15,15 +15,15 @@ from benchcaddy import Sweep
 from benchcaddy.db import (
     compare_runs,
     compare_suite_runs,
-    db_session,
     get_run_details,
     get_suite_details,
     get_suite_trend,
-    initialize_database,
     list_suite_summaries,
     record_benchmark_run,
     set_suite_baseline,
 )
+from benchcaddy.db._sqlalchemy.models import Base
+from benchcaddy.db._sqlalchemy.session import db_session, initialize_database
 from benchcaddy.isolation import IsolatedRunResult
 from benchcaddy.isolation import observe as isolated_observe
 from benchcaddy.observability import summarize_observations
@@ -1046,10 +1046,7 @@ def test_database_initialization_runs_once(tmp_path: Path, monkeypatch) -> None:
     def record_create_all(engine) -> None:
         create_all_calls.append(engine)
 
-    monkeypatch.setattr(
-        "benchcaddy.db.Base.metadata.create_all",
-        record_create_all,
-    )
+    monkeypatch.setattr(Base.metadata, "create_all", record_create_all)
 
     initialize_database(database_path)
     initialize_database(database_path)

@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from ..stats import AnalysisOptions
-from ._backend import (
+from ._sqlalchemy.session import db_session
+from ._sqlalchemy.store import (
     _collect_observation_labels,
     _get_suite,
     _list_all_runs_latest_first,
@@ -13,7 +14,6 @@ from ._backend import (
     _list_suite_runs_created_desc,
     _resolve_run,
     _resolve_suite_baseline_run,
-    db_session,
 )
 
 

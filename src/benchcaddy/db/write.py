@@ -5,16 +5,13 @@ from typing import Any
 
 from ..return_values import StoredReturnValue, normalize_return_value
 from ..stats import AnalysisOptions
-from ._backend import (
-    BenchmarkRun,
-    BenchmarkSuiteBaseline,
-    BenchmarkSweepExecution,
-    EnvironmentInfo,
+from ._sqlalchemy.models import BenchmarkRun, BenchmarkSuiteBaseline, BenchmarkSweepExecution, EnvironmentInfo
+from ._sqlalchemy.session import db_session
+from ._sqlalchemy.store import (
     _get_or_create_suite,
     _get_suite,
     _get_suite_baseline_record,
     _resolve_run,
-    db_session,
 )
 
 
