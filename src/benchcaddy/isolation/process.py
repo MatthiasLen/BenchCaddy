@@ -315,6 +315,8 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
         # Warmups happen outside the measured call so one-time effects do not contaminate timing.
         for _ in range(warmup_runs):
             fn(*args, **kwargs)
+            
+        # Execute measured call and return structured result or error payload. 
         return {"ok": True, "payload": _run_observed_call(fn, args, kwargs)}
     except Exception as exc:
         return {"ok": False, "payload": _child_error_payload(exc)}
@@ -387,7 +389,6 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
         except subprocess.TimeoutExpired as e:
             logger.debug("Worker timed out after %s seconds", timeout)
             _terminate_gracefully(proc)
-            
             try:
                 proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:

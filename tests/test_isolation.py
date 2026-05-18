@@ -790,28 +790,35 @@ class TestRunIsolated:
 
     def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
         commands: list[list[str]] = []
+        def fake_popen(cmd, **kwargs):
+            commands.append(cmd)
 
-        def fake_subprocess_run(command, **kwargs):
-            commands.append(command)
-            with isolation_process_module.Path(command[4]).open("rb") as handle:
-                request = pickle.load(handle)
-            assert request["qualname"] == "add"
-            assert isolation_process_module._resolve_callable(request["module_name"], request["qualname"])(2, 3) == 5
-            with isolation_process_module.Path(command[5]).open("wb") as handle:
-                pickle.dump(
-                    {
-                        "ok": True,
-                        "payload": IsolatedRunResult(
-                            elapsed_seconds=0.125,
-                            return_value=5,
-                            observations=[],
-                        ),
-                    },
-                    handle,
-                )
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
+            class _FakeProc:
+                def __init__(self, cmd):
+                    self.returncode = 0
 
-        monkeypatch.setattr(isolation_process_module.subprocess, "run", fake_subprocess_run)
+                def communicate(self, timeout=None):
+                    with isolation_process_module.Path(cmd[4]).open("rb") as handle:
+                        request = pickle.load(handle)
+                    assert request["qualname"] == "add"
+                    assert isolation_process_module._resolve_callable(request["module_name"], request["qualname"])(2, 3) == 5
+                    with isolation_process_module.Path(cmd[5]).open("wb") as handle:
+                        pickle.dump(
+                            {
+                                "ok": True,
+                                "payload": IsolatedRunResult(
+                                    elapsed_seconds=0.125,
+                                    return_value=5,
+                                    observations=[],
+                                ),
+                            },
+                            handle,
+                        )
+                    return ("", "")
+
+            return _FakeProc(cmd)
+
+        monkeypatch.setattr(isolation_process_module.subprocess, "Popen", fake_popen)
 
         result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
 
@@ -828,10 +835,13 @@ class TestRunIsolated:
         ]
 
     def test_child_exit_before_result_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch):
+        # Simulate a child process that exits with a non-zero return code and
+        # does not write a response file. Patch Popen (used by the product code)
+        # to return a proc-like object with the expected attributes.
         monkeypatch.setattr(
             isolation_process_module.subprocess,
-            "run",
-            lambda command, **kwargs: SimpleNamespace(returncode=3, stdout="", stderr=""),
+            "Popen",
+            lambda command, **kwargs: SimpleNamespace(returncode=3, communicate=lambda timeout=None: ("", "")),
         )
 
         with pytest.raises(RuntimeError, match="failed before sending a result"):
