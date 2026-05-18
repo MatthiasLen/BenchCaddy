@@ -280,13 +280,20 @@ def _permutation_significance_p_value(
     rng = np.random.default_rng(options.bootstrap_seed + 101)
     pooled = np.concatenate([baseline_values, candidate_values])
     observed_abs_delta = abs(delta_seconds)
-    permutation_deltas: list[float] = []
-    for _ in range(options.bootstrap_resamples):
-        permutation = rng.permutation(pooled)
-        baseline_perm = permutation[: baseline_values.size]
-        candidate_perm = permutation[baseline_values.size :]
-        permutation_deltas.append(abs(float(np.median(candidate_perm) - np.median(baseline_perm))))
-    return float(np.mean(np.asarray(permutation_deltas) >= observed_abs_delta))
+    sample_count = pooled.size
+    batch_size = max(1, min(options.bootstrap_resamples, 4096 // max(sample_count, 1)))
+    more_extreme_count = 0
+
+    for start in range(0, options.bootstrap_resamples, batch_size):
+        current_batch_size = min(batch_size, options.bootstrap_resamples - start)
+        permuted = np.array(np.broadcast_to(pooled, (current_batch_size, sample_count)), copy=True)
+        permuted = rng.permuted(permuted, axis=1)
+        baseline_perm = permuted[:, : baseline_values.size]
+        candidate_perm = permuted[:, baseline_values.size :]
+        permutation_deltas = np.abs(np.median(candidate_perm, axis=1) - np.median(baseline_perm, axis=1))
+        more_extreme_count += int(np.count_nonzero(permutation_deltas >= observed_abs_delta))
+
+    return float(more_extreme_count / options.bootstrap_resamples)
 
 
 def _comparison_classification(

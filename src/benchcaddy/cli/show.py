@@ -228,7 +228,8 @@ def _print_numitems_notice(*, shown_count: int, total_count: int, identifiers: l
     command = f"benchcaddy show{' ' if identifiers else ''}{' '.join(identifiers or [])} -n {total_count}"
     _console().print(
         Text.assemble(
-            (f"Output capped to the latest {shown_count} entries by record ID. ", "bold bright_cyan"),
+            ("Output capped to the latest entries by record ID. ", "bold bright_cyan"),
+            (f"Showing latest {shown_count} entries. ", "bright_black"),
             ("Run ", "bright_black"),
             (command, "bold yellow"),
             (" to show all entries.", "bright_black"),
@@ -309,4 +310,4 @@ def show_command(
     _show_selected_runs(visible_runs)
 
     if was_limited:
-        _print_numitems_notice(total_count=len(runs), identifiers=identifiers)
+        _print_numitems_notice(shown_count=len(visible_runs), total_count=len(runs), identifiers=identifiers)

@@ -403,7 +403,7 @@ def _suite_comparison_table(comparison: dict[str, object], *, verbose: bool) -> 
     table.add_column("Run ID", justify="right", no_wrap=True, min_width=4, max_width=4)
     table.add_column("Record ID", justify="right", no_wrap=True, min_width=7, max_width=7)
     table.add_column("Configuration", overflow="ellipsis", max_width=16)
-    table.add_column("Mean +- Std (s)", justify="right", no_wrap=True, max_width=18)
+    table.add_column("Mean +- Std (s)", justify="right", no_wrap=True, max_width=25)
     table.add_column(str(comparison["delta_column_label"]), justify="right", no_wrap=True, max_width=12)
     table.add_column(str(comparison["ratio_column_label"]), justify="right", no_wrap=True, max_width=6)
     table.add_column("Return Value", overflow="ellipsis", no_wrap=True, max_width=16)
@@ -587,7 +587,7 @@ def compare_command(
         ),
     ] = False,
     confidence_level: CompareConfidenceLevelOption = 0.95,
-    bootstrap_resamples: CompareBootstrapResamplesOption = 2000,
+    bootstrap_resamples: CompareBootstrapResamplesOption = 1000,
     noise_threshold: NoiseThresholdOption = 0.05,
     significance_level: SignificanceLevelOption = 0.05,
     regression_threshold: RegressionThresholdOption = 5.0,
