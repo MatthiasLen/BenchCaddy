@@ -8,14 +8,15 @@ from typing import Any
 from ..observability import summarize_observations
 from ..return_values import return_relative_error
 from ..stats import AnalysisOptions, compare_sample_sets
-from ._sqlalchemy.models import BenchmarkRun, BenchmarkSuite
-from ._sqlalchemy.session import db_session
-from ._sqlalchemy.store import (
+from ._backend import (
+    BenchmarkRun,
+    BenchmarkSuite,
     _get_suite,
     _list_suite_runs_latest_first,
     _list_suite_runs_oldest_first,
     _resolve_run,
     _resolve_suite_baseline_run,
+    db_session,
 )
 from .read import get_run_details
 

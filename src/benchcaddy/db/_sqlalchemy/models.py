@@ -9,8 +9,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql.functions import now
 from sqlalchemy.types import JSON
 
-from ...return_values import StoredReturnValue
-from ...stats import AnalysisOptions
+from ...return_values import StoredReturnValue, return_relative_error
+from ...stats import AnalysisOptions, analyze_samples, compare_sample_sets
 
 
 class Base(DeclarativeBase):
@@ -136,10 +136,7 @@ class BenchmarkRun(Base):
         return float(fmean(self.samples)) if self.samples else 0.0
 
     def analysis_payload(self, analysis_options: AnalysisOptions | None = None) -> dict[str, object]:
-        # Resolve through the public facade so benchcaddy.db monkeypatches still apply.
-        from benchcaddy import db as db_module
-
-        analysis = db_module.analyze_samples(self.samples, analysis_options)
+        analysis = analyze_samples(self.samples, analysis_options)
         return analysis.to_payload()
 
     def to_payload(
@@ -199,10 +196,8 @@ class BenchmarkRun(Base):
         reference_samples: Sequence[float],
         analysis_options: AnalysisOptions | None = None,
     ) -> dict[str, Any]:
-        from benchcaddy import db as db_module
-
-        analysis = db_module.analyze_samples(self.samples, analysis_options).to_payload()
-        comparison_analysis = db_module.compare_sample_sets(reference_samples, self.samples, analysis_options).to_payload()
+        analysis = analyze_samples(self.samples, analysis_options).to_payload()
+        comparison_analysis = compare_sample_sets(reference_samples, self.samples, analysis_options).to_payload()
         return {
             "id": self.id,
             "record_id": self.id,
@@ -214,7 +209,7 @@ class BenchmarkRun(Base):
             "median_seconds": self.median_seconds,
             "std_seconds": self.std_seconds,
             "target_return_value": self.target_return_value,
-            "target_return_relative_error": db_module.return_relative_error(
+            "target_return_relative_error": return_relative_error(
                 reference_value=reference_run_target_value,
                 candidate_value=self.target_return_value,
             ),
