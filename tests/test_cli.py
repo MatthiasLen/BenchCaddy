@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
 import benchcaddy.core as core_module
-import benchcaddy.db as db_module
+import benchcaddy.db._sqlalchemy.models as models_module
 from benchcaddy.cli import _suite_row_style, _trend_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 from benchcaddy.isolation import IsolatedRunResult
@@ -992,11 +992,7 @@ def test_show_without_arguments_skips_statistical_analysis(
         environment_payload=environment_payload,
     )
 
-    monkeypatch.setattr(
-        db_module,
-        "analyze_samples",
-        _raise_if_analysis_called,
-    )
+    monkeypatch.setattr(models_module, "analyze_samples", _raise_if_analysis_called)
 
     show_result = runner.invoke(app, ["show", "--database", str(database_path)])
 

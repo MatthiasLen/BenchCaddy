@@ -7,7 +7,12 @@ from ..return_values import StoredReturnValue, normalize_return_value
 from ..stats import AnalysisOptions
 from ._sqlalchemy.models import BenchmarkRun, BenchmarkSuiteBaseline, BenchmarkSweepExecution, EnvironmentInfo
 from ._sqlalchemy.session import db_session
-from ._sqlalchemy.store import _get_or_create_suite, _get_suite, _get_suite_baseline_record, _resolve_run
+from ._sqlalchemy.store import (
+    _get_or_create_suite,
+    _get_suite,
+    _get_suite_baseline_record,
+    _resolve_run,
+)
 
 
 def create_sweep_execution(

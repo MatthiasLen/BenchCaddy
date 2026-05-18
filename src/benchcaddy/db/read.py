@@ -88,22 +88,18 @@ def get_selected_run_details(
     include_analysis: bool = False,
 ) -> list[dict[str, Any]] | None:
     unique_run_ids = list(dict.fromkeys(run_ids))
-    runs = [
-        get_run_details(
-            run_id,
-            database_path,
-            analysis_options=analysis_options,
-            include_analysis=include_analysis,
-        )
-        for run_id in unique_run_ids
-    ]
-    if any(run is None for run in runs):
-        return None
+    with db_session(database_path) as session:
+        runs = [_resolve_run(session, run_id) for run_id in unique_run_ids]
+        if any(run is None for run in runs):
+            return None
 
-    return sorted(
-        [run for run in runs if run is not None],
-        key=lambda run: -int(run["id"]),
-    )
+        run_payloads = [
+            run.to_detail_payload(analysis_options, include_analysis=include_analysis)
+            for run in runs
+            if run is not None
+        ]
+
+    return sorted(run_payloads, key=lambda run: -int(run["id"]))
 
 
 def get_all_run_details(
