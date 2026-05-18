@@ -51,11 +51,7 @@ def _list_all_runs_latest_first(session: Session, limit: int | None = None) -> l
     )
     if limit is not None:
         statement = statement.limit(limit)
-    return (
-        session.execute(statement)
-        .scalars()
-        .all()
-    )
+    return session.execute(statement).scalars().all()
 
 
 def _count_all_runs(session: Session) -> int:
@@ -65,9 +61,7 @@ def _count_all_runs(session: Session) -> int:
 def _list_suite_runs_latest_first(session: Session, suite_id: int) -> list[BenchmarkRun]:
     return (
         session.execute(
-            select(BenchmarkRun)
-            .where(BenchmarkRun.suite_id == suite_id)
-            .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
+            select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
         )
         .scalars()
         .all()
@@ -75,19 +69,13 @@ def _list_suite_runs_latest_first(session: Session, suite_id: int) -> list[Bench
 
 
 def _list_suite_runs_created_desc(session: Session, suite_id: int) -> list[BenchmarkRun]:
-    return (
-        session.execute(select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(BenchmarkRun.created_at.desc()))
-        .scalars()
-        .all()
-    )
+    return session.execute(select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(BenchmarkRun.created_at.desc())).scalars().all()
 
 
 def _list_suite_runs_oldest_first(session: Session, suite_id: int) -> list[BenchmarkRun]:
     return (
         session.execute(
-            select(BenchmarkRun)
-            .where(BenchmarkRun.suite_id == suite_id)
-            .order_by(BenchmarkRun.sweep_execution_id.asc(), BenchmarkRun.run_index.asc(), BenchmarkRun.id.asc())
+            select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(BenchmarkRun.sweep_execution_id.asc(), BenchmarkRun.run_index.asc(), BenchmarkRun.id.asc())
         )
         .scalars()
         .all()

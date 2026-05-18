@@ -86,9 +86,7 @@ def _noise_warning(noise: NoiseEstimate) -> str | None:
 
     severity = "High" if noise.noise_level == "high" else "Moderate"
     guidance = (
-        "background scheduling or frequency changes may distort results"
-        if noise.noise_level == "high"
-        else "consider reducing background activity or increasing sample counts"
+        "background scheduling or frequency changes may distort results" if noise.noise_level == "high" else "consider reducing background activity or increasing sample counts"
     )
     return f"{severity} timing jitter detected (MAD noise {noise.relative_jitter:.1%}) — {guidance}"
 
@@ -99,11 +97,7 @@ def _drift_warning(noise: NoiseEstimate) -> str | None:
         return None
 
     severity = "High" if noise.drift_level == "high" else "Moderate"
-    guidance = (
-        "measurements changed materially during capture"
-        if noise.drift_level == "high"
-        else "results may still shift during longer benchmark runs"
-    )
+    guidance = "measurements changed materially during capture" if noise.drift_level == "high" else "results may still shift during longer benchmark runs"
     return f"{severity} timing drift detected (early/late quartile drift {noise.relative_drift:.1%}) — {guidance}"
 
 

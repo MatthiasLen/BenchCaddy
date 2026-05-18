@@ -150,10 +150,7 @@ def _print_trend_summary(trend: dict[str, object]) -> None:
         run_count = summary["run_count"]
         total_run_count = summary.get("total_run_count", run_count)
         count_label = str(run_count) if run_count == total_run_count else f"{run_count}/{total_run_count}"
-        configuration_label = ", ".join(
-            f"{key}={summary['configuration'][key]}"
-            for key in sorted(summary["configuration"])
-        )
+        configuration_label = ", ".join(f"{key}={summary['configuration'][key]}" for key in sorted(summary["configuration"]))
         table.add_row(
             configuration_label,
             count_label,

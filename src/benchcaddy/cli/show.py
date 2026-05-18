@@ -290,7 +290,7 @@ def show_command(
         if details is None:
             _console().print(f"Suite '{identifier}' was not found in {database_path}.")
             raise typer.Exit(code=1)
-        
+
         total_count = len(details["runs"])
         details["runs"], was_limited = _limit_runs(details["runs"], numitems)
         _show_suite(details)
@@ -305,7 +305,7 @@ def show_command(
     if runs is None:
         _console().print(f"One or more runs were not found in {database_path}.")
         raise typer.Exit(code=1)
-    
+
     visible_runs, was_limited = _limit_runs(runs, numitems)
     _show_selected_runs(visible_runs)
 

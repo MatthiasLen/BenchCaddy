@@ -204,10 +204,7 @@ def get_suite_trend(
                         "target_name": suite.target_name,
                         "configuration_count": len(grouped_runs),
                         "limit": limit,
-                        "config_summaries": [
-                            _configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit)
-                            for key in grouped_runs
-                        ],
+                        "config_summaries": [_configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit) for key in grouped_runs],
                     }
 
                 if basis_run is not None:

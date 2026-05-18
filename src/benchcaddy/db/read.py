@@ -94,11 +94,7 @@ def get_selected_run_details(
         if any(run is None for run in runs):
             return None
 
-        run_payloads = [
-            run.to_detail_payload(analysis_options, include_analysis=include_analysis)
-            for run in runs
-            if run is not None
-        ]
+        run_payloads = [run.to_detail_payload(analysis_options, include_analysis=include_analysis) for run in runs if run is not None]
 
     return sorted(run_payloads, key=lambda run: -int(run["id"]))
 

@@ -22,7 +22,6 @@ Column = str | tuple[str, str]
 Row = Sequence[object]
 
 
-
 def dump_json(value: object, *, indent: int | None = 0) -> str:
     n_ind = 0 if indent is None else indent
     if isinstance(value, dict):

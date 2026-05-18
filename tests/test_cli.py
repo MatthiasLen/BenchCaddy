@@ -463,7 +463,7 @@ def test_cli_sweep_runs_importable_target_and_records_results(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.150,
             target(**kwargs),
             [],
@@ -575,7 +575,7 @@ def test_cli_sweep_json_output_reports_recorded_runs(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.200,
             target(**kwargs),
             [{"label": "inner", "duration_seconds": 0.01}],
@@ -645,7 +645,7 @@ def test_cli_sweep_subcommand_verbose_forwards_to_sweep_runtime(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.150,
             target(**kwargs),
             [],
@@ -685,8 +685,7 @@ def test_cli_sweep_imports_target_from_current_working_directory(
     package_dir = tmp_path / "examples"
     package_dir.mkdir()
     (package_dir / "benchmark_local.py").write_text(
-        "def benchmark_case(size: int, variant: str) -> float:\n"
-        "    return float(size) if variant == 'baseline' else float(size) * 1.5\n",
+        "def benchmark_case(size: int, variant: str) -> float:\n    return float(size) if variant == 'baseline' else float(size) * 1.5\n",
         encoding="utf-8",
     )
 
@@ -701,7 +700,7 @@ def test_cli_sweep_imports_target_from_current_working_directory(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.150,
             target(**kwargs),
             [],

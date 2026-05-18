@@ -61,12 +61,7 @@ class EnvironmentState:
 
 def all_environment_signals_missing(environment: EnvironmentState) -> bool:
     """Return ``True`` when no environment telemetry could be collected."""
-    return (
-        environment.cpu_load is None
-        and environment.on_battery is None
-        and environment.thermal_throttling is None
-        and environment.frequency_stable is None
-    )
+    return environment.cpu_load is None and environment.on_battery is None and environment.thermal_throttling is None and environment.frequency_stable is None
 
 
 def environment_risk_score(environment: EnvironmentState) -> int:
@@ -113,9 +108,7 @@ def environment_warnings(environment: EnvironmentState) -> list[str]:
 
     if environment.cpu_load is not None:
         if environment.cpu_load > _LOAD_HIGH_THRESHOLD:
-            warnings.append(
-                f"Background load elevated ({environment.cpu_load:.0%}) — close competing processes for more reliable results"
-            )
+            warnings.append(f"Background load elevated ({environment.cpu_load:.0%}) — close competing processes for more reliable results")
         elif environment.cpu_load > _LOAD_MODERATE_THRESHOLD:
             warnings.append(f"Minor background activity detected ({environment.cpu_load:.0%})")
 
