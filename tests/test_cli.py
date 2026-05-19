@@ -10,6 +10,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
+import benchcaddy.cli.show as show_module
 import benchcaddy.core as core_module
 import benchcaddy.db._sqlalchemy.models as models_module
 from benchcaddy.cli import _suite_row_style, _trend_row_style, app
@@ -463,7 +464,7 @@ def test_cli_sweep_runs_importable_target_and_records_results(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.150,
             target(**kwargs),
             [],
@@ -575,7 +576,7 @@ def test_cli_sweep_json_output_reports_recorded_runs(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.200,
             target(**kwargs),
             [{"label": "inner", "duration_seconds": 0.01}],
@@ -645,7 +646,7 @@ def test_cli_sweep_subcommand_verbose_forwards_to_sweep_runtime(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.150,
             target(**kwargs),
             [],
@@ -685,8 +686,7 @@ def test_cli_sweep_imports_target_from_current_working_directory(
     package_dir = tmp_path / "examples"
     package_dir.mkdir()
     (package_dir / "benchmark_local.py").write_text(
-        "def benchmark_case(size: int, variant: str) -> float:\n"
-        "    return float(size) if variant == 'baseline' else float(size) * 1.5\n",
+        "def benchmark_case(size: int, variant: str) -> float:\n    return float(size) if variant == 'baseline' else float(size) * 1.5\n",
         encoding="utf-8",
     )
 
@@ -701,7 +701,7 @@ def test_cli_sweep_imports_target_from_current_working_directory(
     monkeypatch.setattr(
         core_module,
         "run_isolated",
-        lambda target, kwargs, **rest: IsolatedRunResult(
+        lambda target, kwargs, **_ignored_kwargs: IsolatedRunResult(
             0.100 if kwargs["variant"] == "baseline" else 0.150,
             target(**kwargs),
             [],
@@ -998,6 +998,254 @@ def test_show_without_arguments_skips_statistical_analysis(
 
     assert show_result.exit_code == 0
     assert "All Runs" in show_result.stdout
+
+
+def test_show_suite_numitems_limits_to_latest_runs_and_prints_notice(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli_module,
+        "console",
+        Console(force_terminal=False, color_system=None, width=160),
+    )
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="limited-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="limited-suite",
+        configuration={"variant": "candidate-a"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="limited-suite",
+        configuration={"variant": "candidate-b"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    show_result = runner.invoke(app, ["show", "limited-suite", "--numitems", "2", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "Suite: limited-suite" in show_result.stdout
+    assert "3.1" in show_result.stdout
+    assert "2.1" in show_result.stdout
+    assert "1.1" not in show_result.stdout
+    assert "Output capped to the latest entries by record ID." in show_result.stdout
+    assert _compact_output(f"benchcaddy show limited-suite -n 3 --database {database_path}") in _compact_output(show_result.stdout)
+
+
+def test_show_without_arguments_numitems_limits_output_and_prints_notice(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli_module,
+        "console",
+        Console(force_terminal=False, color_system=None, width=160),
+    )
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-a",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-b",
+        configuration={"variant": "candidate-a"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="suite-c",
+        configuration={"variant": "candidate-b"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    show_result = runner.invoke(app, ["show", "--numitems", "2", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "All Runs" in show_result.stdout
+    assert "3.1" in show_result.stdout
+    assert "2.1" in show_result.stdout
+    assert "1.1" not in show_result.stdout
+    assert "Output capped to the latest entries by record ID." in show_result.stdout
+    assert _compact_output(f"benchcaddy show -n 3 --database {database_path}") in _compact_output(show_result.stdout)
+
+
+def test_show_selected_runs_numitems_limits_output_and_prints_notice(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli_module,
+        "console",
+        Console(force_terminal=False, color_system=None, width=160),
+    )
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="selected-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="selected-suite",
+        configuration={"variant": "candidate"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+
+    show_result = runner.invoke(app, ["show", "1", "2.1", "--numitems", "1", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "Selected Runs" in show_result.stdout
+    assert "2.1" in show_result.stdout
+    assert "1.1" not in show_result.stdout
+    assert "Output capped to the latest entries by record ID." in show_result.stdout
+    assert _compact_output(f"benchcaddy show 1 2.1 -n 2 --database {database_path}") in _compact_output(show_result.stdout)
+
+
+def test_show_defaults_to_100_items_and_suggests_total_count(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli_module,
+        "console",
+        Console(force_terminal=False, color_system=None, width=200),
+    )
+
+    for index in range(101):
+        _seed_run(
+            database_path=database_path,
+            suite_name="default-cap-suite",
+            configuration={"variant": f"candidate-{index}"},
+            median_seconds=0.100 + index * 0.001,
+            environment_payload=environment_payload,
+        )
+
+    show_result = runner.invoke(app, ["show", "default-cap-suite", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert "Suite: default-cap-suite" in show_result.stdout
+    assert "101.1" in show_result.stdout
+    assert "2.1" in show_result.stdout
+    assert "candidate-0" not in show_result.stdout
+    assert _compact_output(f"benchcaddy show default-cap-suite -n 101 --database {database_path}") in _compact_output(show_result.stdout)
+
+
+def test_show_suite_requests_limited_details_from_db(tmp_path: Path, monkeypatch) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        show_module,
+        "get_suite_details",
+        lambda suite_name, database_path_arg, include_analysis=False, limit=None: (
+            calls.append(("details", limit)),
+            {
+                "suite_name": suite_name,
+                "target_name": "benchmark_target",
+                "runs": [
+                    {
+                        "id": 2,
+                        "display_id": "2.1",
+                        "record_id": 2,
+                        "configuration": {"variant": "candidate"},
+                        "samples": [0.2, 0.2],
+                        "observations": [],
+                        "median_seconds": 0.2,
+                        "min_seconds": 0.2,
+                        "max_seconds": 0.2,
+                        "std_seconds": 0.0,
+                        "target_return_value": None,
+                        "suite_name": suite_name,
+                        "target_name": "benchmark_target",
+                        "analysis": None,
+                        "ci_lower_seconds": None,
+                        "ci_upper_seconds": None,
+                        "mad_seconds": None,
+                        "coefficient_of_variation": None,
+                        "noise_warnings": [],
+                        "created_at": "2026-05-19T00:00:00Z",
+                    },
+                    {
+                        "id": 1,
+                        "display_id": "1.1",
+                        "record_id": 1,
+                        "configuration": {"variant": "baseline"},
+                        "samples": [0.1, 0.1],
+                        "observations": [],
+                        "median_seconds": 0.1,
+                        "min_seconds": 0.1,
+                        "max_seconds": 0.1,
+                        "std_seconds": 0.0,
+                        "target_return_value": None,
+                        "suite_name": suite_name,
+                        "target_name": "benchmark_target",
+                        "analysis": None,
+                        "ci_lower_seconds": None,
+                        "ci_upper_seconds": None,
+                        "mad_seconds": None,
+                        "coefficient_of_variation": None,
+                        "noise_warnings": [],
+                        "created_at": "2026-05-18T00:00:00Z",
+                    },
+                ],
+                "environment": None,
+                "baseline_run": None,
+            },
+        )[1],
+    )
+    monkeypatch.setattr(
+        show_module,
+        "get_suite_run_count",
+        lambda suite_name, database_path_arg: calls.append(("count", suite_name)) or 3,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "console",
+        Console(force_terminal=False, color_system=None, width=160),
+    )
+
+    show_result = runner.invoke(app, ["show", "limited-suite", "--numitems", "2", "--database", str(database_path)])
+
+    assert show_result.exit_code == 0
+    assert calls == [("details", 2), ("count", "limited-suite")]
+    assert _compact_output(f"benchcaddy show limited-suite -n 3 --database {database_path}") in _compact_output(show_result.stdout)
 
 
 def test_show_rejects_removed_stats_flags(

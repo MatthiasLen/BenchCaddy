@@ -180,49 +180,6 @@ def _parse_percent_option(value: str, *, option_name: str) -> float:
     return parsed
 
 
-def _resolve_compare_thresholds(
-    *,
-    regression_threshold: float,
-    fail_if_regression: str | None,
-) -> tuple[float, float | None]:
-    if fail_if_regression is None:
-        return regression_threshold, None
-    gate_threshold = _parse_percent_option(fail_if_regression, option_name="--fail-if-regression")
-    return gate_threshold, gate_threshold
-
-
-def _gate_run_payload(run: dict[str, object], comparison_analysis: dict[str, object]) -> dict[str, object]:
-    return {
-        "display_id": run["display_id"],
-        "record_id": run.get("record_id", run["id"]),
-        "classification": comparison_analysis.get("classification"),
-        "percent_change": comparison_analysis.get("percent_change"),
-        "regression_probability": comparison_analysis.get("regression_probability"),
-        "significance_p_value": comparison_analysis.get("significance_p_value"),
-        "warnings": list(comparison_analysis.get("warnings") or ()),
-    }
-
-
-def _direct_gate_payload(comparison: dict[str, object]) -> list[dict[str, object]]:
-    comparison_analysis = comparison.get("comparison_analysis") or {}
-    if not comparison_analysis.get("regression_detected"):
-        return []
-    return [_gate_run_payload(comparison["candidate"], comparison_analysis)]
-
-
-def _suite_gate_payload(comparison: dict[str, object]) -> list[dict[str, object]]:
-    basis_run = comparison.get("basis_run")
-    basis_id = None if basis_run is None else basis_run.get("id")
-    failing_runs: list[dict[str, object]] = []
-    for run in comparison["runs"]:
-        if run["id"] == basis_id:
-            continue
-        comparison_analysis = run.get("comparison_analysis") or {}
-        if comparison_analysis.get("regression_detected"):
-            failing_runs.append(_gate_run_payload(run, comparison_analysis))
-    return failing_runs
-
-
 def _evaluate_compare_gate(
     comparison: dict[str, object],
     *,
@@ -232,7 +189,34 @@ def _evaluate_compare_gate(
     if threshold_percent is None:
         return None
 
-    failing_runs = _direct_gate_payload(comparison) if mode == "direct" else _suite_gate_payload(comparison)
+    if mode == "direct":
+        candidate = comparison["candidate"]
+        run_analyses = [(candidate, comparison.get("comparison_analysis") or {})]
+    else:
+        basis_run = comparison.get("basis_run")
+        basis_id = None if basis_run is None else basis_run.get("id")
+        run_analyses = [
+            (run, run.get("comparison_analysis") or {})
+            for run in comparison["runs"]
+            if run["id"] != basis_id
+        ]
+
+    failing_runs: list[dict[str, object]] = []
+    for run, comparison_analysis in run_analyses:
+        if not comparison_analysis.get("regression_detected"):
+            continue
+        failing_runs.append(
+            {
+                "display_id": run["display_id"],
+                "record_id": run.get("record_id", run["id"]),
+                "classification": comparison_analysis.get("classification"),
+                "percent_change": comparison_analysis.get("percent_change"),
+                "regression_probability": comparison_analysis.get("regression_probability"),
+                "significance_p_value": comparison_analysis.get("significance_p_value"),
+                "warnings": list(comparison_analysis.get("warnings") or ()),
+            }
+        )
+
     return {
         "enabled": True,
         "mode": mode,
@@ -278,23 +262,6 @@ def _finalize_compare_result(
         raise typer.Exit(code=REGRESSION_EXIT_CODE)
 
 
-def _comparison_title(comparison: dict[str, object]) -> str:
-    strict_keys = comparison.get("strict_keys") or []
-    if not strict_keys:
-        return f"Comparison: {comparison['suite_name']}"
-    return f"Comparison: {comparison['suite_name']} (strict: {', '.join(strict_keys)})"
-
-
-def _style_delta(percent_change: float | None) -> Text:
-    if percent_change is None:
-        return Text("n/a")
-    return Text(f"{percent_change:+.2f}%", style="green" if percent_change <= -5.0 else "red" if percent_change >= 5.0 else None)
-
-
-def _styled_run_label(run: dict[str, object], style: str | None) -> Text:
-    return _styled(f"{run['display_id']} ({run['id']})", style)
-
-
 def _comparison_analysis_panel(comparison_analysis: dict[str, object], title: str = "Statistical Assessment") -> Panel:
     return summary_panel(
         title,
@@ -324,7 +291,7 @@ def _best_vs_reference_panel(comparison: dict[str, object]) -> Panel | None:
         return summary_panel(
             "Best Run vs Reference",
             [
-                ("Reference Run", _styled_run_label(basis_run, "green")),
+                ("Reference Run", _styled(f"{basis_run['display_id']} ({basis_run['id']})", "green")),
                 ("Status", "Reference is already the fastest run in this comparison scope."),
                 ("Scope", scope),
             ],
@@ -334,8 +301,8 @@ def _best_vs_reference_panel(comparison: dict[str, object]) -> Panel | None:
     return summary_panel(
         "Best Run vs Reference",
         [
-            ("Reference Run", _styled_run_label(basis_run, "yellow")),
-            ("Best Run", _styled_run_label(best_run, "green")),
+            ("Reference Run", _styled(f"{basis_run['display_id']} ({basis_run['id']})", "yellow")),
+            ("Best Run", _styled(f"{best_run['display_id']} ({best_run['id']})", "green")),
             ("Scope", scope),
             ("Delta CI (s)", format_interval(best_analysis.get("delta_ci_lower_seconds"), best_analysis.get("delta_ci_upper_seconds"))),
             ("Improvement Probability", format_probability(best_analysis.get("improvement_probability"))),
@@ -358,10 +325,6 @@ def _suite_findings_panel(comparison: dict[str, object]) -> Panel:
             ("Basis Source", str(comparison.get("basis_source", "best"))),
         ],
     )
-
-
-def _table_row(values: tuple[object, ...]) -> tuple[object, ...]:
-    return tuple(value if isinstance(value, Text) else str(value) for value in values)
 
 
 def _suite_comparison_row(run: dict[str, object], *, verbose: bool) -> tuple[object, ...]:
@@ -399,11 +362,16 @@ def _suite_row_style(comparison: dict[str, object], run: dict[str, object]) -> s
 
 
 def _suite_comparison_table(comparison: dict[str, object], *, verbose: bool) -> Table:
-    table = Table(title=_comparison_title(comparison), pad_edge=False, collapse_padding=True)
+    strict_keys = comparison.get("strict_keys") or []
+    title = f"Comparison: {comparison['suite_name']}"
+    if strict_keys:
+        title = f"{title} (strict: {', '.join(strict_keys)})"
+
+    table = Table(title=title, pad_edge=False, collapse_padding=True)
     table.add_column("Run ID", justify="right", no_wrap=True, min_width=4, max_width=4)
     table.add_column("Record ID", justify="right", no_wrap=True, min_width=7, max_width=7)
     table.add_column("Configuration", overflow="ellipsis", max_width=16)
-    table.add_column("Mean +- Std (s)", justify="right", no_wrap=True, max_width=18)
+    table.add_column("Mean +- Std (s)", justify="right", no_wrap=True, max_width=25)
     table.add_column(str(comparison["delta_column_label"]), justify="right", no_wrap=True, max_width=12)
     table.add_column(str(comparison["ratio_column_label"]), justify="right", no_wrap=True, max_width=6)
     table.add_column("Return Value", overflow="ellipsis", no_wrap=True, max_width=16)
@@ -420,7 +388,7 @@ def _suite_comparison_table(comparison: dict[str, object], *, verbose: bool) -> 
             _suite_comparison_row(run, verbose=verbose),
             _suite_row_style(comparison, run),
         )
-        table.add_row(*_table_row(styled_row))
+        table.add_row(*(value if isinstance(value, Text) else str(value) for value in styled_row))
     return table
 
 
@@ -496,7 +464,24 @@ def _print_run_comparison(
                     _styled(_format_optional_seconds(candidate.get("max_seconds")), candidate_style),
                 ),
                 ("Median Delta (s)", "", f"{comparison['delta_seconds']:.6f}"),
-                ("Median Percent Change", "", _style_delta(comparison["percent_change"])),
+                (
+                    "Median Percent Change",
+                    "",
+                    Text(
+                        "n/a"
+                        if comparison["percent_change"] is None
+                        else f"{comparison['percent_change']:+.2f}%",
+                        style=(
+                            None
+                            if comparison["percent_change"] is None
+                            else "green"
+                            if comparison["percent_change"] <= -5.0
+                            else "red"
+                            if comparison["percent_change"] >= 5.0
+                            else None
+                        ),
+                    ),
+                ),
                 (
                     "Return Value",
                     _styled(format_return_value(baseline.get("target_return_value"), compact=True), baseline_style),
@@ -587,7 +572,7 @@ def compare_command(
         ),
     ] = False,
     confidence_level: CompareConfidenceLevelOption = 0.95,
-    bootstrap_resamples: CompareBootstrapResamplesOption = 2000,
+    bootstrap_resamples: CompareBootstrapResamplesOption = 1000,
     noise_threshold: NoiseThresholdOption = 0.05,
     significance_level: SignificanceLevelOption = 0.05,
     regression_threshold: RegressionThresholdOption = 5.0,
@@ -610,21 +595,24 @@ def compare_command(
 ) -> None:
     right, strict_keys = _parse_compare_operands(operands, strict)
     database_path = get_database_path(database)
-    effective_regression_threshold, gate_threshold = _resolve_compare_thresholds(
-        regression_threshold=regression_threshold,
-        fail_if_regression=fail_if_regression,
-    )
+    effective_regression_threshold = regression_threshold
+    gate_threshold: float | None = None
+    if fail_if_regression is not None:
+        gate_threshold = _parse_percent_option(fail_if_regression, option_name="--fail-if-regression")
+        effective_regression_threshold = gate_threshold
+
     analysis_options = _analysis_options(
         confidence_level=confidence_level,
         bootstrap_resamples=bootstrap_resamples,
+        regression_threshold=effective_regression_threshold,
         noise_threshold=noise_threshold,
         significance_level=significance_level,
-        regression_threshold=effective_regression_threshold,
     )
     left_run_id = _as_run_id(left)
     right_run_id = _as_run_id(right)
-    comparison_mode = "direct" if left_run_id is not None and right_run_id is not None else "suite"
-    if left_run_id is not None and right_run_id is not None:
+    direct_run_compare = left_run_id is not None and right_run_id is not None
+
+    if direct_run_compare:
         comparison = _run_direct_compare(
             left_run_id,
             right_run_id,
@@ -634,58 +622,52 @@ def compare_command(
             use_baseline=use_baseline,
             pin_baseline=pin_baseline,
         )
-        comparison["comparison_mode"] = comparison_mode
-        _finalize_compare_result(
-            comparison,
-            mode=comparison_mode,
-            threshold_percent=gate_threshold,
-            json_output=json_output,
-            render=_print_run_comparison,
+        comparison_mode = "direct"
+        render = _print_run_comparison
+    else:
+        _validate_suite_compare_options(
+            right_run_id=right_run_id,
+            use_baseline=use_baseline,
+            pin_baseline=pin_baseline,
         )
-        return
-
-    _validate_suite_compare_options(
-        right_run_id=right_run_id,
-        use_baseline=use_baseline,
-        pin_baseline=pin_baseline,
-    )
-    strict_keys = _resolve_compare_strict_keys(
-        strict_keys,
-        strict=strict,
-        right=right,
-        right_run_id=right_run_id,
-        database_path=database_path,
-    )
-
-    comparison = _raise_for_suite_compare_error(
-        compare_suite_runs(
-            left,
-            right_run_id,
+        strict_keys = _resolve_compare_strict_keys(
             strict_keys,
-            database_path,
+            strict=strict,
+            right=right,
+            right_run_id=right_run_id,
+            database_path=database_path,
+        )
+        comparison = _raise_for_suite_compare_error(
+            compare_suite_runs(
+                left,
+                right_run_id,
+                strict_keys,
+                database_path,
+                analysis_options=analysis_options,
+                use_pinned_baseline=use_baseline,
+            ),
+            left=left,
+            right=right,
+            database_path=database_path,
+        )
+        pinned = _pin_suite_baseline_if_requested(
+            suite_name=left,
+            right_run_id=right_run_id,
+            database_path=database_path,
             analysis_options=analysis_options,
-            use_pinned_baseline=use_baseline,
-        ),
-        left=left,
-        right=right,
-        database_path=database_path,
-    )
-    comparison["comparison_mode"] = comparison_mode
-    pinned = _pin_suite_baseline_if_requested(
-        suite_name=left,
-        right_run_id=right_run_id,
-        database_path=database_path,
-        analysis_options=analysis_options,
-        pin_baseline=pin_baseline,
-        emit=not json_output,
-    )
-    if pinned is not None and json_output:
-        comparison["baseline_update"] = pinned
+            pin_baseline=pin_baseline,
+            emit=not json_output,
+        )
+        if pinned is not None and json_output:
+            comparison["baseline_update"] = pinned
+        comparison_mode = "suite"
+        render = _print_suite_comparison
 
+    comparison["comparison_mode"] = comparison_mode
     _finalize_compare_result(
         comparison,
         mode=comparison_mode,
         threshold_percent=gate_threshold,
         json_output=json_output,
-        render=_print_suite_comparison,
+        render=render,
     )

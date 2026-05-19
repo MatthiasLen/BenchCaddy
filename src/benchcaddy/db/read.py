@@ -8,10 +8,13 @@ from ..stats import AnalysisOptions
 from ._sqlalchemy.session import db_session
 from ._sqlalchemy.store import (
     _collect_observation_labels,
+    _count_all_runs,
+    _count_suite_runs,
     _get_suite,
     _list_all_runs_latest_first,
     _list_all_suites,
     _list_suite_runs_created_desc,
+    _list_suite_runs_latest_first,
     _resolve_run,
     _resolve_suite_baseline_run,
 )
@@ -43,6 +46,7 @@ def get_suite_details(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
     *,
+    limit: int | None = None,
     include_analysis: bool = False,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
@@ -50,7 +54,7 @@ def get_suite_details(
         if suite is None:
             return None
 
-        runs = _list_suite_runs_created_desc(session, suite.id)
+        runs = _list_suite_runs_latest_first(session, suite.id, limit=limit)
         environment = runs[0].environment if runs else None
         baseline_run = _resolve_suite_baseline_run(session, suite)
 
@@ -93,11 +97,7 @@ def get_selected_run_details(
         if any(run is None for run in runs):
             return None
 
-        run_payloads = [
-            run.to_detail_payload(analysis_options, include_analysis=include_analysis)
-            for run in runs
-            if run is not None
-        ]
+        run_payloads = [run.to_detail_payload(analysis_options, include_analysis=include_analysis) for run in runs if run is not None]
 
     return sorted(run_payloads, key=lambda run: -int(run["id"]))
 
@@ -106,10 +106,11 @@ def get_all_run_details(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
     *,
+    limit: int | None = None,
     include_analysis: bool = False,
 ) -> list[dict[str, Any]]:
     with db_session(database_path) as session:
-        runs = _list_all_runs_latest_first(session)
+        runs = _list_all_runs_latest_first(session, limit=limit)
         return [
             {
                 **run.to_payload(analysis_options, include_analysis=include_analysis),
@@ -118,3 +119,16 @@ def get_all_run_details(
             }
             for run in runs
         ]
+
+
+def get_all_run_count(database_path: str | Path | None = None) -> int:
+    with db_session(database_path) as session:
+        return _count_all_runs(session)
+
+
+def get_suite_run_count(suite_name: str, database_path: str | Path | None = None) -> int | None:
+    with db_session(database_path) as session:
+        suite = _get_suite(session, suite_name)
+        if suite is None:
+            return None
+        return _count_suite_runs(session, suite.id)

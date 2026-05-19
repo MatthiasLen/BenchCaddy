@@ -10,6 +10,27 @@ from benchcaddy.stats import (
 )
 
 
+def _legacy_permutation_significance_p_value(
+    baseline_values: list[float],
+    candidate_values: list[float],
+    *,
+    delta_seconds: float,
+    options: AnalysisOptions,
+) -> float:
+    import numpy as np
+
+    rng = np.random.default_rng(options.bootstrap_seed + 101)
+    pooled = np.concatenate([baseline_values, candidate_values])
+    observed_abs_delta = abs(delta_seconds)
+    permutation_deltas: list[float] = []
+    for _ in range(options.bootstrap_resamples):
+        permutation = rng.permutation(pooled)
+        baseline_perm = permutation[: len(baseline_values)]
+        candidate_perm = permutation[len(baseline_values) :]
+        permutation_deltas.append(abs(float(np.median(candidate_perm) - np.median(baseline_perm))))
+    return float(np.mean(np.asarray(permutation_deltas) >= observed_abs_delta))
+
+
 def test_robust_relative_jitter_uses_scaled_mad() -> None:
     jitter, median_value = robust_relative_jitter([1.0, 1.0, 1.0, 1.3])
 
@@ -115,3 +136,22 @@ def test_compare_sample_sets_propagates_noisy_warnings_from_both_sides() -> None
     assert "candidate_low_sample_count" in comparison.warnings
     assert "baseline_noisy" in comparison.warnings
     assert "candidate_noisy" in comparison.warnings
+
+
+def test_compare_sample_sets_preserves_permutation_p_value() -> None:
+    baseline_samples = [0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101]
+    candidate_samples = [0.139, 0.140, 0.141, 0.142, 0.140, 0.139, 0.141]
+    options = AnalysisOptions(bootstrap_resamples=600, bootstrap_seed=11)
+
+    comparison = compare_sample_sets(
+        baseline_samples,
+        candidate_samples,
+        options,
+    )
+
+    assert comparison.significance_p_value == _legacy_permutation_significance_p_value(
+        baseline_samples,
+        candidate_samples,
+        delta_seconds=comparison.delta_seconds,
+        options=options,
+    )

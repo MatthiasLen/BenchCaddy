@@ -139,9 +139,7 @@ class TestEnvironmentPolicy:
         )
 
         assert isolation_environment_module.environment_risk_score(environment) == 1
-        assert isolation_environment_module.environment_warnings(environment) == [
-            "Environment telemetry unavailable — quality estimate is conservative"
-        ]
+        assert isolation_environment_module.environment_warnings(environment) == ["Environment telemetry unavailable — quality estimate is conservative"]
 
     def test_environment_risk_score_accumulates_signal_risks(self):
         environment = EnvironmentState(
@@ -190,6 +188,7 @@ class TestEstimateNoise:
     def test_raises_on_fewer_than_two_iterations(self):
         with pytest.raises(ValueError, match="iterations must be at least 2"):
             NoiseAnalyzer().analyze(iterations=1)
+
 
 def _capture(*durations: float) -> NoiseCapture:
     return NoiseCapture(
@@ -671,7 +670,10 @@ class TestRunIsolated:
         try:
             with pytest.raises(
                 TypeError,
-                match=r"could not resolve tests\.subprocess_observed_targets\.missing_symbol\. Ensure the symbol is importable in the child process and exposed at that module path"
+                match=(
+                    r"could not resolve tests\.subprocess_observed_targets\.missing_symbol\. "
+                    r"Ensure the symbol is importable in the child process and exposed at that module path"
+                ),
             ):
                 run_isolated(observed_targets.top_level_module_target, args=(1,), fresh_process=True)
         finally:
@@ -790,6 +792,7 @@ class TestRunIsolated:
 
     def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
         commands: list[list[str]] = []
+
         def fake_popen(cmd, **kwargs):
             commands.append(cmd)
 
@@ -965,6 +968,8 @@ class TestReliabilityReport:
         report = build_reliability_report(environment=_make_env(on_battery=True), noise=_make_noise())
         text = report.format()
         assert "Warnings:" in text
+
+
 # ---------------------------------------------------------------------------
 # CLI env command
 # ---------------------------------------------------------------------------

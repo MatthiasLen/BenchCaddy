@@ -105,7 +105,7 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
     except (PermissionError, psutil.AccessDenied, AttributeError, OSError):
         pass
 
-    # Re-apply CPU affinity to reduce the chance of being migrated to a different set of cores after preparation. 
+    # Re-apply CPU affinity to reduce the chance of being migrated to a different set of cores after preparation.
     if lock_cpu_affinity and hasattr(process, "cpu_affinity"):
         try:
             affinity = list(process.cpu_affinity())
@@ -139,10 +139,7 @@ def _child_error_payload(exc: Exception) -> dict[str, str]:
 
 
 def _unsupported_target_error(reason: str) -> TypeError:
-    return TypeError(
-        "fresh isolated execution requires an importable module-level function, static method, or class method; "
-        f"{reason}"
-    )
+    return TypeError(f"fresh isolated execution requires an importable module-level function, static method, or class method; {reason}")
 
 
 def _module_reference_from_source_path(source_path: str | None) -> tuple[str, list[str]] | None:
@@ -212,9 +209,7 @@ def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list
         source_path = None
 
     if not module_name or not qualname:
-        raise _unsupported_target_error(
-            "the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process."
-        )
+        raise _unsupported_target_error("the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process.")
 
     if module_name == "__main__":
         if resolved_reference := _module_reference_from_source_path(source_path):
@@ -247,9 +242,7 @@ def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple
     module_name, qualname, import_paths = _importable_target_reference(fn)
 
     if "<lambda>" in qualname:
-        raise _unsupported_target_error(
-            "lambdas are unsupported because they do not provide a stable import path for the worker. Define a named module-level function instead."
-        )
+        raise _unsupported_target_error("lambdas are unsupported because they do not provide a stable import path for the worker. Define a named module-level function instead.")
 
     if "<locals>" in qualname:
         raise _unsupported_target_error(
@@ -315,8 +308,8 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
         # Warmups happen outside the measured call so one-time effects do not contaminate timing.
         for _ in range(warmup_runs):
             fn(*args, **kwargs)
-            
-        # Execute measured call and return structured result or error payload. 
+
+        # Execute measured call and return structured result or error payload.
         return {"ok": True, "payload": _run_observed_call(fn, args, kwargs)}
     except Exception as exc:
         return {"ok": False, "payload": _child_error_payload(exc)}
@@ -343,7 +336,7 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
         ]
 
         popen_kwargs = {
-            "stdout": subprocess.PIPE, 
+            "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
             "text": True,
             "close_fds": True,
@@ -381,7 +374,7 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
                 with suppress(Exception):
                     p.kill()
 
-        # Wait for the worker to finish or time out. If the timeout expires, attempt a graceful 
+        # Wait for the worker to finish or time out. If the timeout expires, attempt a graceful
         # termination first, then escalate to a forceful kill if the worker does not exit.
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
@@ -395,7 +388,7 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
                 logger.debug("Worker did not exit after terminate; killing")
                 _kill_forcefully(proc)
                 proc.communicate()
-            
+
             raise TimeoutError(f"run_isolated timed out after {timeout}s") from e
 
         # If the worker wrote a response, return it. Otherwise surface
@@ -410,10 +403,8 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
                 # to aid diagnosis.
                 stderr = getattr(completed, "stderr", "") or ""
                 stdout = getattr(completed, "stdout", "") or ""
-                details = (stderr.strip() or stdout.strip())
-                raise RuntimeError(
-                    f"Could not deserialize worker response: {exc}. Child output: {details}"
-                ) from exc
+                details = stderr.strip() or stdout.strip()
+                raise RuntimeError(f"Could not deserialize worker response: {exc}. Child output: {details}") from exc
 
         stderr = getattr(completed, "stderr", "") or ""
         stdout = getattr(completed, "stdout", "") or ""

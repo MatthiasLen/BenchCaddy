@@ -375,10 +375,7 @@ def test_suite_trend_without_baseline_summarizes_mixed_configurations(
     assert trend["suite_name"] == "summary-suite"
     assert len(trend["config_summaries"]) == 2
 
-    summaries_by_size = {
-        row["configuration"]["size"]: row
-        for row in trend["config_summaries"]
-    }
+    summaries_by_size = {row["configuration"]["size"]: row for row in trend["config_summaries"]}
     assert summaries_by_size[512]["run_count"] == 2
     assert summaries_by_size[512]["first_run"]["display_id"] == "1.1"
     assert summaries_by_size[512]["latest_run"]["display_id"] == "2.1"
@@ -734,9 +731,6 @@ def test_verbose_sweep_prints_scientific_return_values(
     assert "1.1" in reporter_output
     assert "Return Value" in reporter_output
     assert "[1.000000e+00, 2.500000e+00, 3.000000e+00]" in reporter_output
-
-
-
 
 
 def test_separate_sweeps_get_distinct_sweep_ids(

@@ -80,7 +80,7 @@ def _parse_param_values(raw_values: str) -> list[object]:
         value_text = raw_value.strip()
         if not value_text:
             _raise_sweep_usage_error("--param values must not be empty.")
-        if value_text[0] in {'[', '{'}:
+        if value_text[0] in {"[", "{"}:
             _raise_sweep_usage_error("Complex --param values must use a JSON array like name=[...].")
         if value_text[0] == '"':
             try:
@@ -128,7 +128,8 @@ def sweep_command(
             "--param",
             help="Parameter grid entry as name=value1,value2 or name=[...]",
         ),
-    ] | None = None,
+    ]
+    | None = None,
     samples: Annotated[
         int,
         typer.Option(
@@ -252,7 +253,7 @@ def sweep_command(
     _console().print(
         Text.assemble(
             ("Inspect details:  ", "bold green"),
-            (f"benchcaddy show {run_ids} --database {database_path}", ),
+            (f"benchcaddy show {run_ids} --database {database_path}",),
         )
     )
     _console().print(
@@ -264,6 +265,6 @@ def sweep_command(
     _console().print(
         Text.assemble(
             ("Trend history:    ", "bold magenta"),
-            (f"benchcaddy trend {suite_name} --database {database_path}", ),
+            (f"benchcaddy trend {suite_name} --database {database_path}",),
         )
     )
