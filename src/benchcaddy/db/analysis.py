@@ -8,10 +8,11 @@ from typing import Any
 from ..observability import summarize_observations
 from ..return_values import return_relative_error
 from ..stats import AnalysisOptions, compare_sample_sets
-from ._sqlalchemy.models import BenchmarkRun, BenchmarkSuite
-from ._sqlalchemy.session import db_session
-from ._sqlalchemy.store import (
+from ._sqlite.models import BenchmarkRun, BenchmarkSuite
+from ._sqlite.session import db_session
+from ._sqlite.store import (
     _get_suite,
+    _list_suite_runs_for_configuration_oldest_first,
     _list_suite_runs_latest_first,
     _list_suite_runs_oldest_first,
     _resolve_run,
@@ -161,17 +162,7 @@ def get_suite_trend(
         if suite is None:
             return None
 
-        runs = _list_suite_runs_oldest_first(session, suite.id)
-        if not runs:
-            return {
-                "mode": "timeline",
-                "suite_name": suite.name,
-                "target_name": suite.target_name,
-                "basis_run": None,
-                "basis_source": "empty",
-                "config_filter": None,
-                "runs": [],
-            }
+        runs: list[BenchmarkRun] | None = None
 
         if baseline_run_id is not None:
             basis_run = _resolve_run(session, baseline_run_id)
@@ -187,6 +178,18 @@ def get_suite_trend(
                 }
             basis_source = "explicit"
         else:
+            runs = _list_suite_runs_oldest_first(session, suite.id)
+            if not runs:
+                return {
+                    "mode": "timeline",
+                    "suite_name": suite.name,
+                    "target_name": suite.target_name,
+                    "basis_run": None,
+                    "basis_source": "empty",
+                    "config_filter": None,
+                    "runs": [],
+                }
+
             basis_run = _resolve_suite_baseline_run(session, suite)
             if use_pinned_baseline:
                 if basis_run is None:
@@ -214,9 +217,12 @@ def get_suite_trend(
                     basis_source = "latest"
 
         config_filter = dict(basis_run.configuration)
-        filtered_runs = [run for run in runs if run.configuration == config_filter]
-        if limit is not None:
-            filtered_runs = filtered_runs[-limit:]
+        if runs is None:
+            filtered_runs = _list_suite_runs_for_configuration_oldest_first(session, suite.id, config_filter, limit=limit)
+        else:
+            filtered_runs = [run for run in runs if run.configuration == config_filter]
+            if limit is not None:
+                filtered_runs = filtered_runs[-limit:]
         basis_payload = basis_run.to_detail_payload(chosen_options)
         basis_samples = list(basis_run.samples)
         basis_run_id = basis_run.id

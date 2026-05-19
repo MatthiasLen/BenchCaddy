@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import threading
 from io import StringIO
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any
 
 import pytest
 from rich.console import Console
+from sqlalchemy.exc import StatementError
 
 import benchcaddy
 import benchcaddy.core as core_module
@@ -22,8 +24,8 @@ from benchcaddy.db import (
     record_benchmark_run,
     set_suite_baseline,
 )
-from benchcaddy.db._sqlalchemy.models import Base
-from benchcaddy.db._sqlalchemy.session import db_session, initialize_database
+from benchcaddy.db._sqlite.models import Base, EnvironmentInfo
+from benchcaddy.db._sqlite.session import DatabaseSchemaError, db_session, initialize_database
 from benchcaddy.isolation import IsolatedRunResult
 from benchcaddy.isolation import observe as isolated_observe
 from benchcaddy.observability import summarize_observations
@@ -307,6 +309,10 @@ def test_suite_baseline_persistence_and_trend_filtering(
     assert trend["config_filter"] == {"size": 512, "variant": "baseline"}
     assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1", "3.1"]
     assert trend["runs"][-1]["vs_baseline"]["classification"] == "regressing"
+
+    limited_trend = get_suite_trend("trend-suite", database_path, baseline_run_id=1, limit=2)
+    assert limited_trend is not None
+    assert [run["display_id"] for run in limited_trend["runs"]] == ["2.1", "3.1"]
 
 
 def test_suite_trend_without_baseline_summarizes_mixed_configurations(
@@ -1036,9 +1042,11 @@ def test_sweep_warmup_calls_are_not_persisted_as_samples(
 def test_database_initialization_runs_once(tmp_path: Path, monkeypatch) -> None:
     database_path = tmp_path / "benchcaddy.db"
     create_all_calls: list[object] = []
+    original_create_all = Base.metadata.create_all
 
     def record_create_all(engine) -> None:
         create_all_calls.append(engine)
+        original_create_all(engine)
 
     monkeypatch.setattr(Base.metadata, "create_all", record_create_all)
 
@@ -1441,3 +1449,62 @@ def test_sweep_keeps_first_return_value_when_later_samples_differ(
     assert results[0].target_return_value == pytest.approx(11.0)
     assert run is not None
     assert run["target_return_value"] == pytest.approx(11.0)
+
+
+def test_record_benchmark_run_rolls_back_partial_state_on_insert_failure(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    with pytest.raises(StatementError, match="not JSON serializable"):
+        record_benchmark_run(
+            suite_name="rollback-suite",
+            target_name="benchmark_target",
+            configuration={"broken": object()},
+            samples=[0.10, 0.10],
+            observations=[],
+            median_seconds=0.10,
+            min_seconds=0.10,
+            max_seconds=0.10,
+            std_seconds=0.0,
+            target_return_value=None,
+            environment=environment_payload,
+            database_path=database_path,
+        )
+
+    details = get_suite_details("rollback-suite", database_path)
+    assert details is not None
+    assert details["runs"] == []
+    assert list_suite_summaries(database_path) == []
+    with db_session(database_path) as session:
+        assert session.query(EnvironmentInfo).count() == 0
+
+
+def test_initialize_database_rejects_unsupported_old_schema(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy-schema.db"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(
+            """
+            CREATE TABLE benchmark_runs (
+                id INTEGER PRIMARY KEY,
+                suite_id INTEGER NOT NULL,
+                environment_id INTEGER NOT NULL,
+                configuration JSON NOT NULL,
+                samples JSON NOT NULL,
+                observations JSON NOT NULL,
+                median_seconds FLOAT NOT NULL,
+                min_seconds FLOAT,
+                max_seconds FLOAT,
+                std_seconds FLOAT,
+                created_at DATETIME
+            )
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(DatabaseSchemaError, match="Unsupported BenchCaddy database schema"):
+        initialize_database(database_path)

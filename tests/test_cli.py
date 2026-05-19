@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 import benchcaddy.cli as cli_module
 import benchcaddy.cli.show as show_module
 import benchcaddy.core as core_module
-import benchcaddy.db._sqlalchemy.models as models_module
+import benchcaddy.db._sqlite.models as models_module
 from benchcaddy.cli import _suite_row_style, _trend_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 from benchcaddy.isolation import IsolatedRunResult

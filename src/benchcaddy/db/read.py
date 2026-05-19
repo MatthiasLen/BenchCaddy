@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from ..stats import AnalysisOptions
-from ._sqlalchemy.session import db_session
-from ._sqlalchemy.store import (
+from ._sqlite.session import db_session
+from ._sqlite.store import (
     _collect_observation_labels,
     _count_all_runs,
     _count_suite_runs,
@@ -33,8 +33,8 @@ def list_suite_summaries(database_path: str | Path | None = None) -> list[dict[s
                     "suite_name": suite.name,
                     "target_name": suite.target_name,
                     "run_count": len(runs),
-                    "last_run_at": max((run.created_at for run in runs), default=None),
-                    "observation_labels": _collect_observation_labels([run.observations for run in runs]),
+                    "last_run_at": runs[0].created_at,
+                    "observation_labels": _collect_observation_labels(run.observations for run in runs),
                 }
             )
 
@@ -59,7 +59,6 @@ def get_suite_details(
         baseline_run = _resolve_suite_baseline_run(session, suite)
 
     run_payloads = [run.to_payload(analysis_options, include_analysis=include_analysis) for run in runs]
-    run_payloads.sort(key=lambda run: (-(run["sweep_id"]), -(run["run_index"]), -run["record_id"]))
 
     return {
         "suite_name": suite.name,
