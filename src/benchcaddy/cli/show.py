@@ -7,7 +7,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from ..db import get_all_run_count, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details
+from ..db import get_all_run_count, get_all_run_details, get_database_path, get_run_details, get_selected_run_details, get_suite_details, get_suite_run_count
 from ..observability import summarize_observations
 from ..presentation import (
     dump_json,
@@ -224,8 +224,17 @@ def _limit_runs(runs: list[dict[str, object]], numitems: int | None) -> tuple[li
     return runs[:numitems], True
 
 
-def _print_numitems_notice(*, shown_count: int, total_count: int, identifiers: list[str] | None) -> None:
-    command = f"benchcaddy show{' ' if identifiers else ''}{' '.join(identifiers or [])} -n {total_count}"
+def _print_numitems_notice(
+    *,
+    shown_count: int,
+    total_count: int,
+    identifiers: list[str] | None,
+    database_path: str | None = None,
+) -> None:
+    command_parts = ["benchcaddy", "show", *(identifiers or []), "-n", str(total_count)]
+    if database_path is not None:
+        command_parts.extend(["--database", database_path])
+    command = " ".join(command_parts)
     _console().print(
         Text.assemble(
             ("Output capped to the latest entries by record ID. ", "bold bright_cyan"),
@@ -264,7 +273,12 @@ def show_command(
         if numitems is not None and len(runs) == numitems:
             total_count = get_all_run_count(database_path)
             if total_count > numitems:
-                _print_numitems_notice(shown_count=numitems, total_count=total_count, identifiers=None)
+                _print_numitems_notice(
+                    shown_count=numitems,
+                    total_count=total_count,
+                    identifiers=None,
+                    database_path=None if database is None else str(database_path),
+                )
         return
 
     if len(identifiers) == 1:
@@ -286,17 +300,22 @@ def show_command(
             identifier,
             database_path,
             include_analysis=True,
+            limit=numitems,
         )
         if details is None:
             _console().print(f"Suite '{identifier}' was not found in {database_path}.")
             raise typer.Exit(code=1)
-
-        total_count = len(details["runs"])
-        details["runs"], was_limited = _limit_runs(details["runs"], numitems)
         _show_suite(details)
 
-        if was_limited:
-            _print_numitems_notice(shown_count=len(details["runs"]), total_count=total_count, identifiers=identifiers)
+        if numitems is not None and len(details["runs"]) == numitems:
+            total_count = get_suite_run_count(identifier, database_path)
+            if total_count is not None and total_count > numitems:
+                _print_numitems_notice(
+                    shown_count=len(details["runs"]),
+                    total_count=total_count,
+                    identifiers=identifiers,
+                    database_path=None if database is None else str(database_path),
+                )
         return
 
     run_ids = [_require_run_id(identifier) for identifier in identifiers]
@@ -310,4 +329,9 @@ def show_command(
     _show_selected_runs(visible_runs)
 
     if was_limited:
-        _print_numitems_notice(shown_count=len(visible_runs), total_count=len(runs), identifiers=identifiers)
+        _print_numitems_notice(
+            shown_count=len(visible_runs),
+            total_count=len(runs),
+            identifiers=identifiers,
+            database_path=None if database is None else str(database_path),
+        )

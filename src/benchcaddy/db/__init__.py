@@ -12,6 +12,7 @@ from .read import (
     get_run_details,
     get_selected_run_details,
     get_suite_details,
+    get_suite_run_count,
     list_suite_summaries,
 )
 from .write import benchmark_run_payload, create_sweep_execution, record_benchmark_run, set_suite_baseline
@@ -27,6 +28,7 @@ __all__ = [
     "get_run_details",
     "get_selected_run_details",
     "get_suite_details",
+    "get_suite_run_count",
     "get_suite_trend",
     "list_suite_summaries",
     "record_benchmark_run",

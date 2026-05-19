@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -55,17 +55,22 @@ def _list_all_runs_latest_first(session: Session, limit: int | None = None) -> l
 
 
 def _count_all_runs(session: Session) -> int:
-    return int(session.scalar(select(func.count(BenchmarkRun.id))) or 0)
+    return int(session.query(BenchmarkRun).count())
 
 
-def _list_suite_runs_latest_first(session: Session, suite_id: int) -> list[BenchmarkRun]:
-    return (
-        session.execute(
-            select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
-        )
-        .scalars()
-        .all()
+def _list_suite_runs_latest_first(session: Session, suite_id: int, limit: int | None = None) -> list[BenchmarkRun]:
+    statement: Select[tuple[BenchmarkRun]] = select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(
+        BenchmarkRun.sweep_execution_id.desc(),
+        BenchmarkRun.run_index.desc(),
+        BenchmarkRun.id.desc(),
     )
+    if limit is not None:
+        statement = statement.limit(limit)
+    return session.execute(statement).scalars().all()
+
+
+def _count_suite_runs(session: Session, suite_id: int) -> int:
+    return int(session.query(BenchmarkRun).filter(BenchmarkRun.suite_id == suite_id).count())
 
 
 def _list_suite_runs_created_desc(session: Session, suite_id: int) -> list[BenchmarkRun]:
