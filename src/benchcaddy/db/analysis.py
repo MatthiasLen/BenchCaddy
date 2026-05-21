@@ -34,6 +34,7 @@ def compare_suite_runs(
         if suite is None:
             return None
 
+        # Resolve every suite-local reference while the session is open, then build response payloads outside it.
         reference_context = _resolve_suite_reference(
             session,
             suite,
@@ -111,6 +112,7 @@ def compare_runs(
     if baseline["median_seconds"] > 0:
         percent_change = ((candidate["median_seconds"] - baseline["median_seconds"]) / baseline["median_seconds"]) * 100.0
 
+    # Observation rows are aligned by label so missing probes on either side stay visible in the comparison.
     baseline_observations = summarize_observations(baseline["observations"])
     candidate_observations = summarize_observations(candidate["observations"])
     labels = sorted(set(baseline_observations) | set(candidate_observations))
@@ -196,6 +198,7 @@ def get_suite_trend(
                     return {"error": "baseline_not_found", "suite_name": suite.name}
                 basis_source = "pinned"
             else:
+                # Mixed configurations without an explicit basis are summarized separately instead of merged into one timeline.
                 grouped_runs: dict[str, list[BenchmarkRun]] = {}
                 for run in runs:
                     grouped_runs.setdefault(_configuration_group_key(run.configuration), []).append(run)
@@ -218,6 +221,7 @@ def get_suite_trend(
 
         config_filter = dict(basis_run.configuration)
         if runs is None:
+            # An explicit or pinned basis may target one configuration, so refetch only that history slice.
             filtered_runs = _list_suite_runs_for_configuration_oldest_first(session, suite.id, config_filter, limit=limit)
         else:
             filtered_runs = [run for run in runs if run.configuration == config_filter]
@@ -238,6 +242,7 @@ def get_suite_trend(
         drift_analysis = None
         drift_status_label = "baseline" if payload["id"] == basis_run_id else "stable"
         if trailing_samples:
+            # Compare against a trailing window to flag recent drift, not just full-history deltas.
             drift_analysis = compare_sample_sets(trailing_samples, run_samples, chosen_options).to_payload()
             drift_status_label = str(drift_analysis["classification"])
 
@@ -371,6 +376,7 @@ def _apply_strict_comparison_filter(
             "missing_strict_keys": missing_keys,
             "reference_run_display_id": basis_run.display_id,
         }
+    # Strict filtering keeps only runs that match the selected configuration keys from the reference run.
     strict_config = {key: basis_run.configuration[key] for key in normalized_keys}
     filtered_runs = [run for run in runs if all(run.configuration.get(key) == value for key, value in strict_config.items())]
     return filtered_runs, normalized_keys, strict_config
@@ -422,6 +428,7 @@ def _suite_comparison_payload(
 
 
 def _configuration_group_key(configuration: dict[str, Any]) -> str:
+    # Sort keys so logically identical configs share one grouping key regardless of dict insertion order.
     return json.dumps(configuration, sort_keys=True, separators=(",", ":"))
 
 
@@ -438,6 +445,7 @@ def _configuration_trend_summary_payload(
     prior_runs = visible_runs[:-1]
     recent_vs_window = None
     if prior_runs:
+        # The recent window highlights drift against nearby history instead of only first-vs-latest changes.
         recent_window = prior_runs[-analysis_options.drift_window_size :]
         recent_samples = [sample for run in recent_window for sample in run.samples]
         if recent_samples:

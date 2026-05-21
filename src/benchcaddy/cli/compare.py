@@ -195,11 +195,7 @@ def _evaluate_compare_gate(
     else:
         basis_run = comparison.get("basis_run")
         basis_id = None if basis_run is None else basis_run.get("id")
-        run_analyses = [
-            (run, run.get("comparison_analysis") or {})
-            for run in comparison["runs"]
-            if run["id"] != basis_id
-        ]
+        run_analyses = [(run, run.get("comparison_analysis") or {}) for run in comparison["runs"] if run["id"] != basis_id]
 
     failing_runs: list[dict[str, object]] = []
     for run, comparison_analysis in run_analyses:
@@ -468,9 +464,7 @@ def _print_run_comparison(
                     "Median Percent Change",
                     "",
                     Text(
-                        "n/a"
-                        if comparison["percent_change"] is None
-                        else f"{comparison['percent_change']:+.2f}%",
+                        "n/a" if comparison["percent_change"] is None else f"{comparison['percent_change']:+.2f}%",
                         style=(
                             None
                             if comparison["percent_change"] is None

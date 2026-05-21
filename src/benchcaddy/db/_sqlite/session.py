@@ -30,6 +30,7 @@ def get_engine(database_path: str | Path | None = None) -> Engine:
     path = get_database_path(database_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _ENGINE_LOCK:
+        # Reuse one engine per resolved database path so SQLite connection state stays consistent.
         engine = _ENGINES.get(path)
         if engine is None:
             engine = create_engine(f"sqlite:///{path}", future=True)
@@ -42,7 +43,11 @@ def initialize_database(database_path: str | Path | None = None) -> Engine:
     engine = get_engine(path)
     with _get_initialization_lock(path):
         if path not in _INITIALIZED_DATABASES:
-            Base.metadata.create_all(engine)
+            # Existing databases are validated before any create_all call so stale files are rejected, not half-upgraded.
+            if inspect(engine).get_table_names():
+                _validate_schema(engine, path)
+            else:
+                Base.metadata.create_all(engine)
             _validate_schema(engine, path)
             _INITIALIZED_DATABASES.add(path)
     return engine
@@ -51,6 +56,7 @@ def initialize_database(database_path: str | Path | None = None) -> Engine:
 @contextmanager
 def db_session(database_path: str | Path | None = None):
     engine = initialize_database(database_path)
+    # Sessions are provided without an implicit transaction so callers control begin/commit boundaries explicitly.
     with Session(engine, expire_on_commit=False) as session:
         yield session
 
@@ -68,6 +74,7 @@ def _validate_schema(engine: Engine, path: Path) -> None:
     inspector = inspect(engine)
     missing_tables: list[str] = []
     missing_columns: dict[str, list[str]] = {}
+    missing_unique_indexes: dict[str, list[str]] = {}
 
     for table in Base.metadata.sorted_tables:
         if not inspector.has_table(table.name):
@@ -79,7 +86,13 @@ def _validate_schema(engine: Engine, path: Path) -> None:
         if table_missing_columns:
             missing_columns[table.name] = table_missing_columns
 
-    if not missing_tables and not missing_columns:
+    benchmark_run_indexes = inspector.get_indexes("benchmark_runs") if inspector.has_table("benchmark_runs") else []
+    # Tuple run ids are part of current read/write semantics, so missing uniqueness is a hard schema mismatch.
+    has_unique_sweep_run_index = any(index.get("unique") and index.get("column_names") == ["sweep_execution_id", "run_index"] for index in benchmark_run_indexes)
+    if not has_unique_sweep_run_index:
+        missing_unique_indexes["benchmark_runs"] = ["sweep_execution_id", "run_index"]
+
+    if not missing_tables and not missing_columns and not missing_unique_indexes:
         return
 
     message_parts: list[str] = []
@@ -88,9 +101,9 @@ def _validate_schema(engine: Engine, path: Path) -> None:
     if missing_columns:
         column_parts = [f"{table}({', '.join(columns)})" for table, columns in sorted(missing_columns.items())]
         message_parts.append(f"missing columns: {', '.join(column_parts)}")
+    if missing_unique_indexes:
+        index_parts = [f"{table}({', '.join(columns)})" for table, columns in sorted(missing_unique_indexes.items())]
+        message_parts.append(f"missing unique indexes: {', '.join(index_parts)}")
 
     details = "; ".join(message_parts)
-    raise DatabaseSchemaError(
-        f"Unsupported BenchCaddy database schema at {path}. {details}. "
-        "Recreate the SQLite database with the current BenchCaddy version."
-    )
+    raise DatabaseSchemaError(f"Unsupported BenchCaddy database schema at {path}. {details}. Recreate the SQLite database with the current BenchCaddy version.")

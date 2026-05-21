@@ -86,10 +86,6 @@ Those statistics are intended as decision support rather than proof, and they
 should be interpreted alongside sample count, variance, outliers, and overall
 benchmark-environment stability.
 
-BenchCaddy currently supports one SQLite schema layout at a time. Older
-BenchCaddy database files are not upgraded in place; recreate the SQLite file
-with the current version when the schema changes.
-
 The full runnable example lives in the repository and source distribution at
 [`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py).
 

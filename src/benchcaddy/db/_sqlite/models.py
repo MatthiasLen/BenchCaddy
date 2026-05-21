@@ -106,7 +106,8 @@ class EnvironmentInfo(Base):
 class BenchmarkRun(Base):
     __tablename__ = "benchmark_runs"
     __table_args__ = (
-        Index("ix_benchmark_runs_sweep_run", "sweep_execution_id", "run_index"),
+        # Tuple run ids back the public sweep.run identifier format, so they must be unique when present.
+        Index("ix_benchmark_runs_sweep_run", "sweep_execution_id", "run_index", unique=True),
         Index("ix_benchmark_runs_suite_history", "suite_id", "sweep_execution_id", "run_index", "id"),
     )
 
@@ -131,6 +132,7 @@ class BenchmarkRun(Base):
 
     @property
     def display_id(self) -> str:
+        # Standalone historical rows fall back to their record id so every run still has a stable display id.
         sweep_id = self.sweep_execution_id or self.id
         run_index = self.run_index or 1
         return f"{sweep_id}.{run_index}"
@@ -149,6 +151,7 @@ class BenchmarkRun(Base):
         *,
         include_analysis: bool = False,
     ) -> dict[str, Any]:
+        # Reuse one computed analysis payload for both the nested block and the convenience summary fields.
         analysis = self.analysis_payload(analysis_options) if include_analysis or analysis_options is not None else None
         payload = {
             "id": self.id,
@@ -188,6 +191,7 @@ class BenchmarkRun(Base):
     ) -> dict[str, Any]:
         return {
             **self.to_payload(analysis_options, include_analysis=include_analysis),
+            # Detail views inline suite and environment data so callers do not need follow-up lookups.
             "suite_name": self.suite.name,
             "target_name": self.suite.target_name,
             "environment": self.environment.to_payload(),
@@ -200,6 +204,7 @@ class BenchmarkRun(Base):
         reference_samples: Sequence[float],
         analysis_options: AnalysisOptions | None = None,
     ) -> dict[str, Any]:
+        # Comparison rows bundle per-run analysis with deltas relative to the chosen basis run.
         analysis = analyze_samples(self.samples, analysis_options).to_payload()
         comparison_analysis = compare_sample_sets(reference_samples, self.samples, analysis_options).to_payload()
         return {

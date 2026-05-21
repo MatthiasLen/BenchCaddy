@@ -38,6 +38,7 @@ def create_sweep_execution(
             suite = _get_or_create_suite(session, suite_name, target_name)
             sweep_execution = BenchmarkSweepExecution(suite_id=suite.id)
             session.add(sweep_execution)
+            # Flush assigns the sweep id before the transaction commits so callers can reuse it immediately.
             session.flush()
             sweep_execution_id = sweep_execution.id
         return SweepExecutionRecord(id=sweep_execution_id)
@@ -86,9 +87,11 @@ def record_benchmark_run(
     with db_session(database_path) as session:
         with session.begin():
             suite = _get_or_create_suite(session, suite_name, target_name)
+            # Persist a normalized return-value shape so later comparisons do not need per-call coercion.
             stored_return_value = None if target_return_value is None else normalize_return_value(target_return_value)
 
             if sweep_execution_id is None:
+                # Standalone writes create their own sweep so display ids still use the sweep.run format.
                 sweep_execution = BenchmarkSweepExecution(suite_id=suite.id)
                 session.add(sweep_execution)
                 session.flush()
@@ -96,6 +99,7 @@ def record_benchmark_run(
             if run_index is None:
                 run_index = 1
 
+            # Environment metadata is normalized into its own row and linked from each benchmark run.
             environment_info = EnvironmentInfo.from_payload(environment)
             session.add(environment_info)
             session.flush()
@@ -117,6 +121,7 @@ def record_benchmark_run(
                 ),
             )
             session.add(benchmark_run)
+            # Flush exposes generated ids for the API payload without committing early.
             session.flush()
             benchmark_run_id = benchmark_run.id
             benchmark_run_display_id = benchmark_run.display_id
@@ -137,6 +142,7 @@ def set_suite_baseline(
             run = _resolve_run(session, run_id)
             if run is None:
                 return {"error": "reference_run_not_found", "suite_name": suite.name}
+            # Baselines are suite-local; pointing at another suite would break comparisons and trend views.
             if run.suite_id != suite.id:
                 return {
                     "error": "reference_run_wrong_suite",
@@ -146,6 +152,7 @@ def set_suite_baseline(
                     "reference_run_suite_name": run.suite.name,
                 }
 
+            # Upsert the one baseline row owned by this suite.
             baseline = _get_suite_baseline_record(session, suite.id)
             if baseline is None:
                 baseline = BenchmarkSuiteBaseline(suite_id=suite.id, run_id=run.id)
