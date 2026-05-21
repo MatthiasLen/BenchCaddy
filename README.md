@@ -8,7 +8,9 @@ It runs parameter sweeps in an isolated worker process, stores raw samples and e
 
 It is for the gap between full profilers and a directory full of `timings_final_v4_really.csv`.
 
+
 ![BenchCaddy trend summary overview](./bc_trends.png)
+
 
 ## Why BenchCaddy
 
