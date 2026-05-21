@@ -1047,6 +1047,57 @@ def test_show_suite_numitems_limits_to_latest_runs_and_prints_notice(
     assert _compact_output(f"benchcaddy show limited-suite -n 3 --database {database_path}") in _compact_output(show_result.stdout)
 
 
+def test_show_suite_can_filter_by_config(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="filtered-show-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="filtered-show-suite",
+        configuration={"size": 1024, "variant": "candidate-a"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="filtered-show-suite",
+        configuration={"size": 1024, "variant": "candidate-b"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["show", "filtered-show-suite", "-c", "size=1024", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Suite: filtered-show-suite (config: size=1024)" in result.stdout
+    assert "3.1" in result.stdout
+    assert "2.1" in result.stdout
+    assert "1.1" not in result.stdout
+
+
+def test_show_config_requires_suite_name_and_entries(tmp_path: Path) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["show", "-c", "size=1024", "--database", str(database_path)])
+
+    assert result.exit_code == 2
+    assert "--config/-c requires a suite name followed by one or more key=value entries." in result.stdout
+
+
 def test_show_without_arguments_numitems_limits_output_and_prints_notice(
     tmp_path: Path,
     monkeypatch,
@@ -1552,6 +1603,127 @@ def test_cli_strict_suite_compare_filters_reference_configuration(
     assert "3.1" not in result.stdout
 
 
+def test_cli_compare_can_filter_suite_by_config(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 34, "variant": "candidate"},
+        median_seconds=0.090,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="nonlinear-transform",
+        configuration={"size": 33, "variant": "candidate", "mode": "extra"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "nonlinear-transform", "-c", "size=33", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Comparison: nonlinear-transform (config: size=33)" in result.stdout
+    assert "4.1" in result.stdout
+    assert "2.1" in result.stdout
+    assert "1.1" in result.stdout
+    assert "3.1" not in result.stdout
+
+
+def test_cli_compare_with_pinned_baseline_and_config_filter_warns_when_baseline_is_outside_filter(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-filter-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-filter-suite",
+        configuration={"size": 1024, "variant": "candidate-a"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-filter-suite",
+        configuration={"size": 1024, "variant": "candidate-b"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+
+    pin_result = runner.invoke(
+        app,
+        ["compare", "baseline-filter-suite", "1.1", "--pin-baseline", "--database", str(database_path)],
+    )
+
+    assert pin_result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        ["compare", "baseline-filter-suite", "--use-baseline", "-c", "size=1024", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Filter Warning" in result.stdout
+    assert "Pinned baseline 1.1 does not match the requested config filter." in result.stdout
+    assert "3.1" in result.stdout
+    assert "2.1" in result.stdout
+
+
+def test_cli_compare_rejects_config_filter_with_strict(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="config-strict-suite",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "config-strict-suite", "-c", "size=33", "--strict", "size", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 2
+    assert "--strict cannot be combined with --config/-c." in result.stdout
+
+
 @pytest.mark.parametrize(
     "extra_args",
     [
@@ -1975,6 +2147,79 @@ def test_cli_trend_uses_pinned_baseline_for_mixed_suite_when_requested(
     assert "2.1" in result.stdout
     assert "3.1" not in result.stdout
     assert "pinned" in result.stdout
+
+
+def test_cli_trend_can_filter_by_config_and_use_best_filtered_run(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="filtered-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="filtered-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112],
+        environment_payload=environment_payload,
+    )
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="filtered-trend-suite",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.079, 0.080, 0.081, 0.080, 0.082],
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["trend", "filtered-trend-suite", "-c", "size=512", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Trend Basis: filtered-trend-suite" in result.stdout
+    assert "best" in result.stdout
+    assert "size: 512" in result.stdout
+    assert "1.1" in result.stdout
+    assert "2.1" in result.stdout
+    assert "3.1" not in result.stdout
+
+
+def test_cli_trend_rejects_config_with_pinned_or_explicit_baseline(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_sampled_run(
+        database_path=database_path,
+        suite_name="invalid-filter-trend-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101],
+        environment_payload=environment_payload,
+    )
+
+    explicit_result = runner.invoke(
+        app,
+        ["trend", "invalid-filter-trend-suite", "1.1", "-c", "size=512", "--database", str(database_path)],
+    )
+    pinned_result = runner.invoke(
+        app,
+        ["trend", "invalid-filter-trend-suite", "-c", "size=512", "--pinned", "--database", str(database_path)],
+    )
+
+    assert explicit_result.exit_code == 2
+    assert "--config/-c cannot be combined with an explicit baseline run ID." in explicit_result.stdout
+    assert pinned_result.exit_code == 2
+    assert "--config/-c cannot be combined with --pinned." in pinned_result.stdout
 
 
 def test_cli_trend_ignores_pinned_baseline_without_flag(

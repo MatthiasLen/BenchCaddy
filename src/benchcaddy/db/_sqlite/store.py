@@ -125,6 +125,12 @@ def _list_suite_runs_for_configuration_oldest_first(
     return list(reversed(session.execute(statement).scalars().all()))
 
 
+def _configuration_matches_filter(configuration: dict[str, Any], config_filter: dict[str, Any] | None) -> bool:
+    if not config_filter:
+        return True
+    return all(configuration.get(key) == value for key, value in config_filter.items())
+
+
 def _collect_observation_labels(observation_groups: list[list[dict[str, Any]]] | Any) -> list[str]:
     # Summary tables show the union of probe labels collected across every stored sample.
     labels: set[str] = set()
