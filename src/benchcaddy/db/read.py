@@ -52,6 +52,8 @@ def get_suite_details(
     limit: int | None = None,
     include_analysis: bool = False,
     config_filter: dict[str, Any] | None = None,
+    include_samples: bool = True,
+    include_observations: bool = True,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         suite = _get_suite(session, suite_name)
@@ -71,7 +73,15 @@ def get_suite_details(
         if baseline_run is not None and not _configuration_matches_filter(baseline_run.configuration, config_filter):
             baseline_run = None
 
-    run_payloads = [run.to_payload(analysis_options, include_analysis=include_analysis) for run in runs]
+    run_payloads = [
+        run.to_payload(
+            analysis_options,
+            include_analysis=include_analysis,
+            include_samples=include_samples,
+            include_observations=include_observations,
+        )
+        for run in runs
+    ]
 
     return {
         "suite_name": suite.name,
@@ -79,7 +89,16 @@ def get_suite_details(
         "config_filter": None if config_filter is None else dict(config_filter),
         "runs": run_payloads,
         "environment": None if environment is None else environment.to_payload(),
-        "baseline_run": None if baseline_run is None else baseline_run.to_payload(analysis_options, include_analysis=include_analysis),
+        "baseline_run": (
+            None
+            if baseline_run is None
+            else baseline_run.to_payload(
+                analysis_options,
+                include_analysis=include_analysis,
+                include_samples=include_samples,
+                include_observations=include_observations,
+            )
+        ),
     }
 
 
@@ -89,12 +108,24 @@ def get_run_details(
     analysis_options: AnalysisOptions | None = None,
     *,
     include_analysis: bool = False,
+    include_samples: bool = True,
+    include_observations: bool = True,
+    include_environment: bool = True,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         run = _resolve_run(session, run_id)
         if run is None:
             return None
-        return run.to_detail_payload(analysis_options, include_analysis=include_analysis)
+        payload = run.to_detail_payload(
+            analysis_options,
+            include_analysis=include_analysis,
+            include_samples=include_samples,
+            include_observations=include_observations,
+            include_environment=include_environment,
+        )
+        if not include_observations:
+            payload["observation_labels"] = _collect_observation_labels([run.observations])
+        return payload
 
 
 def get_selected_run_details(
@@ -164,6 +195,9 @@ def get_suite_baseline_history(
     *,
     limit: int | None = None,
     include_analysis: bool = False,
+    include_samples: bool = True,
+    include_observations: bool = True,
+    include_environment: bool = True,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         suite = _get_suite(session, suite_name)
@@ -180,7 +214,13 @@ def get_suite_baseline_history(
                     "created_at": event.created_at,
                     "note": event.note,
                     "is_current": index == 0,
-                    "run": event.run.to_detail_payload(analysis_options, include_analysis=include_analysis),
+                    "run": event.run.to_detail_payload(
+                        analysis_options,
+                        include_analysis=include_analysis,
+                        include_samples=include_samples,
+                        include_observations=include_observations,
+                        include_environment=include_environment,
+                    ),
                 }
             )
 

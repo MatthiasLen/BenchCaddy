@@ -58,6 +58,8 @@ def get_suite(
         limit=None,
         include_analysis=include_analysis,
         config_filter=config_filter,
+        include_samples=normalized_response_detail == "full",
+        include_observations=normalized_response_detail == "full",
     )
     if suite_details is None:
         return _response(

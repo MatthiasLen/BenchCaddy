@@ -72,6 +72,9 @@ def compare_runs(
             regression_threshold_percent=regression_threshold_percent,
             drift_window_size=drift_window_size,
         ),
+        include_samples=normalized_response_detail == "full",
+        include_observations=normalized_response_detail == "full",
+        include_environment=normalized_response_detail == "full",
     )
     if comparison is None:
         return _response(

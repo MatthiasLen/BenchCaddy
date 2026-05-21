@@ -60,6 +60,17 @@ class ResponseSummaryBuilder:
             "warnings": analysis.get("warnings") or [],
         }
 
+    def _compact_analysis_summary(self, analysis: dict[str, Any] | None) -> dict[str, Any] | None:
+        if analysis is None:
+            return None
+        return {
+            "classification": analysis.get("classification"),
+            "regression_detected": analysis.get("regression_detected"),
+            "percent_change": analysis.get("percent_change"),
+            "delta_seconds": analysis.get("delta_seconds"),
+            "warnings": analysis.get("warnings") or [],
+        }
+
     def _environment_summary(self, environment: dict[str, Any] | None) -> dict[str, Any] | None:
         if environment is None:
             return None
@@ -100,33 +111,42 @@ class ResponseSummaryBuilder:
             "is_noisy": run.get("is_noisy"),
         }
 
+    def _compact_run_summary(
+        self,
+        run: dict[str, Any] | None,
+        *,
+        include_configuration: bool = True,
+    ) -> dict[str, Any] | None:
+        if run is None:
+            return None
+        analysis = run.get("analysis") or {}
+        payload = {
+            "display_id": run.get("display_id"),
+            "created_at": run.get("created_at"),
+            "median_seconds": run.get("median_seconds"),
+            "sample_count": analysis.get("sample_count") or run.get("sample_count") or len(run.get("samples") or []),
+            "is_noisy": run.get("is_noisy"),
+        }
+        if include_configuration:
+            payload["configuration"] = run.get("configuration")
+        return payload
+
     def _suite_comparison_row_summary(self, run: dict[str, Any]) -> dict[str, Any]:
         comparison_analysis = run.get("comparison_analysis") or {}
         return {
-            "display_id": run.get("display_id"),
-            "configuration": run.get("configuration"),
-            "created_at": run.get("created_at"),
-            "median_seconds": run.get("median_seconds"),
+            **(self._compact_run_summary(run) or {}),
             "delta_seconds": run.get("delta_seconds"),
-            "slowdown_factor": run.get("slowdown_factor"),
-            "sample_count": run.get("sample_count"),
-            "target_return_relative_error": run.get("target_return_relative_error"),
             "status": run.get("status"),
-            "is_noisy": run.get("is_noisy"),
-            "comparison": self._analysis_summary(comparison_analysis),
+            "comparison": self._compact_analysis_summary(comparison_analysis),
         }
 
     def _trend_run_summary(self, run: dict[str, Any]) -> dict[str, Any]:
         return {
-            "display_id": run.get("display_id"),
-            "configuration": run.get("configuration"),
-            "created_at": run.get("created_at"),
-            "median_seconds": run.get("median_seconds"),
-            "sample_count": len(run.get("samples") or []),
+            **(self._compact_run_summary(run) or {}),
             "is_basis": run.get("is_basis"),
             "drift_status": run.get("drift_status"),
-            "vs_baseline": self._analysis_summary(run.get("vs_baseline")),
-            "drift_analysis": self._analysis_summary(run.get("drift_analysis")),
+            "vs_baseline": self._compact_analysis_summary(run.get("vs_baseline")),
+            "drift_analysis": self._compact_analysis_summary(run.get("drift_analysis")),
         }
 
     def _direct_comparison_summary(self, comparison: dict[str, Any]) -> dict[str, Any]:
@@ -173,7 +193,7 @@ class ResponseSummaryBuilder:
             "database_path": result.get("database_path"),
             "run": self._run_summary(run),
             "environment": self._environment_summary(run.get("environment")),
-            "observation_labels": self._observation_labels(run.get("observations")),
+            "observation_labels": run.get("observation_labels") or self._observation_labels(run.get("observations")),
         }
 
     def _suite_inventory_summary(self, result: dict[str, Any]) -> dict[str, Any]:
@@ -221,12 +241,12 @@ class ResponseSummaryBuilder:
                         "configuration": summary.get("configuration"),
                         "run_count": summary.get("run_count"),
                         "total_run_count": summary.get("total_run_count"),
-                        "first_run": self._run_summary(summary.get("first_run")),
-                        "latest_run": self._run_summary(summary.get("latest_run")),
-                        "best_run": self._run_summary(summary.get("best_run")),
-                        "latest_vs_first": self._analysis_summary(summary.get("latest_vs_first")),
-                        "recent_vs_window": self._analysis_summary(summary.get("recent_vs_window")),
-                        "latest_vs_best": self._analysis_summary(summary.get("latest_vs_best")),
+                        "first_run": self._compact_run_summary(summary.get("first_run"), include_configuration=False),
+                        "latest_run": self._compact_run_summary(summary.get("latest_run"), include_configuration=False),
+                        "best_run": self._compact_run_summary(summary.get("best_run"), include_configuration=False),
+                        "latest_vs_first": self._compact_analysis_summary(summary.get("latest_vs_first")),
+                        "recent_vs_window": self._compact_analysis_summary(summary.get("recent_vs_window")),
+                        "latest_vs_best": self._compact_analysis_summary(summary.get("latest_vs_best")),
                     }
                     for summary in config_summaries
                 ],
@@ -238,9 +258,8 @@ class ResponseSummaryBuilder:
             "suite_name": trend.get("suite_name"),
             "target_name": trend.get("target_name"),
             "basis_source": trend.get("basis_source"),
-            "basis_run": self._run_summary(trend.get("basis_run")),
+            "basis_run": self._compact_run_summary(trend.get("basis_run")),
             "config_filter": trend.get("config_filter"),
-            "available_suite_configurations": trend.get("available_suite_configurations") or [],
             "total_run_count": trend.get("total_run_count", len(runs)),
             "truncated": trend.get("truncated", False),
             "limit": trend.get("limit"),

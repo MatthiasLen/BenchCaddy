@@ -64,6 +64,9 @@ def get_run(
             drift_window_size=drift_window_size,
         ),
         include_analysis=include_analysis,
+        include_samples=normalized_response_detail == "full",
+        include_observations=normalized_response_detail == "full",
+        include_environment=normalized_response_detail == "full",
     )
     if run is None:
         return _response(

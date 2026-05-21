@@ -54,6 +54,9 @@ def get_baseline_history(
         ),
         limit=None,
         include_analysis=include_analysis,
+        include_samples=normalized_response_detail == "full",
+        include_observations=normalized_response_detail == "full",
+        include_environment=normalized_response_detail == "full",
     )
     if history is None:
         return _response(

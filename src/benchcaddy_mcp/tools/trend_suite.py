@@ -71,6 +71,9 @@ def trend_suite(
         use_pinned_baseline=use_pinned_baseline,
         limit=None,
         config_filter=config_filter,
+        include_samples=normalized_response_detail == "full",
+        include_observations=normalized_response_detail == "full",
+        include_environment=normalized_response_detail == "full",
     )
     if trend is None:
         return _response(

@@ -112,6 +112,16 @@ def test_live_mcp_stdio_smoke(
                 "trend_suite",
             }
 
+            tool_schemas = {tool.name: tool.inputSchema for tool in tools}
+            assert "database_path" in tool_schemas["compare_runs"]["properties"]
+            assert "response_detail" in tool_schemas["compare_runs"]["properties"]
+            assert tool_schemas["compare_runs"]["additionalProperties"] is True
+            assert "database_path" in tool_schemas["trend_suite"]["properties"]
+            assert "response_detail" in tool_schemas["trend_suite"]["properties"]
+            assert "config_filter" in tool_schemas["trend_suite"]["properties"]
+            assert tool_schemas["trend_suite"]["additionalProperties"] is True
+            assert tool_schemas["compare_suite"]["additionalProperties"] is False
+
             status_payload = await _call_tool(client, "server_status", {"database_path": str(database_path)})
             assert status_payload["status"] == "pass"
             assert status_payload["reason"] == "server_ready"

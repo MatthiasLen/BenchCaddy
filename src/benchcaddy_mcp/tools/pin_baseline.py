@@ -64,6 +64,9 @@ def pin_baseline(
             drift_window_size=drift_window_size,
         ),
         note=note,
+        include_samples=normalized_response_detail == "full",
+        include_observations=normalized_response_detail == "full",
+        include_environment=normalized_response_detail == "full",
     )
     if pin_update is None:
         return _response(

@@ -1,3 +1,4 @@
+from .._app import apply_tool_schema_compatibility_workarounds
 from .._shared import DEFAULT_LIMIT
 from .compare_runs import compare_runs
 from .compare_suite import compare_suite
@@ -9,6 +10,8 @@ from .list_suites import list_suites
 from .pin_baseline import pin_baseline
 from .server_status import server_status
 from .trend_suite import trend_suite
+
+apply_tool_schema_compatibility_workarounds()
 
 __all__ = [
     "DEFAULT_LIMIT",

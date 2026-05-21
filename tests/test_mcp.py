@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from benchcaddy.db import compare_runs as db_compare_runs
+from benchcaddy.db import get_run_details as db_get_run_details
+from benchcaddy.db import get_suite_baseline_history as db_get_suite_baseline_history
+from benchcaddy.db import get_suite_details as db_get_suite_details
+from benchcaddy.db import get_suite_trend as db_get_suite_trend
 from benchcaddy.db import record_benchmark_run
+from benchcaddy.db import set_suite_baseline as db_set_suite_baseline
 from benchcaddy_mcp.tools import (
     DEFAULT_LIMIT,
     compare_runs,
@@ -214,6 +220,34 @@ def test_get_run_accepts_display_ids(
     assert payload["summary"]["run"]["display_id"] == "1.1"
 
 
+def test_db_get_run_details_can_build_lean_payload(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-run-lean",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+
+    payload = db_get_run_details(
+        (1, 1),
+        str(database_path),
+        include_samples=False,
+        include_observations=False,
+        include_environment=False,
+    )
+
+    assert payload is not None
+    assert "samples" not in payload
+    assert "observations" not in payload
+    assert "environment" not in payload
+    assert payload["observation_labels"] == []
+
+
 def test_get_suite_reports_missing_suite_with_error_payload(tmp_path: Path) -> None:
     payload = get_suite("missing-suite", str(tmp_path / "benchcaddy.db"))
 
@@ -289,6 +323,40 @@ def test_get_suite_payload_matches_requested_filter_and_limit(
     assert payload["summary"]["truncated"] is True
     assert len(payload["summary"]["runs"]) == 1
     assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["runs"])
+
+
+def test_db_get_suite_details_can_build_lean_payloads(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-details-lean",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-details-lean",
+        configuration={"size": 1024, "variant": "candidate"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        environment_payload=environment_payload,
+    )
+
+    payload = db_get_suite_details(
+        "suite-details-lean",
+        str(database_path),
+        include_samples=False,
+        include_observations=False,
+    )
+
+    assert payload is not None
+    assert all("samples" not in run for run in payload["runs"])
+    assert all("observations" not in run for run in payload["runs"])
+    assert payload["environment"] is not None
+    assert payload["baseline_run"] is None or "samples" not in payload["baseline_run"]
 
 
 def test_compare_suite_caps_runs_by_default(
@@ -374,6 +442,46 @@ def test_compare_runs_full_detail_preserves_existing_payload(
     assert payload["summary"]["comparison_mode"] == "direct"
     assert payload["result"]["comparison_mode"] == "direct"
     assert payload["result"]["percent_change"] == pytest.approx(2.0)
+
+
+def test_db_compare_runs_can_build_lean_payloads(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-pair-lean",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-pair-lean",
+        configuration={"variant": "candidate"},
+        samples=[0.101, 0.102, 0.103, 0.102, 0.104, 0.101, 0.103],
+        environment_payload=environment_payload,
+    )
+
+    payload = db_compare_runs(
+        (1, 1),
+        (2, 1),
+        str(database_path),
+        include_samples=False,
+        include_observations=False,
+        include_environment=False,
+    )
+
+    assert payload is not None
+    assert "samples" not in payload["baseline"]
+    assert "observations" not in payload["baseline"]
+    assert "environment" not in payload["baseline"]
+    assert "samples" not in payload["candidate"]
+    assert "observations" not in payload["candidate"]
+    assert "environment" not in payload["candidate"]
+    assert isinstance(payload["comparison_analysis"]["percent_change"], float)
+    assert isinstance(payload["observation_rows"], list)
 
 
 def test_compare_runs_reports_missing_candidate_without_result_payload(
@@ -529,6 +637,8 @@ def test_compare_suite_payload_matches_requested_reference_and_scope(
     assert payload["summary"]["config_filter"] == {"size": 512}
     assert {run["configuration"]["size"] for run in payload["summary"]["runs"]} == {512}
     assert {run["display_id"] for run in payload["summary"]["runs"]} == {"1.1", "2.1"}
+    assert "target_return_relative_error" not in payload["summary"]["runs"][0]
+    assert "slowdown_factor" not in payload["summary"]["runs"][0]
 
 
 def test_trend_suite_caps_timeline_runs_by_default(
@@ -594,6 +704,41 @@ def test_trend_suite_payload_matches_requested_filter_context(
     assert payload["summary"]["truncated"] is True
     assert len(payload["summary"]["runs"]) == 2
     assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["runs"])
+    assert "available_suite_configurations" not in payload["summary"]
+
+
+def test_db_trend_suite_can_build_lean_filtered_timeline(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    stable_samples = [0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101]
+    for _index in range(3):
+        _record_sampled_run(
+            database_path=database_path,
+            suite_name="suite-trend-lean",
+            configuration={"size": 512, "variant": "baseline"},
+            samples=stable_samples,
+            environment_payload=environment_payload,
+        )
+
+    payload = db_get_suite_trend(
+        "suite-trend-lean",
+        str(database_path),
+        config_filter={"size": 512, "variant": "baseline"},
+        include_samples=False,
+        include_observations=False,
+        include_environment=False,
+    )
+
+    assert payload is not None
+    assert payload["mode"] == "timeline"
+    assert "samples" not in payload["basis_run"]
+    assert "observations" not in payload["basis_run"]
+    assert "environment" not in payload["basis_run"]
+    assert all("samples" not in run for run in payload["runs"])
+    assert all("observations" not in run for run in payload["runs"])
+    assert payload["runs"][0]["sample_count"] == 7
 
 
 def test_trend_suite_reports_conflicting_basis_payload_fields(
@@ -650,6 +795,8 @@ def test_trend_suite_reports_summary_mode_for_mixed_configurations(
     assert payload["summary"]["mode"] == "summary"
     assert payload["summary"]["configuration_count"] == 2
     assert len(payload["summary"]["config_summaries"]) == 2
+    assert "configuration" not in payload["summary"]["config_summaries"][0]["first_run"]
+    assert "suite_name" not in payload["summary"]["config_summaries"][0]["first_run"]
 
 
 def test_pin_baseline_and_history_are_available(
@@ -677,6 +824,45 @@ def test_pin_baseline_and_history_are_available(
     assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 2
     assert len(payload["summary"]["history"]) == DEFAULT_LIMIT
     assert payload["summary"]["current_baseline"]["note"] == f"pin-{DEFAULT_LIMIT + 1}"
+
+
+def test_db_baseline_history_and_pin_update_can_build_lean_payloads(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-baseline-lean",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+
+    pin_update = db_set_suite_baseline(
+        "suite-baseline-lean",
+        (1, 1),
+        str(database_path),
+        include_samples=False,
+        include_observations=False,
+        include_environment=False,
+    )
+    history = db_get_suite_baseline_history(
+        "suite-baseline-lean",
+        str(database_path),
+        include_samples=False,
+        include_observations=False,
+        include_environment=False,
+    )
+
+    assert pin_update is not None
+    assert "samples" not in pin_update
+    assert "observations" not in pin_update
+    assert "environment" not in pin_update
+    assert history is not None
+    assert "samples" not in history["history"][0]["run"]
+    assert "observations" not in history["history"][0]["run"]
+    assert "environment" not in history["history"][0]["run"]
 
 
 def test_pin_baseline_reports_wrong_suite_payload_fields(

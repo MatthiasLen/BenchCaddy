@@ -117,29 +117,41 @@ def compare_runs(
     candidate_run_id: int | tuple[int, int],
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
+    *,
+    include_samples: bool = True,
+    include_observations: bool = True,
+    include_environment: bool = True,
 ) -> dict[str, Any] | None:
-    baseline = get_run_details(
-        baseline_run_id,
-        database_path,
-        analysis_options=analysis_options,
-        include_analysis=True,
-    )
-    candidate = get_run_details(
-        candidate_run_id,
-        database_path,
-        analysis_options=analysis_options,
-        include_analysis=True,
-    )
-    if baseline is None or candidate is None:
-        return None
+    with db_session(database_path) as session:
+        baseline_run = _resolve_run(session, baseline_run_id)
+        candidate_run = _resolve_run(session, candidate_run_id)
+        if baseline_run is None or candidate_run is None:
+            return None
+
+        baseline = baseline_run.to_detail_payload(
+            analysis_options,
+            include_analysis=True,
+            include_samples=include_samples,
+            include_observations=include_observations,
+            include_environment=include_environment,
+        )
+        candidate = candidate_run.to_detail_payload(
+            analysis_options,
+            include_analysis=True,
+            include_samples=include_samples,
+            include_observations=include_observations,
+            include_environment=include_environment,
+        )
+        baseline_samples = list(baseline_run.samples)
+        candidate_samples = list(candidate_run.samples)
+        baseline_observations = summarize_observations(baseline_run.observations)
+        candidate_observations = summarize_observations(candidate_run.observations)
 
     percent_change = None
     if baseline["median_seconds"] > 0:
         percent_change = ((candidate["median_seconds"] - baseline["median_seconds"]) / baseline["median_seconds"]) * 100.0
 
     # Observation rows are aligned by label so missing probes on either side stay visible in the comparison.
-    baseline_observations = summarize_observations(baseline["observations"])
-    candidate_observations = summarize_observations(candidate["observations"])
     labels = sorted(set(baseline_observations) | set(candidate_observations))
     target_return_relative_error = return_relative_error(
         reference_value=baseline["target_return_value"],
@@ -153,8 +165,8 @@ def compare_runs(
         "percent_change": percent_change,
         "target_return_relative_error": target_return_relative_error,
         "comparison_analysis": compare_sample_sets(
-            baseline["samples"],
-            candidate["samples"],
+            baseline_samples,
+            candidate_samples,
             analysis_options,
         ).to_payload(),
         "observation_rows": [
@@ -183,6 +195,10 @@ def get_suite_trend(
     use_pinned_baseline: bool = False,
     limit: int | None = None,
     config_filter: dict[str, Any] | None = None,
+    *,
+    include_samples: bool = True,
+    include_observations: bool = True,
+    include_environment: bool = True,
 ) -> dict[str, Any] | None:
     chosen_options = analysis_options or AnalysisOptions()
     with db_session(database_path) as session:
@@ -224,10 +240,22 @@ def get_suite_trend(
             basis_run = min(filtered_runs, key=lambda run: (run.median_seconds, run.id))
             basis_source = "best"
             visible_runs = filtered_runs[-limit:] if limit is not None else filtered_runs
-            basis_payload = basis_run.to_detail_payload(chosen_options)
+            basis_payload = basis_run.to_detail_payload(
+                chosen_options,
+                include_samples=include_samples,
+                include_observations=include_observations,
+                include_environment=include_environment,
+            )
             basis_samples = list(basis_run.samples)
             basis_run_id = basis_run.id
-            filtered_payloads = [run.to_payload(chosen_options) for run in visible_runs]
+            filtered_payloads = [
+                run.to_payload(
+                    chosen_options,
+                    include_samples=include_samples,
+                    include_observations=include_observations,
+                )
+                for run in visible_runs
+            ]
             filtered_samples = [list(run.samples) for run in visible_runs]
             filtered_ids = [run.id for run in visible_runs]
             config_filter = dict(config_filter)
@@ -279,7 +307,16 @@ def get_suite_trend(
                             "target_name": suite.target_name,
                             "configuration_count": len(grouped_runs),
                             "limit": limit,
-                            "config_summaries": [_configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit) for key in grouped_runs],
+                            "config_summaries": [
+                                _configuration_trend_summary_payload(
+                                    grouped_runs[key],
+                                    chosen_options,
+                                    limit=limit,
+                                    include_samples=include_samples,
+                                    include_observations=include_observations,
+                                )
+                                for key in grouped_runs
+                            ],
                         }
 
                     basis_run = runs[-1]
@@ -293,10 +330,22 @@ def get_suite_trend(
                 filtered_runs = [run for run in runs if run.configuration == config_filter]
                 if limit is not None:
                     filtered_runs = filtered_runs[-limit:]
-            basis_payload = basis_run.to_detail_payload(chosen_options)
+            basis_payload = basis_run.to_detail_payload(
+                chosen_options,
+                include_samples=include_samples,
+                include_observations=include_observations,
+                include_environment=include_environment,
+            )
             basis_samples = list(basis_run.samples)
             basis_run_id = basis_run.id
-            filtered_payloads = [run.to_payload(chosen_options) for run in filtered_runs]
+            filtered_payloads = [
+                run.to_payload(
+                    chosen_options,
+                    include_samples=include_samples,
+                    include_observations=include_observations,
+                )
+                for run in filtered_runs
+            ]
             filtered_samples = [list(run.samples) for run in filtered_runs]
             filtered_ids = [run.id for run in filtered_runs]
 
@@ -503,7 +552,15 @@ def _suite_comparison_payload(
         "config_filter": None if config_filter is None else dict(config_filter),
         "config_filter_warning": config_filter_warning,
         "basis_source": "pinned" if reference_from_pinned else "reference" if reference_run_id is not None else "best",
-        "pinned_baseline": None if pinned_baseline_run is None else pinned_baseline_run.to_payload(analysis_options),
+        "pinned_baseline": (
+            None
+            if pinned_baseline_run is None
+            else pinned_baseline_run.to_payload(
+                analysis_options,
+                include_samples=False,
+                include_observations=False,
+            )
+        ),
         "runs": [
             run.to_suite_comparison_row(
                 basis_median_seconds,
@@ -526,6 +583,8 @@ def _configuration_trend_summary_payload(
     analysis_options: AnalysisOptions,
     *,
     limit: int | None,
+    include_samples: bool,
+    include_observations: bool,
 ) -> dict[str, Any]:
     visible_runs = list(runs[-limit:] if limit is not None else runs)
     first_run = visible_runs[0]
@@ -545,9 +604,21 @@ def _configuration_trend_summary_payload(
         "run_count": len(visible_runs),
         "total_run_count": len(runs),
         "median_series": [run.median_seconds for run in visible_runs],
-        "first_run": first_run.to_payload(analysis_options),
-        "latest_run": latest_run.to_payload(analysis_options),
-        "best_run": best_run.to_payload(analysis_options),
+        "first_run": first_run.to_payload(
+            analysis_options,
+            include_samples=include_samples,
+            include_observations=include_observations,
+        ),
+        "latest_run": latest_run.to_payload(
+            analysis_options,
+            include_samples=include_samples,
+            include_observations=include_observations,
+        ),
+        "best_run": best_run.to_payload(
+            analysis_options,
+            include_samples=include_samples,
+            include_observations=include_observations,
+        ),
         "latest_vs_first": compare_sample_sets(first_run.samples, latest_run.samples, analysis_options).to_payload(),
         "recent_vs_window": recent_vs_window,
         "latest_vs_best": compare_sample_sets(best_run.samples, latest_run.samples, analysis_options).to_payload(),
