@@ -4,6 +4,7 @@
 
 BenchCaddy MCP exposes BenchCaddy benchmark data and analysis as named MCP tools.
 If the CLI or JSON output already fits your workflow, that is often enough. MCP is the simpler path when an agent should inspect suites, compare runs, review trends, or manage baselines through direct tool calls.
+The default payloads are designed to stay compact, so they are usually much cheaper to pass to an agent than raw profiler traces or long benchmark logs.
 
 ## What It Is
 
@@ -11,6 +12,8 @@ BenchCaddy MCP is a thin layer over BenchCaddy's existing persistence and analys
 It exposes the same underlying benchmark data that the CLI reads, but in a form that agents can consume directly.
 
 For the core Python API, CLI workflow, and general benchmarking concepts, see [README.md](README.md).
+
+If you want to see what that looks like in practice before reading setup details, start with the example below.
 
 Typical MCP workflows include:
 
@@ -21,6 +24,48 @@ Typical MCP workflows include:
 - reading or updating the pinned suite baseline
 
 The server is read-mostly. All tools are read-only except `pin_baseline`.
+
+## Example Chat: Recent Trends
+
+This example shows the kind of concise benchmark summary an MCP-aware coding agent can produce after reading a generated trend database.
+
+<img src="bc_trends.png" alt="BenchCaddy MCP trend chat example" width="900"></img>
+
+The database `cli_screenshot_trends.db` from this example can be generated using `scripts/generate_cli_screenshot_data.py`.
+
+Representative chat:
+
+```text
+User: read benchmarking results cli_screenshot_trends.db and give me an overview on the recent trends in the results
+
+Assistant: The generated trend database has one suite, `cli-trend-showcase`, with 64 runs across 4 configurations. The recent trend is mixed, but overall skewed toward regressions in 3 of the 4 configurations.
+
+Recent overview:
+
+- `tiny, batch=1`: long-term regression. Latest run is `0.0985s`, up from `0.0800s` initially, about `23.1%` slower. The most recent window looks roughly stable, with only about `4.8%` slowdown versus recent history.
+- `tiny, batch=8`: clearest active regression. Latest run is `0.1765s`, up from `0.1200s` initially, about `47.1%` slower, and it is still worsening recently at about `11.0%` slower versus the recent window.
+- `base, batch=1`: improvement story. Latest run is `0.1225s`, down from `0.1450s` initially, about `15.5%` faster, and it is also the best run seen for that configuration.
+- `base, batch=8`: moderate regression. Latest run is `0.2310s`, up from `0.2050s` initially, about `12.7%` slower. Recent movement is a mild additional slowdown, but not enough to classify as a fresh regression in the recent window.
+
+What stands out in the latest checkpoints:
+
+- The latest four runs on `2026-06-02` are all clean, non-noisy measurements.
+- The strongest current concern is `tiny, batch=8`, which is both substantially slower than its historical baseline and still trending worse recently.
+- `tiny, batch=1` and `base, batch=8` also look degraded relative to their historical best or first runs, but their very recent movement is milder.
+- `base, batch=1` is the only configuration showing a clear long-term improvement.
+```
+
+The MCP flow behind that answer is simple:
+
+1. `list_suites` to discover the available suite name in the database
+2. `trend_suite` to get configuration-level drift summaries
+3. `get_suite` to inspect the latest runs and verify whether the newest samples are noisy
+
+This is a good pattern for chat-oriented benchmark summaries because it combines:
+
+- a stable inventory step
+- an aggregate trend step
+- a latest-run sanity check before drawing conclusions
 
 ## Requirements
 
@@ -37,10 +82,6 @@ benchcaddy-mcp
 ```
 
 Repository-local examples:
-
-```powershell
-.\.venv\Scripts\benchcaddy-mcp.exe
-```
 
 ```bash
 ./.venv/bin/benchcaddy-mcp
@@ -85,19 +126,6 @@ In VS Code, MCP servers are configured in `mcp.json`. For a workspace-local setu
     "servers": {
         "benchcaddy": {
             "type": "stdio",
-            "command": ".\\.venv\\Scripts\\benchcaddy-mcp.exe"
-        }
-    }
-}
-```
-
-POSIX workspace-local equivalent:
-
-```json
-{
-    "servers": {
-        "benchcaddy": {
-            "type": "stdio",
             "command": "./.venv/bin/benchcaddy-mcp"
         }
     }
@@ -129,6 +157,7 @@ Most tools accept an optional `database_path`. If omitted, they read `./benchcad
 All tools accept `response_detail`, which defaults to `summary`. Use `response_detail="full"` when you want the complete nested payload.
 
 The response envelope is stable across all tools. Callers can branch on `status` and `reason` first, inspect `summary` for direct answers, and only opt into `result` when they need the full nested payload.
+That summary-first shape is deliberate: it keeps typical agent interactions compact while still leaving the full nested payload available when deeper inspection is necessary.
 
 ## First-Call Smoke Check
 
@@ -212,6 +241,8 @@ Predictability rules:
 - every tool that reads BenchCaddy data accepts `database_path`
 - `summary` is the default agent-facing shape and `result` is opt-in
 
+This is usually a better fit for agent workflows than feeding raw profiler traces or the full text output of standard benchmarking tools. It is not a profiler replacement, though. If you need call-stack-level or trace-level detail, use a profiler and treat BenchCaddy as the compact inspection layer over recorded benchmark results.
+
 Default summary example based on a real local `compare_runs` response, with the database path normalized for documentation:
 
 ```text
@@ -266,46 +297,3 @@ BenchCaddy MCP:
 
 When you need the full nested payload, call the same tool with `response_detail="full"`. The response still includes the compact `summary`, and adds the previous detailed `result` block for deeper inspection.
 
-## Example Chat: Recent Trends
-
-This example shows the kind of concise benchmark summary an MCP-aware coding agent can produce after reading a generated trend database.
-
-<img src="bc_trends.png" alt="BenchCaddy MCP trend chat example" width="900"></img>
-
-Database used in this example:
-
-- `examples/generated/cli_screenshot_trends.db`
-
-Representative chat:
-
-```text
-User: read benchmarking results examples/generated/cli_screenshot_trends.db and give me an overview on the recent trends in the results
-
-Assistant: The generated trend database has one suite, `cli-trend-showcase`, with 64 runs across 4 configurations. The recent trend is mixed, but overall skewed toward regressions in 3 of the 4 configurations.
-
-Recent overview:
-
-- `tiny, batch=1`: long-term regression. Latest run is `0.0985s`, up from `0.0800s` initially, about `23.1%` slower. The most recent window looks roughly stable, with only about `4.8%` slowdown versus recent history.
-- `tiny, batch=8`: clearest active regression. Latest run is `0.1765s`, up from `0.1200s` initially, about `47.1%` slower, and it is still worsening recently at about `11.0%` slower versus the recent window.
-- `base, batch=1`: improvement story. Latest run is `0.1225s`, down from `0.1450s` initially, about `15.5%` faster, and it is also the best run seen for that configuration.
-- `base, batch=8`: moderate regression. Latest run is `0.2310s`, up from `0.2050s` initially, about `12.7%` slower. Recent movement is a mild additional slowdown, but not enough to classify as a fresh regression in the recent window.
-
-What stands out in the latest checkpoints:
-
-- The latest four runs on `2026-06-02` are all clean, non-noisy measurements.
-- The strongest current concern is `tiny, batch=8`, which is both substantially slower than its historical baseline and still trending worse recently.
-- `tiny, batch=1` and `base, batch=8` also look degraded relative to their historical best or first runs, but their very recent movement is milder.
-- `base, batch=1` is the only configuration showing a clear long-term improvement.
-```
-
-The MCP flow behind that answer is simple:
-
-1. `list_suites` to discover the available suite name in the database
-2. `trend_suite` to get configuration-level drift summaries
-3. `get_suite` to inspect the latest runs and verify whether the newest samples are noisy
-
-This is a good pattern for chat-oriented benchmark summaries because it combines:
-
-- a stable inventory step
-- an aggregate trend step
-- a latest-run sanity check before drawing conclusions

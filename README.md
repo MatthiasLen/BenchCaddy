@@ -257,6 +257,7 @@ benchcaddy env --json
 
 All top-level CLI commands support `-j` / `--json`: `env`, `baseline`, `compare`, `list`, `show`, `sweep`, and `trend`.
 The JSON envelope is intentionally consistent so shell automation, notebooks, and simple agent wrappers can branch on outcome before they inspect command-specific payloads.
+It is also intentionally compact: for agent workflows, these payloads are usually much cheaper to pass around than raw profiler traces or the full text output of many benchmarking tools.
 
 Each JSON response uses the same top-level envelope:
 
@@ -289,7 +290,7 @@ For automation, branch on `status` first, then use `reason`, `error_code`, and `
 ## BenchCaddy MCP
 
 BenchCaddy also ships an MCP server for cases where an agent should call named tools instead of constructing CLI commands and parsing JSON.
-The MCP server exposes the same stored benchmark data and analysis in a form that is easier for tool-calling clients to use directly.
+The MCP server exposes the same stored benchmark data and analysis in a form that is easier for tool-calling clients to use directly, with compact default summaries that are typically more token-efficient than feeding an agent raw traces or verbose benchmark logs.
 For MCP setup, client configuration examples, available tools, and sample chat workflows, see [README_MCP.md](README_MCP.md).
 
 ## CI And Automation
