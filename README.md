@@ -20,7 +20,7 @@ It fits the space between heavyweight profilers and a directory full of `timings
 - Capture supported return values to validate correctness alongside runtime
 - Make the same recorded data easy to inspect from the CLI, as JSON for scripts, or via MCP for agents
 
-BenchCaddy is intentionally focused: it helps you answer whether a change is actually faster, slower, or noisier, and under what environment. It is not a profiler, tracer, or distributed observability system.
+BenchCaddy is intentionally lean: it helps you answer whether a change is actually faster, slower, or noisier, and under what environment. It is not a profiler, tracer, or distributed observability system.
 
 ## Installation
 

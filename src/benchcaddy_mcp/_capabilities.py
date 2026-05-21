@@ -93,7 +93,11 @@ TOOL_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "compare_suite",
-        "description": "Compare an entire suite against a chosen reference run, best run, or pinned baseline. Use this when the user asks to compare a suite against run 4.1, a baseline, or the best run.",
+        "description": (
+            "Compare an entire suite against a chosen reference run, best run, "
+            "or pinned baseline. Use this when the user asks to compare a "
+            "suite against run 4.1, a baseline, or the best run."
+        ),
         "category": "analysis",
         "mutates_state": False,
         "supports_database_path": True,
@@ -107,7 +111,11 @@ TOOL_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "compare_runs",
-        "description": "Compare two specific benchmark runs directly. Use this when the user asks to compare run 4.1 against run 4.2 or wants a head-to-head run comparison instead of a suite-wide comparison.",
+        "description": (
+            "Compare two specific benchmark runs directly. Use this when the "
+            "user asks to compare run 4.1 against run 4.2 or wants a "
+            "head-to-head run comparison instead of a suite-wide comparison."
+        ),
         "category": "analysis",
         "mutates_state": False,
         "supports_database_path": True,
@@ -121,7 +129,11 @@ TOOL_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "trend_suite",
-        "description": "Inspect how a benchmark suite or one configuration changes over time. Use this when the user asks about drift, history, regressions over time, or long-term trends for a suite.",
+        "description": (
+            "Inspect how a benchmark suite or one configuration changes over "
+            "time. Use this when the user asks about drift, history, "
+            "regressions over time, or long-term trends for a suite."
+        ),
         "category": "analysis",
         "mutates_state": False,
         "supports_database_path": True,
