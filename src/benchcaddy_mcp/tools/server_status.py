@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .._app import app
-from .._capabilities import SERVER_NAME, SERVER_TRANSPORT, TOOL_SPECS, _database_diagnostics, _server_version, _tool_names
+from .._app import SERVER_NAME, app
+from .._capabilities import SERVER_TRANSPORT, TOOL_SPECS, _database_diagnostics, _server_version, _tool_names
 from .._shared import (
     ALLOWED_RESPONSE_DETAILS,
     DEFAULT_RESPONSE_DETAIL,
