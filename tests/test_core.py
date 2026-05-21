@@ -447,6 +447,10 @@ def test_suite_trend_with_pinned_baseline_keeps_timeline_for_mixed_configuration
     assert trend["mode"] == "timeline"
     assert trend["basis_source"] == "pinned"
     assert trend["config_filter"] == {"size": 512, "variant": "baseline"}
+    assert trend["available_suite_configurations"] == [
+        {"size": 512, "variant": "baseline"},
+        {"size": 1024, "variant": "baseline"},
+    ]
     assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1"]
 
 

@@ -2036,6 +2036,10 @@ def test_cli_trend_shows_time_series_for_matching_configuration(
     assert "2.1" in result.stdout
     assert "3.1" in result.stdout
     assert "4.1" not in result.stdout
+    assert "Selected configuration" in result.stdout
+    assert "Available suite configurations" in result.stdout
+    assert "size=512, variant=baseline" in result.stdout
+    assert "size=1024, variant=baseline" in result.stdout
     assert "▁▃█" in result.stdout
 
 
@@ -2186,7 +2190,11 @@ def test_cli_trend_can_filter_by_config_and_use_best_filtered_run(
     assert result.exit_code == 0
     assert "Trend Basis: filtered-trend-suite" in result.stdout
     assert "best" in result.stdout
+    assert "Selected configuration" in result.stdout
+    assert "Available suite configurations" in result.stdout
     assert "size: 512" in result.stdout
+    assert "size=512, variant=baseline" in result.stdout
+    assert "size=1024, variant=baseline" in result.stdout
     assert "1.1" in result.stdout
     assert "2.1" in result.stdout
     assert "3.1" not in result.stdout

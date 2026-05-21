@@ -59,15 +59,28 @@ def _trend_run_warnings(run: dict[str, object]) -> tuple[str, ...]:
     )
 
 
+def _format_configuration(configuration: dict[str, object] | None) -> str:
+    if not configuration:
+        return "-"
+    return ", ".join(f"{key}={configuration[key]}" for key in sorted(configuration))
+
+
+def _format_configuration_list(configurations: list[dict[str, object]] | None) -> str:
+    if not configurations:
+        return "-"
+    return "\n".join(_format_configuration(configuration) for configuration in configurations)
+
+
 def _trend_basis_panel(trend: dict[str, object]) -> Panel:
     basis_run = trend["basis_run"]
     return summary_panel(
         f"Trend Basis: {trend['suite_name']}",
         [
-            ("Source", str(trend.get("basis_source", "latest"))),
+            ("Source", _styled(str(trend.get("basis_source", "latest")), "yellow")),
             ("Run ID", _styled(basis_run["display_id"], "yellow")),
             ("Record ID", _styled(basis_run["id"], "yellow")),
-            ("Configuration", dump_json(trend.get("config_filter"))),
+            ("Selected configuration", _styled(dump_json(trend.get("config_filter")), "yellow")),
+            ("Available suite configurations", _format_configuration_list(trend.get("available_suite_configurations"))),
             ("Median CI (s)", format_interval(basis_run.get("ci_lower_seconds"), basis_run.get("ci_upper_seconds"))),
         ],
         width=102,

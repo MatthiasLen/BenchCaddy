@@ -192,6 +192,8 @@ def get_suite_trend(
         suite = _get_suite(session, suite_name)
         if suite is None:
             return None
+        suite_runs = _list_suite_runs_oldest_first(session, suite.id)
+        available_suite_configurations = _available_suite_configurations_payload(suite_runs)
 
         if config_filter is not None and (baseline_run_id is not None or use_pinned_baseline):
             return {
@@ -201,7 +203,7 @@ def get_suite_trend(
             }
 
         if config_filter is not None:
-            runs = _list_suite_runs_oldest_first(session, suite.id)
+            runs = suite_runs
             if not runs:
                 return {
                     "mode": "timeline",
@@ -210,6 +212,7 @@ def get_suite_trend(
                     "basis_run": None,
                     "basis_source": "empty",
                     "config_filter": dict(config_filter),
+                    "available_suite_configurations": [],
                     "runs": [],
                 }
 
@@ -257,6 +260,7 @@ def get_suite_trend(
                         "basis_run": None,
                         "basis_source": "empty",
                         "config_filter": None,
+                        "available_suite_configurations": [],
                         "runs": [],
                     }
 
@@ -328,8 +332,21 @@ def get_suite_trend(
         "basis_run": basis_payload,
         "basis_source": basis_source,
         "config_filter": config_filter,
+        "available_suite_configurations": available_suite_configurations,
         "runs": trend_rows,
     }
+
+
+def _available_suite_configurations_payload(runs: Sequence[BenchmarkRun]) -> list[dict[str, Any]]:
+    configurations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for run in runs:
+        group_key = _configuration_group_key(run.configuration)
+        if group_key in seen:
+            continue
+        seen.add(group_key)
+        configurations.append(dict(run.configuration))
+    return configurations
 
 
 def _resolve_suite_reference(

@@ -463,7 +463,7 @@ def _config_filter_warning_panel(comparison: dict[str, object]) -> Panel | None:
     rows.add_row("Warning", _styled(str(warning.get("message", "-")), "yellow"))
     if warning.get("config_filter"):
         rows.add_row("Filter", _format_config_filter(warning["config_filter"]))
-    return Panel.fit(rows, title="Filter Warning", border_style="yellow")
+    return Panel(rows, title="Filter Warning", border_style="yellow", width=100)
 
 
 def _print_run_comparison(
