@@ -193,7 +193,7 @@ def _show_suite(details: dict[str, object]) -> None:
         if _has_analysis(baseline_run):
             rows.append(("Median CI (s)", format_interval(baseline_run.get("ci_lower_seconds"), baseline_run.get("ci_upper_seconds"))))
         rows.append(("Configuration", dump_json(baseline_run["configuration"])))
-        _console().print(summary_panel("Pinned Baseline", rows))
+        _console().print(summary_panel("Baseline", rows))
     _console().print(
         render_table(
             f"Observed Timings: {details['suite_name']}",
@@ -251,7 +251,7 @@ def _print_numitems_notice(
     )
 
 
-@app.command("show", help="Inspect all recorded runs, a suite, or specific run IDs. When a suite has a pinned baseline, it is shown in the suite view.")
+@app.command("show", help="Inspect all recorded runs, a suite, or specific run IDs. When a suite has a recorded baseline, it is shown in the suite view.")
 def show_command(
     identifiers: Annotated[
         list[str] | None,

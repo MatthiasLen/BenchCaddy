@@ -2,34 +2,44 @@
 
 [![CI](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml)
 
-We all tell ourselves we’re going to use Scalene,PyInstrument or TorchProfile - tools that produce traces so complex and beautiful they belong in a modern art gallery. But let’s be real: most days, "benchmarking" is just us sprinkling time.time() across our code like frantic seasoning on a failing dish. You’re staring at the terminal, trying to remember if the last run was actually faster or if you just happen to be in a better mood, only to realize you’ve already lost the thread. *"Wait, when did I change the naming convention of the log files? Is 'results_v2_final' newer than 'results_new_test'?"*
+BenchCaddy is a lightweight Python benchmarking toolkit for software developers, AI engineers, and data scientists who need repeatable performance measurements without building custom log-file workflows.
 
+It runs parameter sweeps in an isolated worker process, stores raw samples and environment metadata in SQLite, and gives you a CLI to inspect runs, compare configurations, pin baselines, and track drift over time.
 
-**BenchCaddy** is the humble sidekick for those of us living in that chaotic middle ground. It replaces "vibes-based" timing with stabilized sweeps and environment metadata, tucking everything into a neat database before your brain can wander. It won’t give you a call-graph of every thread’s inner life, but it will save you from your own memory and provide a summary clean enough to make you look like the organized professional your friends think you are. No traces to decipher, no lost logs, and no more gaslighting yourself.
+It is for the gap between full profilers and a directory full of `timings_final_v4_really.csv`.
+
+![BenchCaddy trend summary overview](./bc_trends.png)
+
+## Why BenchCaddy
+
+- Run repeatable benchmark sweeps across parameter grids
+- Persist raw samples, observations, and machine metadata in `benchcaddy.db`
+- Compare runs with median-based summaries, confidence intervals, and noise warnings
+- Pin suite baselines and reuse them for local checks or CI gates
+- Capture supported return values to validate correctness alongside runtime
+
+BenchCaddy is intentionally narrow: it helps you answer "is this actually faster, and under what environment?" It is not a profiler or tracing system.
 
 ## Installation
 
-You can install BenchCaddy using [uv](https://github.com/astral-sh/uv), or standard `pip`.
+Install with [uv](https://github.com/astral-sh/uv) or `pip`.
 
-**Using `uv`** Add to your current project dependencies
 ```bash
 uv add benchcaddy
 ```
 
-**Using `pip`**
 ```bash
 pip install benchcaddy
 ```
 
-## Quick start
+## Quick Start
 
-BenchCaddy is designed around two steps:
+BenchCaddy workflows have two steps:
 
 1. Run a benchmark sweep over one or more configurations.
-2. Inspect or compare the recorded results from the database (e.g. using the CLI).
+2. Inspect, compare, or trend the recorded results from the database.
 
-This self-contained example benchmarks a nonlinear transform
-with two variants and two input sizes.
+This example benchmarks a nonlinear transform with two variants and two input sizes.
 
 ```python
 import math
@@ -78,58 +88,52 @@ Sweep(
 ).run()
 ```
 
-BenchCaddy writes samples, medians, observations, and environment metadata to
-`benchcaddy.db` in the current working directory. Those persisted raw samples also drive richer analysis during inspection,
-including bootstrap confidence intervals, 
-outlier diagnostics, noise warnings, and regression classification.
-Those statistics are intended as decision support rather than proof, and they
-should be interpreted alongside sample count, variance, outliers, and overall
-benchmark-environment stability.
+BenchCaddy writes results to `./benchcaddy.db` relative to the directory where you run the example. Stored raw samples power richer analysis during inspection, including bootstrap confidence intervals, outlier diagnostics, noise warnings, and regression classification.
 
-The full runnable example lives in the repository and source distribution at
-[`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py).
+The full runnable example lives at [`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py).
 
-## Sweep options
+## Core Concepts
 
-The main public `Sweep(...)` options are:
+### `Sweep`
 
-- `samples`: number of measured samples per configuration
-- `warmup_iterations`: warmup runs before sampling begins
+`Sweep(...)` is the main entry point for benchmark execution.
+
+Common options:
+
+- `samples`: measured samples per configuration
+- `warmup_iterations`: warmup runs before sampling
 - `database_path`: store results in a specific SQLite file instead of `./benchcaddy.db`
 - `lock_cpu_affinity`: preserve the current CPU affinity set before benchmarking
-- `store_target_return_value=True`: store one accepted target return value per run (`bool`, `int`, `float`, `str`, or 1D numeric vectors from list/tuple/numpy arrays)
-- `return_value_postprocessor`: map complex target return values to a supported type before storage
-  - when multiple samples are collected, the first measured sample return value is stored for the run
 - `reporter`: custom reporter implementing the `SweepReporter` protocol
 - `verbose=True`: use the built-in Rich reporter during execution
+- `store_target_return_value=True`: persist one supported return value per run
+- `return_value_postprocessor`: convert complex return values before storage
 
-## Benchmark target contract
+Supported stored return values are `bool`, `int`, `float`, `str`, and 1D numeric vectors from `list`, `tuple`, or NumPy arrays.
 
-A benchmark target must be synchronous from BenchCaddy's perspective: it should
-return only after the measured work is complete.
+### `observe(...)`
 
-If your workload schedules asynchronous device or background work, make the
-target wait for completion before it returns. For example, GPU benchmarks should
-perform any required device synchronization inside the benchmarked function so
-that BenchCaddy measures the full workload rather than only the launch overhead.
+The public `observe(...)` decorator records isolated observations:
 
-`Sweep` executes targets in a fresh worker process. That means the target must
-be importable in the child process: use a module-level function, static method,
-or class method. Lambdas, nested or local functions, bound instance methods,
-arbitrary callable instances, and script-path targets are not supported by
-`Sweep`.
-
-The public `observe(...)` decorator records isolated observations by mode:
-
-- `@observe("time")` records call duration
-- `@observe("return")` records a normalized return value when supported
-- `@observe("time", "return")` records both
+- `@observe("time")`: record call duration
+- `@observe("return")`: record a normalized return value when supported
+- `@observe("time", "return")`: record both
 
 Observation labels come from the decorated function name or qualname.
 
-## Run a sweep from the CLI
+### Benchmark target contract
 
-If your benchmark target is importable, you can launch a sweep directly from the CLI instead of writing a small driver script. From the repository root, `examples/benchmark_nonlinear_transform.py` defines `benchmark_case` as an importable module-level target, so the equivalent CLI command is:
+`Sweep` executes targets in a fresh worker process. Your target must therefore be importable by the child process: use a module-level function, static method, or class method.
+
+Unsupported targets include lambdas, nested or local functions, bound instance methods, arbitrary callable instances, and script-path targets.
+
+BenchCaddy measures synchronous completion from its point of view. If your workload schedules asynchronous device or background work, the benchmarked function must wait for completion before returning.
+
+## CLI Workflow
+
+### Run a sweep from the CLI
+
+If the target is importable, you can launch a sweep without writing a separate driver script.
 
 ```bash
 benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
@@ -142,15 +146,9 @@ benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
     --verbose
 ```
 
-`benchcaddy sweep` accepts targets in `module:qualname` form and applies the same isolation rules as the Python API. In practice that means module-level functions, static methods, and class methods are supported when the worker process can import them.
+Use repeated `--param` flags for parameter grids. Each flag accepts either a JSON array such as `size=[512, 2048]` or a compact scalar list such as `variant=baseline,stabilized`.
 
-The command intentionally does not support lambdas, nested functions, bound instance methods, arbitrary callable objects, or inline code strings. If your target is currently defined in a script-local or non-importable form, move it into an importable module first.
-
-Parameter grids are passed with repeated `--param` flags. Each entry accepts either a JSON array such as `size=[512, 2048]` or a compact scalar list such as `variant=baseline,stabilized`.
-
-Use a JSON array when you need structured values, quoted strings, or stricter validation. Malformed JSON arrays are rejected early instead of being treated as plain strings.
-
-For CI or automation, `benchcaddy sweep` also supports machine-readable output:
+For machine-readable output:
 
 ```bash
 benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
@@ -160,101 +158,73 @@ benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
     --json
 ```
 
-`--json` cannot be combined with `--verbose`, because verbose mode emits live Rich progress output during the run.
+`--json` and `--verbose` cannot be combined.
 
-## Inspecting results using the CLI
+### Inspect recorded results
 
-List all recorded suites:
+List recorded suites:
 
 ```bash
 benchcaddy list
 ```
 
-`list` also shows the observation labels seen across runs in each suite.
-
-Show all recorded runs across the database:
+Show recent runs across the database:
 
 ```bash
 benchcaddy show
 benchcaddy show --numitems 10
 ```
 
-Show the recorded runs and environment for a suite:
+Show runs for a suite:
 
 ```bash
 benchcaddy show nonlinear-transform
 benchcaddy show nonlinear-transform --numitems 5
 ```
 
-Show the detailed timings for a single recorded run:
+Show one or more specific runs:
 
 ```bash
 benchcaddy show 12
 benchcaddy show 2.3
-```
-
-Composite run IDs use `SWEEP_ID.RUN_INDEX`, so `2.3` means the third run in
-the second recorded sweep.
-
-Show multiple runs side by side in a suite-style view:
-
-```bash
 benchcaddy show 4 2.3 1.2
 ```
 
-`show` limits list-style output to the latest 100 matching entries by record ID by default. Use `--numitems` / `-n` to change that cap, and when the output is capped BenchCaddy prints the exact rerun command with `-n <total>` needed to show all entries.
+Composite run IDs use `SWEEP_ID.RUN_INDEX`, so `2.3` means the third run in the second recorded sweep.
 
-When stored, `show` includes a **Return Value** field/column and displays `-` for missing values.
+### Compare, baseline, and trend
 
 Compare configurations within a suite by median runtime:
 
 ```bash
 benchcaddy compare nonlinear-transform
-```
-
-Compare a suite against a selected recorded run instead of the best run:
-
-```bash
 benchcaddy compare nonlinear-transform 2.4
 ```
 
-Pin a suite baseline and reuse it later without repeating the run ID:
-
-```bash
-benchcaddy compare nonlinear-transform 2.4 --pin-baseline
-benchcaddy compare nonlinear-transform --use-baseline
-```
-
-Restrict a suite comparison to runs that match selected configuration keys from
-the reference run:
+Restrict a suite comparison to runs matching selected configuration keys from the reference run:
 
 ```bash
 benchcaddy compare nonlinear-transform 2.4 --strict size
 benchcaddy compare nonlinear-transform 2.4 --strict size variant
-benchcaddy compare nonlinear-transform 2.4 --strict variant
 ```
 
 Compare two specific runs directly:
-
 
 ```bash
 benchcaddy compare 12 15
 benchcaddy compare 2.3 3
 ```
 
-Direct run comparisons include **Return Value** and **Return Error**:
-- numbers: relative error percentage (`abs(candidate - reference) / abs(reference) * 100`)
-- 1D numeric vectors (`list` / `tuple` / `numpy.ndarray`): relative error percentage based on Euclidean distance (`||candidate - reference|| / ||reference|| * 100`)
-- strings / booleans: equality (`equal` / `different`)
+Pin a suite baseline and reuse it later:
 
-In other words, numeric return errors are reported relative to the reference run's return value (or reference vector magnitude), not as a raw absolute distance.
+```bash
+benchcaddy baseline nonlinear-transform --pin 2.4 --note "post-optimization"
+benchcaddy baseline nonlinear-transform
+benchcaddy compare nonlinear-transform --baseline
+benchcaddy trend nonlinear-transform --baseline
+```
 
-`compare` also prints an statistical assessment panel for direct
-run comparisons and a compact findings panel for suite comparisons. These are
-derived from the stored samples and include bootstrap delta confidence
-intervals, significance estimates, and regression probabilities.
-
-Inspect the historical drift of a suite configuration over time:
+Trend a suite or a specific configuration over time:
 
 ```bash
 benchcaddy trend nonlinear-transform
@@ -262,27 +232,24 @@ benchcaddy trend nonlinear-transform 2.4
 benchcaddy trend nonlinear-transform --limit 8 --window 4
 ```
 
-`trend` shows a single-configuration timeline when you provide an explicit
-baseline run ID. Without a baseline, mixed-configuration suites render a
-compact per-configuration trend summary instead of implicitly choosing one
-configuration. Timeline output shows median confidence intervals, compares each
-run to the baseline, and labels rolling drift as stable, noisy, improving, or
-regressing.
+Direct run comparisons include return-value validation when values were stored:
 
-Inspect the current machine's benchmark reliability signals before recording or comparing runs:
+- numbers: relative error percentage
+- 1D numeric vectors: relative error percentage based on Euclidean distance
+- strings and booleans: equality (`equal` or `different`)
+
+### Check environment stability
+
+Inspect current machine reliability signals before recording or comparing runs:
 
 ```bash
 benchcaddy env
 benchcaddy env --json
 ```
 
-`env` reports timing noise, drift, affinity, and a few environment risk signals
-such as CPU load, battery state, thermal throttling, and frequency stability.
+`env` reports timing noise, drift, affinity, CPU load, battery state, thermal throttling, and frequency stability signals when available.
 
-## CI/CD integration
-
-BenchCaddy can support CI-oriented benchmark checks without introducing a
-separate command surface.
+## CI And Automation
 
 Use `compare --json` for machine-readable output:
 
@@ -293,13 +260,10 @@ benchcaddy compare 2.3 3 --json
 benchcaddy trend nonlinear-transform --json
 ```
 
-Use `compare --fail-if-regression PERCENT` to turn the existing regression
-classification into a CI gate. The supplied percent is used as the practical
-regression threshold for that invocation, so the reported classification and
-the exit condition stay aligned.
+Use `--fail-if-regression PERCENT` to turn the existing regression classification into a CI gate.
 
 ```bash
-benchcaddy compare nonlinear-transform --use-baseline --fail-if-regression 5%
+benchcaddy compare nonlinear-transform --baseline --fail-if-regression 5%
 benchcaddy compare 2.3 3 --json --fail-if-regression 5
 ```
 
@@ -310,36 +274,26 @@ Exit codes for gated compares:
 - `2`: CLI usage error
 - `3`: comparison completed and the regression gate failed
 
-When `--fail-if-regression` is enabled, the JSON payload includes a `gate`
-object with the threshold, pass/fail state, and any failing runs.
-
 Example GitHub Actions job:
 
 ```yaml
 jobs:
-    benchmark-gate:
-        runs-on: ubuntu-latest
-        steps:
-            - uses: actions/checkout@v4
-            - uses: actions/setup-python@v5
-              with:
-                python-version: '3.12'
-            - name: Install BenchCaddy
-              run: python -m pip install -e .
-            - name: Record benchmark run
-              run: python examples/benchmark_nonlinear_transform.py --database benchcaddy.db
-            - name: Enforce regression gate
-                            run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
+  benchmark-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install BenchCaddy
+        run: python -m pip install -e .
+      - name: Record benchmark run
+        run: python examples/benchmark_nonlinear_transform.py --database benchcaddy.db
+      - name: Enforce regression gate
+        run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
 ```
 
-For a baseline-driven workflow, pin the reference run once and reuse it in CI:
-
-```bash
-benchcaddy compare nonlinear-transform 2.4 --pin-baseline
-benchcaddy compare nonlinear-transform --use-baseline --json --fail-if-regression 5%
-```
-
-For more detail in the inspection output, add `--verbose`:
+For more detail in inspection output, add `--verbose`:
 
 ```bash
 benchcaddy --verbose show nonlinear-transform
@@ -347,35 +301,28 @@ benchcaddy --verbose compare nonlinear-transform
 benchcaddy --verbose trend nonlinear-transform
 ```
 
-## How to read the output
+## How To Read The Output
 
-- `Mean +- Std (s)` is the arithmetic mean and sample standard deviation across benchmark samples
+- `Mean +- Std (s)`: arithmetic mean and sample standard deviation across benchmark samples
 - suite comparisons are ranked by median runtime, not by the mean column
-- `Best Median (s)`, `Delta vs Best`, and direct-run `Median Delta` / `Median Percent Change` all use median runtime
-- `Median CI (s)` is a bootstrap confidence interval around the median runtime
-- `MAD (s)` is the median absolute deviation, a robust spread estimate less sensitive to outliers than standard deviation
-- `CV` is the coefficient of variation (`std / mean`) and is used as one of the noise-warning signals
-- `Warnings` surface low sample counts, wide confidence intervals, high relative variance, and detected outliers
-- direct and trend comparisons combine practical thresholds with significance estimates before labeling a run as regressing
-- observation tables report per-label timing aggregated across samples
-- `Total (s)` in observation tables is the sum across all samples for that label
+- `Best Median (s)`, `Delta vs Best`, and direct-run median deltas use median runtime
+- `Median CI (s)`: bootstrap confidence interval around the median runtime
+- `MAD (s)`: median absolute deviation, a robust spread estimate
+- `CV`: coefficient of variation (`std / mean`), used as one noise signal
+- `Warnings`: low sample counts, wide confidence intervals, high variance, and detected outliers
 
-These signals are conservative heuristics rather than guarantees. Treat
-`regressing` as a strong prompt to investigate, `noisy` as a sign to collect
-more samples or stabilize the environment, and `stable` as "no meaningful
-evidence of change under the current setup" rather than proof that nothing
-changed.
+These signals are heuristics, not proof. Treat `regressing` as a prompt to investigate and `noisy` as a sign to collect more samples or stabilize the environment.
 
-## Environment metadata
+## Recorded Environment Metadata
 
-Every recorded run stores environment details alongside the timing data, including:
+Each recorded run stores environment details alongside timing data, including:
 
 - Python version and operating system string
 - CPU model and total system memory
-- GPU model when it can be detected
+- GPU model when detectable
 - Git branch, commit hash, and dirty state when run inside a Git repository
 - process metadata such as PID, priority, affinity, and RSS memory
 
-# Something missing ?
+## Feedback
 
-BenchCaddy is intentionally lean. I built it to curb my own occasional "log-file-chaos," but I’m curious how you manage yours. If you’ve got a feature idea, a bug that’s getting on your nerves, or a suggestion for an export format that actually belongs in this decade, open an issue. I’m not trying to build a bloated enterprise behemoth; I just want this to be the best way to track performance without ever having to name a file timings_final_v4_fixed_REALLY.log again.
+BenchCaddy is intentionally lean. If a workflow is missing, open an issue with the benchmark shape you are trying to support. The goal is to make performance tracking less chaotic, not to create another excuse for `results_new_final_fixed.csv`.

@@ -8,6 +8,7 @@ support code.
 from __future__ import annotations
 
 from ..isolation import NoiseAnalyzer, collect_environment_state, get_affinity
+from . import baseline as _baseline  # noqa: F401
 from . import compare as _compare
 from . import environment as _environment  # noqa: F401
 from . import listing as _listing  # noqa: F401

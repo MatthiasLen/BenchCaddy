@@ -1727,21 +1727,18 @@ def test_cli_compare_with_pinned_baseline_and_config_filter_warns_when_baseline_
         environment_payload=environment_payload,
     )
 
-    pin_result = runner.invoke(
-        app,
-        ["compare", "baseline-filter-suite", "1.1", "--pin-baseline", "--database", str(database_path)],
-    )
+    pin_result = runner.invoke(app, ["baseline", "baseline-filter-suite", "--pin", "1.1", "--database", str(database_path)])
 
     assert pin_result.exit_code == 0
 
     result = runner.invoke(
         app,
-        ["compare", "baseline-filter-suite", "--use-baseline", "-c", "size=1024", "--database", str(database_path)],
+        ["compare", "baseline-filter-suite", "--baseline", "-c", "size=1024", "--database", str(database_path)],
     )
 
     assert result.exit_code == 0
     assert "Filter Warning" in result.stdout
-    assert "Pinned baseline 1.1 does not match the requested config filter." in result.stdout
+    assert "Baseline 1.1 does not match the requested config filter." in result.stdout
     assert "3.1" in result.stdout
     assert "2.1" in result.stdout
 
@@ -1910,7 +1907,7 @@ def test_trend_sparkline_compacts_to_requested_width() -> None:
     assert compact[-1] == cli_module._trend_sparkline(series)[-1]
 
 
-def test_cli_compare_can_pin_and_use_baseline(
+def test_cli_baseline_can_pin_and_compare_can_use_baseline(
     tmp_path: Path,
     environment_payload: dict[str, object],
 ) -> None:
@@ -1932,26 +1929,120 @@ def test_cli_compare_can_pin_and_use_baseline(
         environment_payload=environment_payload,
     )
 
-    pin_result = runner.invoke(
-        app,
-        ["compare", "baseline-suite", "2.1", "--pin-baseline", "--database", str(database_path)],
-    )
+    pin_result = runner.invoke(app, ["baseline", "baseline-suite", "--pin", "2.1", "--database", str(database_path)])
 
     assert pin_result.exit_code == 0
     assert "Baseline Updated" in pin_result.stdout
-    assert "Pinned baseline for baseline-suite:" in pin_result.stdout
+    assert "baseline-suite" in pin_result.stdout
     assert "2.1" in pin_result.stdout
 
     use_result = runner.invoke(
         app,
-        ["compare", "baseline-suite", "--use-baseline", "--database", str(database_path)],
+        ["compare", "baseline-suite", "--baseline", "--database", str(database_path)],
     )
 
     assert use_result.exit_code == 0
     assert "Statistical Findings" in use_result.stdout
     assert "Basis Source" in use_result.stdout
-    assert "pinned" in use_result.stdout
+    assert "baseline" in use_result.stdout
     assert "2.1" in use_result.stdout
+
+
+def test_cli_baseline_uses_latest_pinned_baseline(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-history-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-history-suite",
+        configuration={"variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    first_pin = runner.invoke(app, ["baseline", "baseline-history-suite", "--pin", "1.1", "--database", str(database_path)])
+    second_pin = runner.invoke(app, ["baseline", "baseline-history-suite", "--pin", "2.1", "--database", str(database_path)])
+    use_result = runner.invoke(
+        app,
+        ["compare", "baseline-history-suite", "--baseline", "--json", "--database", str(database_path)],
+    )
+
+    assert first_pin.exit_code == 0
+    assert second_pin.exit_code == 0
+    assert use_result.exit_code == 0
+
+    payload = json.loads(use_result.stdout)
+    assert payload["basis_source"] == "pinned"
+    assert payload["basis_run"]["display_id"] == "2.1"
+
+
+def test_cli_baseline_shows_history_and_note(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-notes-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="baseline-notes-suite",
+        configuration={"variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    pin_result = runner.invoke(
+        app,
+        ["baseline", "baseline-notes-suite", "--pin", "2.1", "--note", "release candidate", "--database", str(database_path)],
+    )
+    show_result = runner.invoke(app, ["baseline", "baseline-notes-suite", "--database", str(database_path)])
+
+    assert pin_result.exit_code == 0
+    assert show_result.exit_code == 0
+    assert "Current Baseline" in show_result.stdout
+    assert "Baseline History: baseline-notes-suite" in show_result.stdout
+    assert "release candidate" in show_result.stdout
+    assert "2.1" in show_result.stdout
+
+
+def test_cli_compare_rejects_removed_pin_baseline_option(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="removed-pin-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["compare", "removed-pin-suite", "1.1", "--pin-baseline", "--database", str(database_path)])
+    normalized_output = _strip_ansi(result.output)
+
+    assert result.exit_code == 2
+    assert "No such option" in normalized_output
+    assert "--pin-baseline" in normalized_output
 
 
 def test_cli_verbose_trend_preserves_warning_categories(
@@ -1989,20 +2080,28 @@ def test_cli_verbose_trend_preserves_warning_categories(
 def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
     test_runner = CliRunner()
 
+    baseline_result = test_runner.invoke(app, ["baseline", "--help"])
     show_result = test_runner.invoke(app, ["show", "--help"])
     compare_result = test_runner.invoke(app, ["compare", "--help"])
     sweep_result = test_runner.invoke(app, ["sweep", "--help"])
     trend_result = test_runner.invoke(app, ["trend", "--help"])
+    baseline_output = _plain_output(baseline_result.stdout)
     show_output = _plain_output(show_result.stdout)
     compare_output = _plain_output(compare_result.stdout)
     sweep_output = _plain_output(sweep_result.stdout)
     trend_output = _plain_output(trend_result.stdout)
 
+    assert baseline_result.exit_code == 0
+    assert "Inspect baseline history" in baseline_output
+    assert "--pin" in baseline_output
+    assert "--note" in baseline_output
+    assert "--json" in baseline_output
+
     assert show_result.exit_code == 0
     assert "Inspect all recorded runs, a suite, or specific run IDs." in show_output
     assert "Omit" in show_output
     assert "identifiers to list all recorded runs." in show_output
-    assert "pinned baseline" in show_output
+    assert "recorded baseline" in show_output
     assert "--no-stats" not in show_output
     assert "--confidence-level" not in show_output
     assert "--bootstrap-resamples" not in show_output
@@ -2011,10 +2110,11 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
     assert "Compare two runs directly" in compare_output
     assert "suite comparison" in compare_output
     assert "direct run-to-run" in compare_output
-    assert "show," in compare_output
-    assert "compare, and trend" in compare_output
+    assert "--baseline" in compare_output
+    assert "-b" in compare_output
     assert "--json" in compare_output
     assert "--fail-if-regression" in compare_output
+    assert "--pin-baseline" not in compare_output
 
     assert sweep_result.exit_code == 0
     assert "importable target reference" in sweep_output
@@ -2026,8 +2126,10 @@ def test_cli_help_mentions_show_defaults_and_compare_modes() -> None:
     assert "--verbose" in sweep_output
 
     assert trend_result.exit_code == 0
+    assert "--baseline" in trend_output
+    assert "-b" in trend_output
     assert "--json" in trend_output
-    assert "--pinned" in trend_output
+    assert "--pinned" not in trend_output
 
 
 def test_cli_trend_shows_time_series_for_matching_configuration(
@@ -2149,7 +2251,7 @@ def test_cli_trend_shows_summary_for_mixed_suite_without_baseline(
     assert "noisy" in output
 
 
-def test_cli_trend_uses_pinned_baseline_for_mixed_suite_when_requested(
+def test_cli_trend_uses_baseline_for_mixed_suite_when_requested(
     tmp_path: Path,
     environment_payload: dict[str, object],
 ) -> None:
@@ -2178,16 +2280,13 @@ def test_cli_trend_uses_pinned_baseline_for_mixed_suite_when_requested(
         environment_payload=environment_payload,
     )
 
-    pin_result = runner.invoke(
-        app,
-        ["compare", "pinned-trend-suite", "1.1", "--pin-baseline", "--database", str(database_path)],
-    )
+    pin_result = runner.invoke(app, ["baseline", "pinned-trend-suite", "--pin", "1.1", "--database", str(database_path)])
 
     assert pin_result.exit_code == 0
 
     result = runner.invoke(
         app,
-        ["trend", "pinned-trend-suite", "--pinned", "--database", str(database_path)],
+        ["trend", "pinned-trend-suite", "--baseline", "--database", str(database_path)],
     )
 
     assert result.exit_code == 0
@@ -2196,7 +2295,7 @@ def test_cli_trend_uses_pinned_baseline_for_mixed_suite_when_requested(
     assert "1.1" in result.stdout
     assert "2.1" in result.stdout
     assert "3.1" not in result.stdout
-    assert "pinned" in result.stdout
+    assert "baseline" in result.stdout
 
 
 def test_cli_trend_can_filter_by_config_and_use_best_filtered_run(
@@ -2246,7 +2345,7 @@ def test_cli_trend_can_filter_by_config_and_use_best_filtered_run(
     assert "3.1" not in result.stdout
 
 
-def test_cli_trend_rejects_config_with_pinned_or_explicit_baseline(
+def test_cli_trend_rejects_config_with_baseline_or_explicit_baseline(
     tmp_path: Path,
     environment_payload: dict[str, object],
 ) -> None:
@@ -2265,18 +2364,18 @@ def test_cli_trend_rejects_config_with_pinned_or_explicit_baseline(
         app,
         ["trend", "invalid-filter-trend-suite", "1.1", "-c", "size=512", "--database", str(database_path)],
     )
-    pinned_result = runner.invoke(
+    baseline_result = runner.invoke(
         app,
-        ["trend", "invalid-filter-trend-suite", "-c", "size=512", "--pinned", "--database", str(database_path)],
+        ["trend", "invalid-filter-trend-suite", "-c", "size=512", "--baseline", "--database", str(database_path)],
     )
 
     assert explicit_result.exit_code == 2
     assert "--config/-c cannot be combined with an explicit baseline run ID." in explicit_result.stdout
-    assert pinned_result.exit_code == 2
-    assert "--config/-c cannot be combined with --pinned." in pinned_result.stdout
+    assert baseline_result.exit_code == 2
+    assert "--config/-c cannot be combined with --baseline/-b." in baseline_result.stdout
 
 
-def test_cli_trend_ignores_pinned_baseline_without_flag(
+def test_cli_trend_ignores_baseline_without_flag(
     tmp_path: Path,
     environment_payload: dict[str, object],
 ) -> None:
@@ -2305,10 +2404,7 @@ def test_cli_trend_ignores_pinned_baseline_without_flag(
         environment_payload=environment_payload,
     )
 
-    pin_result = runner.invoke(
-        app,
-        ["compare", "default-trend-suite", "1.1", "--pin-baseline", "--database", str(database_path)],
-    )
+    pin_result = runner.invoke(app, ["baseline", "default-trend-suite", "--pin", "1.1", "--database", str(database_path)])
 
     assert pin_result.exit_code == 0
 
@@ -2324,7 +2420,7 @@ def test_cli_trend_ignores_pinned_baseline_without_flag(
     assert "1024" in result.stdout
 
 
-def test_cli_trend_pinned_requires_existing_pinned_baseline(
+def test_cli_trend_baseline_requires_existing_baseline(
     tmp_path: Path,
     environment_payload: dict[str, object],
 ) -> None:
@@ -2341,11 +2437,11 @@ def test_cli_trend_pinned_requires_existing_pinned_baseline(
 
     result = runner.invoke(
         app,
-        ["trend", "unpinned-cli-trend-suite", "--pinned", "--database", str(database_path)],
+        ["trend", "unpinned-cli-trend-suite", "--baseline", "--database", str(database_path)],
     )
 
     assert result.exit_code == 1
-    assert "does not have a pinned baseline" in result.stdout
+    assert "does not have a recorded baseline" in result.stdout
 
 
 def test_cli_trend_compacts_long_median_graph_without_right_ellipsis(
@@ -2481,7 +2577,7 @@ def test_cli_compare_json_output_reports_suite_regression_gate_failure(
     assert payload["gate"]["failing_runs"][0]["display_id"] == "2.1"
 
 
-def test_cli_compare_json_output_includes_baseline_update_when_pinning(
+def test_cli_baseline_json_output_includes_pin_update(
     tmp_path: Path,
     environment_payload: dict[str, object],
 ) -> None:
@@ -2503,16 +2599,13 @@ def test_cli_compare_json_output_includes_baseline_update_when_pinning(
         environment_payload=environment_payload,
     )
 
-    result = runner.invoke(
-        app,
-        ["compare", "json-pin-suite", "2.1", "--pin-baseline", "--json", "--database", str(database_path)],
-    )
+    result = runner.invoke(app, ["baseline", "json-pin-suite", "--pin", "2.1", "--note", "manual", "--json", "--database", str(database_path)])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["comparison_mode"] == "suite"
-    assert payload["baseline_update"]["display_id"] == "2.1"
-    assert "Baseline Updated" not in result.stdout
+    assert payload["pin_update"]["display_id"] == "2.1"
+    assert payload["current_baseline"]["run"]["display_id"] == "2.1"
+    assert payload["current_baseline"]["note"] == "manual"
 
 
 def test_cli_trend_json_output_is_machine_readable(

@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from ..db import compare_runs, compare_suite_runs, get_database_path, get_run_details, set_suite_baseline
+from ..db import compare_runs, compare_suite_runs, get_database_path, get_run_details
 from ..presentation import (
     dump_json,
     format_interval,
@@ -73,10 +73,9 @@ def _run_direct_compare(
     strict_keys: list[str],
     config_filter: dict[str, object] | None,
     use_baseline: bool,
-    pin_baseline: bool,
 ) -> dict[str, object]:
-    if strict_keys or config_filter or use_baseline or pin_baseline:
-        _console().print("--strict, --config/-c, --use-baseline, and --pin-baseline are only supported for suite comparisons.")
+    if strict_keys or config_filter or use_baseline:
+        _console().print("--strict, --config/-c, and --baseline/-b are only supported for suite comparisons.")
         raise typer.Exit(code=2)
 
     comparison = compare_runs(left_run_id, right_run_id, database_path, analysis_options=analysis_options)
@@ -110,13 +109,9 @@ def _validate_suite_compare_options(
     *,
     right_run_id: int | tuple[int, int] | None,
     use_baseline: bool,
-    pin_baseline: bool,
 ) -> None:
     if use_baseline and right_run_id is not None:
-        _console().print("--use-baseline cannot be combined with an explicit reference run ID.")
-        raise typer.Exit(code=2)
-    if pin_baseline and right_run_id is None:
-        _console().print("--pin-baseline requires a suite comparison with a reference run ID.")
+        _console().print("--baseline/-b cannot be combined with an explicit reference run ID.")
         raise typer.Exit(code=2)
 
 
@@ -151,32 +146,9 @@ def _raise_for_suite_compare_error(
         _console().print(f"Reference run '{right}' does not match the requested config filter{suffix}")
         raise typer.Exit(code=1)
     if error == "baseline_not_found":
-        _console().print(f"Suite '{left}' does not have a pinned baseline in {database_path}.")
+        _console().print(f"Suite '{left}' does not have a recorded baseline in {database_path}.")
         raise typer.Exit(code=1)
     return comparison
-
-
-def _pin_suite_baseline_if_requested(
-    *,
-    suite_name: str,
-    right_run_id: int | tuple[int, int] | None,
-    database_path: Path,
-    analysis_options: AnalysisOptions,
-    pin_baseline: bool,
-    emit: bool = True,
-) -> dict[str, object] | None:
-    if not pin_baseline:
-        return None
-
-    pinned = set_suite_baseline(suite_name, right_run_id, database_path, analysis_options=analysis_options)
-    if pinned is not None and not pinned.get("error") and emit:
-        _console().print(
-            Panel.fit(
-                f"Pinned baseline for {suite_name}: {pinned['display_id']} ({pinned['id']})",
-                title="Baseline Updated",
-            )
-        )
-    return pinned
 
 
 def _parse_percent_option(value: str, *, option_name: str) -> float:
@@ -349,7 +321,7 @@ def _suite_findings_panel(comparison: dict[str, object]) -> Panel:
         [
             ("Regressing Runs", ", ".join(regressing) if regressing else "-"),
             ("Noisy Runs", ", ".join(noisy) if noisy else "-"),
-            ("Basis Source", str(comparison.get("basis_source", "best"))),
+            ("Basis Source", "baseline" if comparison.get("basis_source") == "pinned" else str(comparison.get("basis_source", "best"))),
         ],
     )
 
@@ -569,7 +541,7 @@ def _print_suite_comparison(comparison: dict[str, object]) -> None:
         _console().print(comparison_basis)
 
 
-@app.command("compare", help="Compare two runs directly, compare a suite to its best run, or compare a suite to a selected or pinned reference run.")
+@app.command("compare", help="Compare two runs directly, compare a suite to its best run, or compare a suite to a selected or baseline reference run.")
 def compare_command(
     left: Annotated[
         str,
@@ -612,15 +584,9 @@ def compare_command(
     use_baseline: Annotated[
         bool,
         typer.Option(
-            "--use-baseline",
-            help="Use the pinned suite baseline as the comparison reference instead of the suite's best run.",
-        ),
-    ] = False,
-    pin_baseline: Annotated[
-        bool,
-        typer.Option(
-            "--pin-baseline",
-            help="Persist the supplied suite reference run as the suite baseline for future show, compare, and trend commands.",
+            "--baseline",
+            "-b",
+            help="Use the suite baseline as the comparison reference instead of the suite's best run.",
         ),
     ] = False,
     confidence_level: CompareConfidenceLevelOption = 0.95,
@@ -677,7 +643,6 @@ def compare_command(
             strict_keys=strict_keys,
             config_filter=config_filter,
             use_baseline=use_baseline,
-            pin_baseline=pin_baseline,
         )
         comparison_mode = "direct"
         render = _print_run_comparison
@@ -685,7 +650,6 @@ def compare_command(
         _validate_suite_compare_options(
             right_run_id=right_run_id,
             use_baseline=use_baseline,
-            pin_baseline=pin_baseline,
         )
         strict_keys = _resolve_compare_strict_keys(
             strict_keys,
@@ -708,16 +672,6 @@ def compare_command(
             right=right,
             database_path=database_path,
         )
-        pinned = _pin_suite_baseline_if_requested(
-            suite_name=left,
-            right_run_id=right_run_id,
-            database_path=database_path,
-            analysis_options=analysis_options,
-            pin_baseline=pin_baseline,
-            emit=not json_output,
-        )
-        if pinned is not None and json_output:
-            comparison["baseline_update"] = pinned
         comparison_mode = "suite"
         render = _print_suite_comparison
 

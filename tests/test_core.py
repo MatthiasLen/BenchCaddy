@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from rich.console import Console
+from sqlalchemy import event
 from sqlalchemy.exc import IntegrityError, StatementError
 
 import benchcaddy
@@ -19,13 +20,14 @@ from benchcaddy.db import (
     compare_suite_runs,
     create_sweep_execution,
     get_run_details,
+    get_suite_baseline_history,
     get_suite_details,
     get_suite_trend,
     list_suite_summaries,
     record_benchmark_run,
     set_suite_baseline,
 )
-from benchcaddy.db._sqlite.models import Base, EnvironmentInfo
+from benchcaddy.db._sqlite.models import Base, BenchmarkSuiteBaselineEvent, EnvironmentInfo
 from benchcaddy.db._sqlite.session import DatabaseSchemaError, db_session, initialize_database
 from benchcaddy.isolation import IsolatedRunResult
 from benchcaddy.isolation import observe as isolated_observe
@@ -452,6 +454,73 @@ def test_suite_trend_with_pinned_baseline_keeps_timeline_for_mixed_configuration
         {"size": 1024, "variant": "baseline"},
     ]
     assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1"]
+
+
+def test_set_suite_baseline_appends_history_and_latest_pin_wins(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="baseline-history-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "baseline"},
+        samples=[0.100, 0.100],
+        observations=[],
+        median_seconds=0.100,
+        min_seconds=0.100,
+        max_seconds=0.100,
+        std_seconds=0.0,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="baseline-history-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "candidate"},
+        samples=[0.120, 0.120],
+        observations=[],
+        median_seconds=0.120,
+        min_seconds=0.120,
+        max_seconds=0.120,
+        std_seconds=0.0,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    first_pin = set_suite_baseline("baseline-history-suite", 1, database_path, note="release-candidate")
+    second_pin = set_suite_baseline("baseline-history-suite", 2, database_path, note="manual override")
+
+    assert first_pin is not None
+    assert second_pin is not None
+    assert first_pin["display_id"] == "1.1"
+    assert second_pin["display_id"] == "2.1"
+
+    with db_session(database_path) as session:
+        events = session.query(BenchmarkSuiteBaselineEvent).order_by(BenchmarkSuiteBaselineEvent.id.asc()).all()
+
+    assert [event.run_id for event in events] == [1, 2]
+    assert [event.note for event in events] == ["release-candidate", "manual override"]
+
+    history = get_suite_baseline_history("baseline-history-suite", database_path)
+    assert history is not None
+    assert history["current_baseline"] is not None
+    assert history["current_baseline"]["note"] == "manual override"
+    assert [entry["run"]["display_id"] for entry in history["history"]] == ["2.1", "1.1"]
+    assert [entry["note"] for entry in history["history"]] == ["manual override", "release-candidate"]
+    assert history["history"][0]["is_current"] is True
+    assert history["history"][1]["is_current"] is False
+
+    details = get_suite_details("baseline-history-suite", database_path)
+    assert details is not None
+    assert details["baseline_run"] is not None
+    assert details["baseline_run"]["display_id"] == "2.1"
+
+    comparison = compare_suite_runs("baseline-history-suite", database_path=database_path, use_pinned_baseline=True)
+    assert comparison is not None
+    assert comparison["basis_source"] == "pinned"
+    assert comparison["basis_run"]["display_id"] == "2.1"
 
 
 def test_suite_trend_ignores_pinned_baseline_without_flag(
@@ -1865,7 +1934,7 @@ def test_initialize_database_rejects_missing_unique_sweep_run_index(tmp_path: Pa
                 target_return_value JSON,
                 created_at DATETIME
             );
-            CREATE TABLE benchmark_suite_baselines (
+            CREATE TABLE benchmark_suite_baseline_events (
                 id INTEGER PRIMARY KEY,
                 suite_id INTEGER NOT NULL,
                 run_id INTEGER NOT NULL,
@@ -1873,6 +1942,8 @@ def test_initialize_database_rejects_missing_unique_sweep_run_index(tmp_path: Pa
             );
             CREATE INDEX ix_benchmark_runs_suite_history
                 ON benchmark_runs (suite_id, sweep_execution_id, run_index, id);
+            CREATE INDEX ix_benchmark_suite_baseline_events_suite_history
+                ON benchmark_suite_baseline_events (suite_id, created_at, id);
             """
         )
         connection.commit()
@@ -1881,3 +1952,130 @@ def test_initialize_database_rejects_missing_unique_sweep_run_index(tmp_path: Pa
 
     with pytest.raises(DatabaseSchemaError, match=r"missing unique indexes: benchmark_runs\(sweep_execution_id, run_index\)"):
         initialize_database(database_path)
+
+
+def test_initialize_database_reports_missing_baseline_history_index_as_non_unique(tmp_path: Path) -> None:
+    database_path = tmp_path / "missing-baseline-history-index.db"
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE benchmark_suites (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                target_name VARCHAR(255) NOT NULL,
+                created_at DATETIME
+            );
+            CREATE TABLE benchmark_sweep_executions (
+                id INTEGER PRIMARY KEY,
+                suite_id INTEGER NOT NULL,
+                created_at DATETIME
+            );
+            CREATE TABLE environment_info (
+                id INTEGER PRIMARY KEY,
+                python_version VARCHAR(64) NOT NULL,
+                operating_system VARCHAR(255) NOT NULL,
+                cpu_model VARCHAR(255) NOT NULL,
+                total_memory_bytes BIGINT,
+                gpu_model VARCHAR(255),
+                git_branch VARCHAR(255),
+                git_commit_hash VARCHAR(64),
+                git_dirty BOOLEAN,
+                process_state JSON NOT NULL,
+                created_at DATETIME
+            );
+            CREATE TABLE benchmark_runs (
+                id INTEGER PRIMARY KEY,
+                suite_id INTEGER NOT NULL,
+                sweep_execution_id INTEGER,
+                run_index INTEGER,
+                environment_id INTEGER NOT NULL,
+                configuration JSON NOT NULL,
+                samples JSON NOT NULL,
+                observations JSON NOT NULL,
+                median_seconds FLOAT NOT NULL,
+                min_seconds FLOAT,
+                max_seconds FLOAT,
+                std_seconds FLOAT,
+                target_return_value JSON,
+                created_at DATETIME
+            );
+            CREATE TABLE benchmark_suite_baseline_events (
+                id INTEGER PRIMARY KEY,
+                suite_id INTEGER NOT NULL,
+                run_id INTEGER NOT NULL,
+                note VARCHAR(255),
+                created_at DATETIME
+            );
+            CREATE UNIQUE INDEX ix_benchmark_runs_sweep_run
+                ON benchmark_runs (sweep_execution_id, run_index);
+            CREATE INDEX ix_benchmark_runs_suite_history
+                ON benchmark_runs (suite_id, sweep_execution_id, run_index, id);
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(DatabaseSchemaError, match=r"missing indexes: benchmark_suite_baseline_events\(suite_id, created_at, id\)"):
+        initialize_database(database_path)
+
+
+def test_get_suite_baseline_history_eager_loads_runs(tmp_path: Path, environment_payload: dict[str, object]) -> None:
+    database_path = tmp_path / "baseline-history-queries.db"
+
+    record_benchmark_run(
+        suite_name="baseline-query-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "baseline"},
+        samples=[0.100, 0.100],
+        observations=[],
+        median_seconds=0.100,
+        min_seconds=0.100,
+        max_seconds=0.100,
+        std_seconds=0.0,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="baseline-query-suite",
+        target_name="benchmark_target",
+        configuration={"variant": "candidate"},
+        samples=[0.120, 0.120],
+        observations=[],
+        median_seconds=0.120,
+        min_seconds=0.120,
+        max_seconds=0.120,
+        std_seconds=0.0,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    set_suite_baseline("baseline-query-suite", 1, database_path, note="release-candidate")
+    set_suite_baseline("baseline-query-suite", 2, database_path, note="manual override")
+
+    with db_session(database_path) as session:
+        engine = session.bind
+        statement_count = 0
+
+        def count_selects(
+            _conn: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            nonlocal statement_count
+            if statement.lstrip().upper().startswith("SELECT"):
+                statement_count += 1
+
+        assert engine is not None
+        event.listen(engine, "before_cursor_execute", count_selects)
+        try:
+            history = get_suite_baseline_history("baseline-query-suite", database_path)
+        finally:
+            event.remove(engine, "before_cursor_execute", count_selects)
+
+    assert history is not None
+    assert [entry["run"]["display_id"] for entry in history["history"]] == ["2.1", "1.1"]
+    assert statement_count <= 2

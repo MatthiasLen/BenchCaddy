@@ -25,20 +25,22 @@ class BenchmarkSuite(Base):
     target_name: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
-    baseline: Mapped[BenchmarkSuiteBaseline | None] = relationship(back_populates="suite")
+    baseline_events: Mapped[list[BenchmarkSuiteBaselineEvent]] = relationship(back_populates="suite")
     sweep_executions: Mapped[list[BenchmarkSweepExecution]] = relationship(back_populates="suite")
     runs: Mapped[list[BenchmarkRun]] = relationship(back_populates="suite")
 
 
-class BenchmarkSuiteBaseline(Base):
-    __tablename__ = "benchmark_suite_baselines"
+class BenchmarkSuiteBaselineEvent(Base):
+    __tablename__ = "benchmark_suite_baseline_events"
+    __table_args__ = (Index("ix_benchmark_suite_baseline_events_suite_history", "suite_id", "created_at", "id"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    suite_id: Mapped[int] = mapped_column(ForeignKey("benchmark_suites.id"), unique=True, index=True)
+    suite_id: Mapped[int] = mapped_column(ForeignKey("benchmark_suites.id"), index=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("benchmark_runs.id"), index=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[Any] = mapped_column(DateTime(timezone=True), server_default=now())
 
-    suite: Mapped[BenchmarkSuite] = relationship(back_populates="baseline")
+    suite: Mapped[BenchmarkSuite] = relationship(back_populates="baseline_events")
     run: Mapped[BenchmarkRun] = relationship()
 
 
