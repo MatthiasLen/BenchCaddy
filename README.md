@@ -3,14 +3,11 @@
 [![CI](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml)
 
 BenchCaddy is a lightweight Python benchmarking toolkit for software developers, AI engineers, and data scientists who need repeatable performance measurements without building custom log-file workflows.
-
 It runs parameter sweeps in an isolated worker process, stores raw samples and environment metadata in SQLite, and gives you a CLI to inspect runs, compare configurations, pin baselines, and track drift over time.
-
 It is for the gap between full profilers and a directory full of `timings_final_v4_really.csv`.
 
-
-![BenchCaddy trend summary overview](./bc_trends.png)
-
+<br>
+<img src="https://raw.githubusercontent.com/MatthiasLen/BenchCaddy/main/bc_trends.png" alt="BenchCaddy trend summary overview" width="640"></img>
 
 ## Why BenchCaddy
 
