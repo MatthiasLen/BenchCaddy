@@ -155,8 +155,7 @@ def _comparison_response(*, tool_name: str, comparison: dict[str, Any], confiden
             status="inconclusive",
             reason="noisy_samples",
             result=comparison,
-            suggested_action="Increase samples or narrow the comparison scope, then rerun compare_suite."
-            ,
+            suggested_action="Increase samples or narrow the comparison scope, then rerun compare_suite.",
             confidence=confidence,
         )
     return _response(

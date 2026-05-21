@@ -73,8 +73,6 @@ def get_suite(
         status="inconclusive",
         reason="no_runs_matched_scope" if config_filter else "suite_has_no_runs",
         result=result,
-        suggested_action=(
-            "Relax the filter or record more runs for this suite." if config_filter else "Record new runs for this suite before comparing or trending it."
-        ),
+        suggested_action=("Relax the filter or record more runs for this suite." if config_filter else "Record new runs for this suite before comparing or trending it."),
         confidence=None,
     )
