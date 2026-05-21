@@ -6,7 +6,18 @@ from typing import Any
 from benchcaddy.db import compare_suite_runs as _compare_suite_runs
 
 from .._app import app
-from .._shared import DEFAULT_LIMIT, _analysis_options, _capped_rows, _comparison_response, _invalid_run_id_response, _response, _run_id
+from .._shared import (
+    DEFAULT_LIMIT,
+    ResponseDetail,
+    _analysis_options,
+    _capped_rows,
+    _comparison_response,
+    _invalid_response_detail_response,
+    _invalid_run_id_response,
+    _normalized_response_detail,
+    _response,
+    _run_id,
+)
 
 
 @app.tool(description="Compare all runs in one suite against the chosen basis run or pinned baseline.")
@@ -18,6 +29,7 @@ def compare_suite(
     config_filter: dict[str, Any] | None = None,
     limit: int | None = DEFAULT_LIMIT,
     database_path: str | None = None,
+    response_detail: ResponseDetail = "summary",
     confidence_level: float = 0.95,
     bootstrap_resamples: int = 2000,
     bootstrap_seed: int = 0,
@@ -29,9 +41,19 @@ def compare_suite(
     drift_window_size: int = 5,
 ) -> dict[str, Any]:
     try:
+        normalized_response_detail = _normalized_response_detail(response_detail)
+    except ValueError:
+        return _invalid_response_detail_response(tool_name="compare_suite", response_detail=response_detail)
+
+    try:
         normalized_reference = None if reference_run_id is None else _run_id(reference_run_id)
     except ValueError:
-        return _invalid_run_id_response(tool_name="compare_suite", run_id=reference_run_id, suggested_action="Use a run ID like 3 or 3.2.")
+        return _invalid_run_id_response(
+            tool_name="compare_suite",
+            run_id=reference_run_id,
+            suggested_action="Use a run ID like 3 or 3.2.",
+            response_detail=normalized_response_detail,
+        )
 
     comparison = _compare_suite_runs(
         suite_name,
@@ -59,6 +81,7 @@ def compare_suite(
             reason="suite_not_found",
             error_code="suite_not_found",
             suggested_action="Use list_suites to inspect available suites.",
+            response_detail=normalized_response_detail,
         )
 
     error_code = comparison.get("error")
@@ -70,6 +93,7 @@ def compare_suite(
             error_code="reference_run_not_found",
             result=comparison,
             suggested_action="Use get_run or get_suite to inspect available run IDs.",
+            response_detail=normalized_response_detail,
         )
     if error_code == "reference_run_wrong_suite":
         return _response(
@@ -79,6 +103,7 @@ def compare_suite(
             error_code="reference_run_wrong_suite",
             result=comparison,
             suggested_action="Choose a reference run from the requested suite.",
+            response_detail=normalized_response_detail,
         )
     if error_code == "strict_requires_reference_run":
         return _response(
@@ -88,6 +113,7 @@ def compare_suite(
             error_code="strict_requires_reference_run",
             result=comparison,
             suggested_action="Pass a suite name and reference run ID before using strict_keys.",
+            response_detail=normalized_response_detail,
         )
     if error_code == "strict_keys_not_found":
         return _response(
@@ -97,6 +123,7 @@ def compare_suite(
             error_code="strict_keys_not_found",
             result=comparison,
             suggested_action="Use keys that exist on the reference run configuration.",
+            response_detail=normalized_response_detail,
         )
     if error_code == "reference_run_does_not_match_config_filter":
         return _response(
@@ -106,6 +133,7 @@ def compare_suite(
             error_code="reference_run_does_not_match_config_filter",
             result=comparison,
             suggested_action="Choose a reference run that matches the config filter or relax the filter.",
+            response_detail=normalized_response_detail,
         )
     if error_code == "baseline_not_found":
         return _response(
@@ -115,8 +143,15 @@ def compare_suite(
             error_code="baseline_not_found",
             result=comparison,
             suggested_action="Call pin_baseline before using use_pinned_baseline.",
+            response_detail=normalized_response_detail,
         )
 
     comparison["comparison_mode"] = "suite"
     _capped_rows(comparison, "runs", limit)
-    return _comparison_response(tool_name="compare_suite", comparison=comparison, confidence_level=confidence_level, mode="suite")
+    return _comparison_response(
+        tool_name="compare_suite",
+        comparison=comparison,
+        confidence_level=confidence_level,
+        mode="suite",
+        response_detail=normalized_response_detail,
+    )

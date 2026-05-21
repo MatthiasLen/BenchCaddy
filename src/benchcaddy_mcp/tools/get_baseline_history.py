@@ -5,7 +5,15 @@ from typing import Any
 from benchcaddy.db import get_suite_baseline_history as _get_suite_baseline_history
 
 from .._app import app
-from .._shared import DEFAULT_LIMIT, _analysis_options, _capped_rows, _response
+from .._shared import (
+    DEFAULT_LIMIT,
+    ResponseDetail,
+    _analysis_options,
+    _capped_rows,
+    _invalid_response_detail_response,
+    _normalized_response_detail,
+    _response,
+)
 
 
 @app.tool(description="Show the baseline pin history for one suite.")
@@ -13,6 +21,7 @@ def get_baseline_history(
     suite_name: str,
     database_path: str | None = None,
     limit: int | None = DEFAULT_LIMIT,
+    response_detail: ResponseDetail = "summary",
     include_analysis: bool = False,
     confidence_level: float = 0.95,
     bootstrap_resamples: int = 2000,
@@ -24,6 +33,11 @@ def get_baseline_history(
     regression_threshold_percent: float = 5.0,
     drift_window_size: int = 5,
 ) -> dict[str, Any]:
+    try:
+        normalized_response_detail = _normalized_response_detail(response_detail)
+    except ValueError:
+        return _invalid_response_detail_response(tool_name="get_baseline_history", response_detail=response_detail)
+
     history = _get_suite_baseline_history(
         suite_name,
         database_path,
@@ -48,6 +62,7 @@ def get_baseline_history(
             reason="suite_not_found",
             error_code="suite_not_found",
             suggested_action="Use list_suites to inspect available suites.",
+            response_detail=normalized_response_detail,
         )
 
     _capped_rows(history, "history", limit)
@@ -60,6 +75,7 @@ def get_baseline_history(
             result=history,
             suggested_action="Call pin_baseline with a known-good run before relying on baseline history.",
             confidence=None,
+            response_detail=normalized_response_detail,
         )
     return _response(
         tool_name="get_baseline_history",
@@ -68,4 +84,5 @@ def get_baseline_history(
         result=history,
         suggested_action="Use compare_suite or trend_suite with this suite.",
         confidence=None,
+        response_detail=normalized_response_detail,
     )

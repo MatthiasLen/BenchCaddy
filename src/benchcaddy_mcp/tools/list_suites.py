@@ -5,11 +5,16 @@ from typing import Any
 from benchcaddy.db import list_suite_summaries
 
 from .._app import app
-from .._shared import _resolved_database_path, _response
+from .._shared import ResponseDetail, _invalid_response_detail_response, _normalized_response_detail, _resolved_database_path, _response
 
 
 @app.tool(description="List the benchmark suites available in a BenchCaddy database.")
-def list_suites(database_path: str | None = None) -> dict[str, Any]:
+def list_suites(database_path: str | None = None, response_detail: ResponseDetail = "summary") -> dict[str, Any]:
+    try:
+        normalized_response_detail = _normalized_response_detail(response_detail)
+    except ValueError:
+        return _invalid_response_detail_response(tool_name="list_suites", response_detail=response_detail)
+
     resolved_database_path = _resolved_database_path(database_path)
     suites = list_suite_summaries(resolved_database_path)
     result = {
@@ -25,6 +30,7 @@ def list_suites(database_path: str | None = None) -> dict[str, Any]:
             suggested_action="Record a benchmark sweep to create suite history.",
             confidence=None,
             result=result,
+            response_detail=normalized_response_detail,
         )
     return _response(
         tool_name="list_suites",
@@ -33,4 +39,5 @@ def list_suites(database_path: str | None = None) -> dict[str, Any]:
         suggested_action="Use get_suite or compare_suite for the next step.",
         result=result,
         confidence=None,
+        response_detail=normalized_response_detail,
     )

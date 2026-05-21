@@ -113,21 +113,22 @@ def test_live_mcp_stdio_smoke(
             list_payload = await _call_tool(client, "list_suites", {"database_path": str(database_path)})
             assert list_payload["status"] == "pass"
             assert list_payload["reason"] == "suite_inventory_available"
-            assert list_payload["result"]["suite_count"] == 1
-            assert list_payload["result"]["suites"][0]["suite_name"] == suite_name
+            assert list_payload["response_detail"] == "summary"
+            assert list_payload["summary"]["suite_count"] == 1
+            assert list_payload["summary"]["suites"][0]["suite_name"] == suite_name
 
             suite_payload = await _call_tool(client, "get_suite", {"suite_name": suite_name, "database_path": str(database_path)})
             assert suite_payload["status"] == "pass"
             assert suite_payload["reason"] == "suite_details_available"
-            assert suite_payload["result"]["total_run_count"] == 4
+            assert suite_payload["summary"]["total_run_count"] == 4
 
-            run_a = suite_payload["result"]["runs"][0]["display_id"]
-            run_b = suite_payload["result"]["runs"][1]["display_id"]
+            run_a = suite_payload["summary"]["runs"][0]["display_id"]
+            run_b = suite_payload["summary"]["runs"][1]["display_id"]
 
             run_payload = await _call_tool(client, "get_run", {"run_id": run_a, "database_path": str(database_path)})
             assert run_payload["status"] == "pass"
             assert run_payload["reason"] == "run_details_available"
-            assert run_payload["result"]["run"]["display_id"] == run_a
+            assert run_payload["summary"]["run"]["display_id"] == run_a
 
             compare_runs_payload = await _call_tool(
                 client,
@@ -136,8 +137,21 @@ def test_live_mcp_stdio_smoke(
             )
             assert compare_runs_payload["status"] == "pass"
             assert compare_runs_payload["reason"] == "comparison_complete"
-            assert isinstance(compare_runs_payload["result"]["percent_change"], float)
-            assert isinstance(compare_runs_payload["result"]["comparison_analysis"]["classification"], str)
+            assert isinstance(compare_runs_payload["summary"]["percent_change"], float)
+            assert isinstance(compare_runs_payload["summary"]["classification"], str)
+
+            compare_runs_full_payload = await _call_tool(
+                client,
+                "compare_runs",
+                {
+                    "left_run_id": run_a,
+                    "right_run_id": run_b,
+                    "database_path": str(database_path),
+                    "response_detail": "full",
+                },
+            )
+            assert compare_runs_full_payload["response_detail"] == "full"
+            assert isinstance(compare_runs_full_payload["result"]["percent_change"], float)
 
             compare_suite_payload = await _call_tool(
                 client,
@@ -151,9 +165,9 @@ def test_live_mcp_stdio_smoke(
             )
             assert compare_suite_payload["status"] == "pass"
             assert compare_suite_payload["reason"] == "comparison_complete"
-            assert compare_suite_payload["result"]["comparison_mode"] == "suite"
-            assert compare_suite_payload["result"]["total_run_count"] == 2
-            assert compare_suite_payload["result"]["truncated"] is False
+            assert compare_suite_payload["summary"]["comparison_mode"] == "suite"
+            assert compare_suite_payload["summary"]["total_run_count"] == 2
+            assert compare_suite_payload["summary"]["truncated"] is False
 
             trend_payload = await _call_tool(
                 client,
@@ -167,9 +181,9 @@ def test_live_mcp_stdio_smoke(
             )
             assert trend_payload["status"] == "pass"
             assert trend_payload["reason"] == "trend_timeline_available"
-            assert trend_payload["result"]["mode"] == "timeline"
-            assert trend_payload["result"]["total_run_count"] == 2
-            assert trend_payload["result"]["truncated"] is False
+            assert trend_payload["summary"]["mode"] == "timeline"
+            assert trend_payload["summary"]["total_run_count"] == 2
+            assert trend_payload["summary"]["truncated"] is False
 
             baseline_history_payload = await _call_tool(
                 client,
@@ -191,7 +205,7 @@ def test_live_mcp_stdio_smoke(
             )
             assert pin_payload["status"] == "pass"
             assert pin_payload["reason"] == "baseline_pinned"
-            assert "pin_update" in pin_payload["result"]
+            assert "pin_update" in pin_payload["summary"]
 
             baseline_history_after_pin = await _call_tool(
                 client,
@@ -226,7 +240,7 @@ def test_live_mcp_reports_invalid_run_id_over_stdio(
             assert payload["status"] == "fail"
             assert payload["reason"] == "invalid_run_id"
             assert payload["error_code"] == "invalid_run_id"
-            assert payload["result"]["requested_run_id"] == "bad-id"
-            assert payload["result"]["message"] == "'bad-id' is not a valid run ID."
+            assert payload["summary"]["requested_run_id"] == "bad-id"
+            assert payload["summary"]["message"] == "'bad-id' is not a valid run ID."
 
     asyncio.run(run_invalid_check())

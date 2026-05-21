@@ -93,6 +93,7 @@ BenchCaddy MCP currently exposes these tools:
 - `pin_baseline`: update the pinned baseline for a suite
 
 Most tools accept an optional `database_path`. If omitted, they read `./benchcaddy.db`.
+All tools also accept `response_detail`, which defaults to `summary`. Use `response_detail="full"` when you want the complete nested payload.
 
 ## Recommended Agent Workflow
 
@@ -112,9 +113,11 @@ BenchCaddy MCP responses use a consistent envelope so agents can branch on outco
 - `reason`: stable snake_case classifier for the outcome
 - `error_code`: machine-readable error identifier when the request failed
 - `suggested_action`: useful next step for the caller
-- `result`: tool-specific payload
+- `response_detail`: the effective detail mode, either `summary` or `full`
+- `summary`: small tool-specific payload intended for direct agent answers
+- `result`: full tool-specific payload, returned only when `response_detail="full"`
 
-Example based on a real local `compare_runs` response, with the database path normalized for documentation:
+Default summary example based on a real local `compare_runs` response, with the database path normalized for documentation:
 
 ```text
 Client: Call compare_runs with {"left_run_id": "4.2", "right_run_id": "4.3", "database_path": "/home/bench/benchcaddy/benchcaddy.db"}
@@ -128,42 +131,42 @@ BenchCaddy MCP:
     "error_code": null,
     "suggested_action": "Use the result payload to inspect classifications and candidate deltas.",
     "confidence": "high",
-    "result": {
+    "response_detail": "summary",
+    "summary": {
+        "comparison_mode": "direct",
         "baseline": {
             "display_id": "4.2",
+            "suite_name": "nonlinear-transform",
+            "target_name": "benchmark_case",
             "configuration": {
                 "size": 512,
                 "variant": "stabilized"
             },
+            "sample_count": 20,
             "median_seconds": 0.00041360000614076853
         },
         "candidate": {
             "display_id": "4.3",
+            "suite_name": "nonlinear-transform",
+            "target_name": "benchmark_case",
             "configuration": {
                 "size": 1024,
                 "variant": "baseline"
             },
+            "sample_count": 20,
             "median_seconds": 0.0009896999690681696
         },
+        "same_configuration": false,
         "delta_seconds": 0.0005760999629274011,
         "percent_change": 139.28915724709293,
-        "comparison_analysis": {
-            "classification": "stable",
-            "regression_probability": 1,
-            "statistically_significant": false,
-            "exceeds_practical_threshold": true
-        },
-        "observation_rows": [
-            {
-                "label": "benchmark_case",
-                "delta_seconds": 0.0005789999966509641
-            },
-            {
-                "label": "nonlinear_iteration",
-                "delta_seconds": 0.0005210599745623767
-            }
-        ],
-        "comparison_mode": "direct"
+        "classification": "stable",
+        "regression_detected": false,
+        "statistically_significant": false,
+        "exceeds_practical_threshold": true,
+        "regression_probability": 1,
+        "warnings": []
     }
 }
 ```
+
+When you need the full nested payload, call the same tool with `response_detail="full"`. The response still includes the compact `summary`, and adds the previous detailed `result` block for deeper inspection.

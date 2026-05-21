@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from benchcaddy.db import get_database_path
 from benchcaddy.stats import AnalysisOptions
 
+from ._summary import ResponseSummaryBuilder
+
 JSON_SCHEMA_VERSION = "1.0"
 DEFAULT_LIMIT = 20
+ResponseDetail = Literal["summary", "full"]
 
 
 def _analysis_options(
@@ -44,15 +47,23 @@ def _confidence_label(confidence_level: float | None) -> str | None:
     return "low"
 
 
+def _normalized_response_detail(response_detail: str) -> ResponseDetail:
+    if response_detail in {"summary", "full"}:
+        return response_detail
+    raise ValueError(f"'{response_detail}' is not a valid response detail.")
+
+
 def _response(
     *,
     tool_name: str,
     status: str,
     reason: str,
+    summary: dict[str, Any] | None = None,
     result: dict[str, Any] | None = None,
     error_code: str | None = None,
     suggested_action: str | None = None,
     confidence: str | None = None,
+    response_detail: ResponseDetail = "full",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": JSON_SCHEMA_VERSION,
@@ -62,10 +73,18 @@ def _response(
         "error_code": error_code,
         "suggested_action": suggested_action,
         "confidence": confidence,
+        "response_detail": response_detail,
     }
-    if result is not None:
+    if summary is None and result is not None:
+        summary = _SUMMARY_BUILDER.build(tool_name, result)
+    if summary is not None:
+        payload["summary"] = summary
+    if response_detail == "full" and result is not None:
         payload["result"] = result
     return payload
+
+
+_SUMMARY_BUILDER = ResponseSummaryBuilder()
 
 
 def _run_id(value: int | str | tuple[int, int]) -> int | tuple[int, int]:
@@ -95,7 +114,28 @@ def _capped_rows(result: dict[str, Any], key: str, limit: int | None) -> dict[st
     return result
 
 
-def _invalid_run_id_response(*, tool_name: str, run_id: object, suggested_action: str) -> dict[str, Any]:
+def _invalid_response_detail_response(*, tool_name: str, response_detail: object) -> dict[str, Any]:
+    return _response(
+        tool_name=tool_name,
+        status="fail",
+        reason="invalid_response_detail",
+        error_code="invalid_response_detail",
+        suggested_action="Use response_detail='summary' or response_detail='full'.",
+        result={
+            "message": f"'{response_detail}' is not a valid response detail.",
+            "requested_response_detail": response_detail,
+            "allowed_values": ["summary", "full"],
+        },
+    )
+
+
+def _invalid_run_id_response(
+    *,
+    tool_name: str,
+    run_id: object,
+    suggested_action: str,
+    response_detail: ResponseDetail = "full",
+) -> dict[str, Any]:
     return _response(
         tool_name=tool_name,
         status="fail",
@@ -103,10 +143,18 @@ def _invalid_run_id_response(*, tool_name: str, run_id: object, suggested_action
         error_code="invalid_run_id",
         suggested_action=suggested_action,
         result={"message": f"'{run_id}' is not a valid run ID.", "requested_run_id": run_id},
+        response_detail=response_detail,
     )
 
 
-def _comparison_response(*, tool_name: str, comparison: dict[str, Any], confidence_level: float, mode: str) -> dict[str, Any]:
+def _comparison_response(
+    *,
+    tool_name: str,
+    comparison: dict[str, Any],
+    confidence_level: float,
+    mode: str,
+    response_detail: ResponseDetail = "full",
+) -> dict[str, Any]:
     confidence = _confidence_label(confidence_level)
     if mode == "direct":
         comparison_analysis = comparison.get("comparison_analysis") or {}
@@ -128,6 +176,7 @@ def _comparison_response(*, tool_name: str, comparison: dict[str, Any], confiden
             result=comparison,
             suggested_action=suggested_action,
             confidence=confidence,
+            response_detail=response_detail,
         )
 
     analyses = [run.get("comparison_analysis") or {} for run in comparison.get("runs", [])]
@@ -139,6 +188,7 @@ def _comparison_response(*, tool_name: str, comparison: dict[str, Any], confiden
             result=comparison,
             suggested_action="Relax the comparison scope or record more runs before treating the result as decisive.",
             confidence=None,
+            response_detail=response_detail,
         )
     if any(analysis.get("regression_detected") for analysis in analyses):
         return _response(
@@ -148,6 +198,7 @@ def _comparison_response(*, tool_name: str, comparison: dict[str, Any], confiden
             result=comparison,
             suggested_action="Inspect regressing runs in result.runs before accepting the change.",
             confidence=confidence,
+            response_detail=response_detail,
         )
     if any(analysis.get("classification") == "noisy" or analysis.get("warnings") for analysis in analyses):
         return _response(
@@ -157,6 +208,7 @@ def _comparison_response(*, tool_name: str, comparison: dict[str, Any], confiden
             result=comparison,
             suggested_action="Increase samples or narrow the comparison scope, then rerun compare_suite.",
             confidence=confidence,
+            response_detail=response_detail,
         )
     return _response(
         tool_name=tool_name,
@@ -165,6 +217,7 @@ def _comparison_response(*, tool_name: str, comparison: dict[str, Any], confiden
         result=comparison,
         suggested_action="Use the result payload to inspect classifications and candidate deltas.",
         confidence=confidence,
+        response_detail=response_detail,
     )
 
 

@@ -75,6 +75,7 @@ def test_mcp_responses_use_consistent_envelope_fields(
         assert isinstance(payload["reason"], str)
         assert payload["suggested_action"] is None or isinstance(payload["suggested_action"], str)
         assert "confidence" in payload
+        assert payload["response_detail"] in {"summary", "full"}
 
 
 def test_list_suites_returns_machine_readable_inventory(
@@ -89,8 +90,10 @@ def test_list_suites_returns_machine_readable_inventory(
 
     assert payload["status"] == "pass"
     assert payload["reason"] == "suite_inventory_available"
-    assert payload["result"]["database_path"] == str(database_path)
-    assert payload["result"]["suite_count"] == 2
+    assert payload["response_detail"] == "summary"
+    assert payload["summary"]["database_path"] == str(database_path)
+    assert payload["summary"]["suite_count"] == 2
+    assert "result" not in payload
 
 
 def test_list_suites_reports_empty_inventory_as_inconclusive(tmp_path: Path) -> None:
@@ -99,8 +102,8 @@ def test_list_suites_reports_empty_inventory_as_inconclusive(tmp_path: Path) -> 
     assert payload["status"] == "inconclusive"
     assert payload["reason"] == "no_suites_found"
     assert payload["suggested_action"] == "Record a benchmark sweep to create suite history."
-    assert payload["result"]["suites"] == []
-    assert payload["result"]["suite_count"] == 0
+    assert payload["summary"]["suites"] == []
+    assert payload["summary"]["suite_count"] == 0
 
 
 def test_get_suite_caps_runs_by_default(
@@ -122,11 +125,12 @@ def test_get_suite_caps_runs_by_default(
 
     assert payload["status"] == "pass"
     assert payload["reason"] == "suite_details_available"
-    assert payload["result"]["mode"] == "suite"
-    assert payload["result"]["database_path"] == str(database_path)
-    assert payload["result"]["truncated"] is True
-    assert payload["result"]["total_run_count"] == DEFAULT_LIMIT + 5
-    assert len(payload["result"]["runs"]) == DEFAULT_LIMIT
+    assert payload["response_detail"] == "summary"
+    assert payload["summary"]["mode"] == "suite"
+    assert payload["summary"]["database_path"] == str(database_path)
+    assert payload["summary"]["truncated"] is True
+    assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 5
+    assert len(payload["summary"]["runs"]) == DEFAULT_LIMIT
 
 
 def test_get_run_accepts_display_ids(
@@ -140,9 +144,10 @@ def test_get_run_accepts_display_ids(
 
     assert payload["status"] == "pass"
     assert payload["reason"] == "run_details_available"
-    assert payload["result"]["mode"] == "run"
-    assert payload["result"]["database_path"] == str(database_path)
-    assert payload["result"]["run"]["display_id"] == "1.1"
+    assert payload["response_detail"] == "summary"
+    assert payload["summary"]["mode"] == "run"
+    assert payload["summary"]["database_path"] == str(database_path)
+    assert payload["summary"]["run"]["display_id"] == "1.1"
 
 
 def test_get_suite_reports_missing_suite_with_error_payload(tmp_path: Path) -> None:
@@ -161,8 +166,8 @@ def test_get_run_reports_invalid_run_id_payload_fields(tmp_path: Path) -> None:
     assert payload["status"] == "fail"
     assert payload["reason"] == "invalid_run_id"
     assert payload["error_code"] == "invalid_run_id"
-    assert payload["result"]["requested_run_id"] == "not-a-run-id"
-    assert payload["result"]["message"] == "'not-a-run-id' is not a valid run ID."
+    assert payload["summary"]["requested_run_id"] == "not-a-run-id"
+    assert payload["summary"]["message"] == "'not-a-run-id' is not a valid run ID."
 
 
 def test_get_suite_reports_config_filter_miss_as_inconclusive(
@@ -214,12 +219,12 @@ def test_get_suite_payload_matches_requested_filter_and_limit(
     )
 
     assert payload["status"] == "pass"
-    assert payload["result"]["suite_name"] == "suite-filtered-payload"
-    assert payload["result"]["config_filter"] == {"size": 512, "variant": "baseline"}
-    assert payload["result"]["total_run_count"] == 2
-    assert payload["result"]["truncated"] is True
-    assert len(payload["result"]["runs"]) == 1
-    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["result"]["runs"])
+    assert payload["summary"]["suite_name"] == "suite-filtered-payload"
+    assert payload["summary"]["config_filter"] == {"size": 512, "variant": "baseline"}
+    assert payload["summary"]["total_run_count"] == 2
+    assert payload["summary"]["truncated"] is True
+    assert len(payload["summary"]["runs"]) == 1
+    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["runs"])
 
 
 def test_compare_suite_caps_runs_by_default(
@@ -242,10 +247,10 @@ def test_compare_suite_caps_runs_by_default(
 
     assert payload["status"] == "pass"
     assert payload["reason"] == "comparison_complete"
-    assert payload["result"]["comparison_mode"] == "suite"
-    assert payload["result"]["truncated"] is True
-    assert payload["result"]["total_run_count"] == DEFAULT_LIMIT + 3
-    assert len(payload["result"]["runs"]) == DEFAULT_LIMIT
+    assert payload["summary"]["comparison_mode"] == "suite"
+    assert payload["summary"]["truncated"] is True
+    assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 3
+    assert len(payload["summary"]["runs"]) == DEFAULT_LIMIT
 
 
 def test_compare_runs_returns_head_to_head_payload(
@@ -272,6 +277,37 @@ def test_compare_runs_returns_head_to_head_payload(
 
     assert payload["status"] == "pass"
     assert payload["reason"] == "comparison_complete"
+    assert payload["response_detail"] == "summary"
+    assert payload["summary"]["comparison_mode"] == "direct"
+    assert payload["summary"]["percent_change"] == pytest.approx(2.0)
+    assert payload["summary"]["same_configuration"] is False
+    assert "result" not in payload
+
+
+def test_compare_runs_full_detail_preserves_existing_payload(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-pair-full",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-pair-full",
+        configuration={"variant": "candidate"},
+        samples=[0.101, 0.102, 0.103, 0.102, 0.104, 0.101, 0.103],
+        environment_payload=environment_payload,
+    )
+
+    payload = compare_runs("1.1", "2.1", str(database_path), response_detail="full")
+
+    assert payload["response_detail"] == "full"
+    assert payload["summary"]["comparison_mode"] == "direct"
     assert payload["result"]["comparison_mode"] == "direct"
     assert payload["result"]["percent_change"] == pytest.approx(2.0)
 
@@ -316,9 +352,24 @@ def test_compare_runs_reports_regressing_payload_with_analysis(
 
     assert payload["status"] == "fail"
     assert payload["reason"] == "regressing"
-    assert payload["result"]["comparison_mode"] == "direct"
-    assert payload["result"]["comparison_analysis"]["regression_detected"] is True
-    assert payload["result"]["comparison_analysis"]["classification"] == "regressing"
+    assert payload["summary"]["comparison_mode"] == "direct"
+    assert payload["summary"]["regression_detected"] is True
+    assert payload["summary"]["classification"] == "regressing"
+
+
+def test_compare_runs_reports_invalid_response_detail(
+    tmp_path: Path,
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(database_path=database_path, suite_name="suite-invalid-detail", configuration={"variant": "baseline"})
+
+    payload = compare_runs("1.1", "1.1", str(database_path), response_detail="verbose")
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "invalid_response_detail"
+    assert payload["error_code"] == "invalid_response_detail"
+    assert payload["summary"]["requested_response_detail"] == "verbose"
 
 
 def test_compare_suite_reports_invalid_reference_run_id(
@@ -347,8 +398,8 @@ def test_compare_suite_reports_wrong_suite_reference_payload_fields(
     assert payload["status"] == "fail"
     assert payload["reason"] == "reference_run_wrong_suite"
     assert payload["error_code"] == "reference_run_wrong_suite"
-    assert payload["result"]["reference_run_display_id"] == "2.1"
-    assert payload["result"]["reference_run_suite_name"] == "suite-right"
+    assert payload["summary"]["reference_run_display_id"] == "2.1"
+    assert payload["summary"]["reference_run_suite_name"] == "suite-right"
 
 
 def test_compare_suite_reports_empty_scope_payload_context(
@@ -368,9 +419,9 @@ def test_compare_suite_reports_empty_scope_payload_context(
 
     assert payload["status"] == "inconclusive"
     assert payload["reason"] == "no_runs_matched_scope"
-    assert payload["result"]["suite_name"] == "suite-empty-scope"
-    assert payload["result"]["config_filter"] == {"size": 2048}
-    assert payload["result"]["runs"] == []
+    assert payload["summary"]["suite_name"] == "suite-empty-scope"
+    assert payload["summary"]["config_filter"] == {"size": 2048}
+    assert payload["summary"]["runs"] == []
 
 
 def test_compare_suite_payload_matches_requested_reference_and_scope(
@@ -409,11 +460,11 @@ def test_compare_suite_payload_matches_requested_reference_and_scope(
     )
 
     assert payload["status"] == "pass"
-    assert payload["result"]["basis_source"] == "reference"
-    assert payload["result"]["basis_run"]["display_id"] == "1.1"
-    assert payload["result"]["config_filter"] == {"size": 512}
-    assert {run["configuration"]["size"] for run in payload["result"]["runs"]} == {512}
-    assert {run["display_id"] for run in payload["result"]["runs"]} == {"1.1", "2.1"}
+    assert payload["summary"]["basis_source"] == "reference"
+    assert payload["summary"]["basis_run"]["display_id"] == "1.1"
+    assert payload["summary"]["config_filter"] == {"size": 512}
+    assert {run["configuration"]["size"] for run in payload["summary"]["runs"]} == {512}
+    assert {run["display_id"] for run in payload["summary"]["runs"]} == {"1.1", "2.1"}
 
 
 def test_trend_suite_caps_timeline_runs_by_default(
@@ -435,10 +486,10 @@ def test_trend_suite_caps_timeline_runs_by_default(
 
     assert payload["status"] == "pass"
     assert payload["reason"] == "trend_timeline_available"
-    assert payload["result"]["mode"] == "timeline"
-    assert payload["result"]["truncated"] is True
-    assert payload["result"]["total_run_count"] == DEFAULT_LIMIT + 4
-    assert len(payload["result"]["runs"]) == DEFAULT_LIMIT
+    assert payload["summary"]["mode"] == "timeline"
+    assert payload["summary"]["truncated"] is True
+    assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 4
+    assert len(payload["summary"]["runs"]) == DEFAULT_LIMIT
 
 
 def test_trend_suite_payload_matches_requested_filter_context(
@@ -472,13 +523,13 @@ def test_trend_suite_payload_matches_requested_filter_context(
     )
 
     assert payload["status"] == "pass"
-    assert payload["result"]["mode"] == "timeline"
-    assert payload["result"]["config_filter"] == {"size": 512, "variant": "baseline"}
-    assert payload["result"]["basis_source"] == "best"
-    assert payload["result"]["total_run_count"] == 3
-    assert payload["result"]["truncated"] is True
-    assert len(payload["result"]["runs"]) == 2
-    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["result"]["runs"])
+    assert payload["summary"]["mode"] == "timeline"
+    assert payload["summary"]["config_filter"] == {"size": 512, "variant": "baseline"}
+    assert payload["summary"]["basis_source"] == "best"
+    assert payload["summary"]["total_run_count"] == 3
+    assert payload["summary"]["truncated"] is True
+    assert len(payload["summary"]["runs"]) == 2
+    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["runs"])
 
 
 def test_trend_suite_reports_conflicting_basis_payload_fields(
@@ -504,8 +555,8 @@ def test_trend_suite_reports_conflicting_basis_payload_fields(
     assert payload["status"] == "fail"
     assert payload["reason"] == "config_filter_conflicts_with_basis"
     assert payload["error_code"] == "config_filter_conflicts_with_basis"
-    assert payload["result"]["suite_name"] == "suite-trend-conflict"
-    assert payload["result"]["config_filter"] == {"size": 512}
+    assert payload["summary"]["suite_name"] == "suite-trend-conflict"
+    assert payload["summary"]["config_filter"] == {"size": 512}
 
 
 def test_trend_suite_reports_summary_mode_for_mixed_configurations(
@@ -532,9 +583,9 @@ def test_trend_suite_reports_summary_mode_for_mixed_configurations(
 
     assert payload["status"] == "inconclusive"
     assert payload["reason"] == "multiple_configurations_summary"
-    assert payload["result"]["mode"] == "summary"
-    assert payload["result"]["configuration_count"] == 2
-    assert len(payload["result"]["config_summaries"]) == 2
+    assert payload["summary"]["mode"] == "summary"
+    assert payload["summary"]["configuration_count"] == 2
+    assert len(payload["summary"]["config_summaries"]) == 2
 
 
 def test_pin_baseline_and_history_are_available(
@@ -552,16 +603,16 @@ def test_pin_baseline_and_history_are_available(
         pin_payload = pin_baseline("suite-baseline", f"{index + 1}.1", database_path=str(database_path), note=f"pin-{index}")
         assert pin_payload["status"] == "pass"
         assert pin_payload["reason"] == "baseline_pinned"
-        assert pin_payload["result"]["pin_update"]["display_id"] == f"{index + 1}.1"
+        assert pin_payload["summary"]["pin_update"]["display_id"] == f"{index + 1}.1"
 
     payload = get_baseline_history("suite-baseline", str(database_path))
 
     assert payload["status"] == "pass"
     assert payload["reason"] == "baseline_available"
-    assert payload["result"]["truncated"] is True
-    assert payload["result"]["total_run_count"] == DEFAULT_LIMIT + 2
-    assert len(payload["result"]["history"]) == DEFAULT_LIMIT
-    assert payload["result"]["current_baseline"]["note"] == f"pin-{DEFAULT_LIMIT + 1}"
+    assert payload["summary"]["truncated"] is True
+    assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 2
+    assert len(payload["summary"]["history"]) == DEFAULT_LIMIT
+    assert payload["summary"]["current_baseline"]["note"] == f"pin-{DEFAULT_LIMIT + 1}"
 
 
 def test_pin_baseline_reports_wrong_suite_payload_fields(
@@ -577,8 +628,113 @@ def test_pin_baseline_reports_wrong_suite_payload_fields(
     assert payload["status"] == "fail"
     assert payload["reason"] == "reference_run_wrong_suite"
     assert payload["error_code"] == "reference_run_wrong_suite"
-    assert payload["result"]["reference_run_display_id"] == "2.1"
-    assert payload["result"]["reference_run_suite_name"] == "suite-pin-right"
+    assert payload["summary"]["reference_run_display_id"] == "2.1"
+    assert payload["summary"]["reference_run_suite_name"] == "suite-pin-right"
+
+
+def test_get_run_full_detail_preserves_existing_payload(
+    tmp_path: Path,
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(database_path=database_path, suite_name="suite-run-full", configuration={"variant": "baseline"})
+
+    payload = get_run("1.1", str(database_path), response_detail="full")
+
+    assert payload["response_detail"] == "full"
+    assert payload["summary"]["run"]["display_id"] == "1.1"
+    assert payload["result"]["run"]["display_id"] == "1.1"
+
+
+def test_get_suite_full_detail_preserves_existing_payload(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(
+        database_path=database_path,
+        suite_name="suite-full",
+        configuration={"variant": "baseline"},
+        environment=environment_payload,
+    )
+
+    payload = get_suite("suite-full", str(database_path), response_detail="full")
+
+    assert payload["response_detail"] == "full"
+    assert payload["summary"]["suite_name"] == "suite-full"
+    assert payload["result"]["suite_name"] == "suite-full"
+    assert payload["result"]["runs"][0]["display_id"] == "1.1"
+
+
+def test_compare_suite_full_detail_preserves_existing_payload(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    samples = [0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101]
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-compare-full",
+        configuration={"variant": "baseline"},
+        samples=samples,
+        environment_payload=environment_payload,
+    )
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-compare-full",
+        configuration={"variant": "candidate"},
+        samples=samples,
+        environment_payload=environment_payload,
+    )
+
+    payload = compare_suite("suite-compare-full", database_path=str(database_path), response_detail="full")
+
+    assert payload["response_detail"] == "full"
+    assert payload["summary"]["comparison_mode"] == "suite"
+    assert payload["result"]["comparison_mode"] == "suite"
+
+
+def test_trend_suite_full_detail_preserves_existing_payload(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    samples = [0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101]
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-trend-full",
+        configuration={"size": 512},
+        samples=samples,
+        environment_payload=environment_payload,
+    )
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-trend-full",
+        configuration={"size": 512},
+        samples=samples,
+        environment_payload=environment_payload,
+    )
+
+    payload = trend_suite("suite-trend-full", database_path=str(database_path), response_detail="full")
+
+    assert payload["response_detail"] == "full"
+    assert payload["summary"]["mode"] == "timeline"
+    assert payload["result"]["mode"] == "timeline"
+
+
+def test_pin_baseline_full_detail_preserves_existing_payload(
+    tmp_path: Path,
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(database_path=database_path, suite_name="suite-pin-full", configuration={"variant": "baseline"})
+
+    payload = pin_baseline("suite-pin-full", "1.1", database_path=str(database_path), response_detail="full")
+
+    assert payload["response_detail"] == "full"
+    assert payload["summary"]["pin_update"]["display_id"] == "1.1"
+    assert payload["result"]["pin_update"]["display_id"] == "1.1"
 
 
 def test_get_baseline_history_reports_missing_history_as_inconclusive(

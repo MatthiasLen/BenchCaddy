@@ -5,13 +5,23 @@ from typing import Any
 from benchcaddy.db import get_run_details
 
 from .._app import app
-from .._shared import _analysis_options, _invalid_run_id_response, _resolved_database_path, _response, _run_id
+from .._shared import (
+    ResponseDetail,
+    _analysis_options,
+    _invalid_response_detail_response,
+    _invalid_run_id_response,
+    _normalized_response_detail,
+    _resolved_database_path,
+    _response,
+    _run_id,
+)
 
 
 @app.tool(description="Inspect one benchmark run, including environment metadata and stored observations.")
 def get_run(
     run_id: int | str,
     database_path: str | None = None,
+    response_detail: ResponseDetail = "summary",
     include_analysis: bool = False,
     confidence_level: float = 0.95,
     bootstrap_resamples: int = 2000,
@@ -24,9 +34,19 @@ def get_run(
     drift_window_size: int = 5,
 ) -> dict[str, Any]:
     try:
+        normalized_response_detail = _normalized_response_detail(response_detail)
+    except ValueError:
+        return _invalid_response_detail_response(tool_name="get_run", response_detail=response_detail)
+
+    try:
         normalized_run_id = _run_id(run_id)
     except ValueError:
-        return _invalid_run_id_response(tool_name="get_run", run_id=run_id, suggested_action="Use a run ID like 3 or 3.2.")
+        return _invalid_run_id_response(
+            tool_name="get_run",
+            run_id=run_id,
+            suggested_action="Use a run ID like 3 or 3.2.",
+            response_detail=normalized_response_detail,
+        )
 
     resolved_database_path = _resolved_database_path(database_path)
     run = get_run_details(
@@ -52,16 +72,19 @@ def get_run(
             reason="run_not_found",
             error_code="run_not_found",
             suggested_action="Use get_suite or list_suites to inspect available runs.",
+            response_detail=normalized_response_detail,
         )
+    result = {
+        "mode": "run",
+        "database_path": resolved_database_path,
+        "run": run,
+    }
     return _response(
         tool_name="get_run",
         status="pass",
         reason="run_details_available",
-        result={
-            "mode": "run",
-            "database_path": resolved_database_path,
-            "run": run,
-        },
+        result=result,
         suggested_action="Use compare_runs with this run ID and a candidate run for analysis.",
         confidence=None,
+        response_detail=normalized_response_detail,
     )

@@ -5,7 +5,16 @@ from typing import Any
 from benchcaddy.db import get_suite_details
 
 from .._app import app
-from .._shared import DEFAULT_LIMIT, _analysis_options, _capped_rows, _resolved_database_path, _response
+from .._shared import (
+    DEFAULT_LIMIT,
+    ResponseDetail,
+    _analysis_options,
+    _capped_rows,
+    _invalid_response_detail_response,
+    _normalized_response_detail,
+    _resolved_database_path,
+    _response,
+)
 
 
 @app.tool(description="Inspect one benchmark suite and return the newest runs, environment, and baseline context.")
@@ -13,6 +22,7 @@ def get_suite(
     suite_name: str,
     database_path: str | None = None,
     limit: int | None = DEFAULT_LIMIT,
+    response_detail: ResponseDetail = "summary",
     config_filter: dict[str, Any] | None = None,
     include_analysis: bool = False,
     confidence_level: float = 0.95,
@@ -25,6 +35,11 @@ def get_suite(
     regression_threshold_percent: float = 5.0,
     drift_window_size: int = 5,
 ) -> dict[str, Any]:
+    try:
+        normalized_response_detail = _normalized_response_detail(response_detail)
+    except ValueError:
+        return _invalid_response_detail_response(tool_name="get_suite", response_detail=response_detail)
+
     resolved_database_path = _resolved_database_path(database_path)
     suite_details = get_suite_details(
         suite_name,
@@ -51,6 +66,7 @@ def get_suite(
             reason="suite_not_found",
             error_code="suite_not_found",
             suggested_action="Use list_suites to inspect available suites.",
+            response_detail=normalized_response_detail,
         )
 
     result = {
@@ -67,6 +83,7 @@ def get_suite(
             result=result,
             suggested_action="Use compare_suite or trend_suite on this suite.",
             confidence=None,
+            response_detail=normalized_response_detail,
         )
     return _response(
         tool_name="get_suite",
@@ -75,4 +92,5 @@ def get_suite(
         result=result,
         suggested_action=("Relax the filter or record more runs for this suite." if config_filter else "Record new runs for this suite before comparing or trending it."),
         confidence=None,
+        response_detail=normalized_response_detail,
     )
