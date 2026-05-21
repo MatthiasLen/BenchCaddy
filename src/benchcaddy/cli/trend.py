@@ -20,15 +20,17 @@ from ._shared import (
     SignificanceLevelOption,
     _analysis_options,
     _as_run_id,
+    _confidence_label,
     _console,
-    _emit_json,
+    _emit_json_response,
     _parse_config_filter_entries,
+    _raise_cli_error,
     _require_run_id,
     app,
 )
 
 
-def _parse_trend_operands(values: list[str] | None, config: bool) -> tuple[str | None, list[str]]:
+def _parse_trend_operands(values: list[str] | None, config: bool, *, json_output: bool) -> tuple[str | None, list[str]]:
     if not values:
         return None, []
 
@@ -38,8 +40,15 @@ def _parse_trend_operands(values: list[str] | None, config: bool) -> tuple[str |
             return None, list(dict.fromkeys(values))
         return baseline, list(dict.fromkeys(extra))
     if extra:
-        _console().print(f"Unexpected arguments: {' '.join(extra)}")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=2,
+            message=f"Unexpected arguments: {' '.join(extra)}",
+            reason="unexpected_arguments",
+            error_code="unexpected_arguments",
+            suggested_action="Pass one optional baseline run ID, or use --config/-c for filtered trend scope.",
+        )
     return baseline, []
 
 
@@ -344,23 +353,47 @@ def trend_command(
         bool,
         typer.Option(
             "--json",
+            "-j",
             help="Emit machine-readable JSON output for this trend report.",
         ),
     ] = False,
     database: DatabaseOption = None,
 ) -> None:
     database_path = get_database_path(database)
-    baseline, config_entries = _parse_trend_operands(operands, config)
+    baseline, config_entries = _parse_trend_operands(operands, config, json_output=json_output)
     baseline_run_id = None
     if baseline is not None:
-        baseline_run_id = _require_run_id(baseline)
+        baseline_run_id = _require_run_id(baseline, command="trend", json_output=json_output)
     if config and baseline_run_id is not None:
-        _console().print("--config/-c cannot be combined with an explicit baseline run ID.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=2,
+            message="--config/-c cannot be combined with an explicit baseline run ID.",
+            reason="config_filter_conflicts_with_reference_run",
+            error_code="config_filter_conflicts_with_reference_run",
+            suggested_action="Use either --config/-c or an explicit baseline run ID, not both.",
+        )
     if config and use_baseline:
-        _console().print("--config/-c cannot be combined with --baseline/-b.")
-        raise typer.Exit(code=2)
-    config_filter = _parse_config_filter_entries(config_entries, option_name="-c") if config else None
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=2,
+            message="--config/-c cannot be combined with --baseline/-b.",
+            reason="config_filter_conflicts_with_baseline_flag",
+            error_code="config_filter_conflicts_with_baseline_flag",
+            suggested_action="Use either --config/-c or --baseline/-b, not both.",
+        )
+    config_filter = (
+        _parse_config_filter_entries(
+            config_entries,
+            option_name="-c",
+            command="trend",
+            json_output=json_output,
+        )
+        if config
+        else None
+    )
 
     analysis_options = _analysis_options(
         confidence_level=confidence_level,
@@ -380,29 +413,109 @@ def trend_command(
         config_filter=config_filter,
     )
     if trend is None:
-        _console().print(f"Suite '{suite_name}' was not found in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Suite '{suite_name}' was not found in {database_path}.",
+            reason="suite_not_found",
+            error_code="suite_not_found",
+            suggested_action="Use benchcaddy list -j to inspect available suites.",
+        )
     if trend.get("error") == "reference_run_not_found":
-        _console().print(f"Reference run '{baseline}' was not found in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Reference run '{baseline}' was not found in {database_path}.",
+            reason="reference_run_not_found",
+            error_code="reference_run_not_found",
+            suggested_action="Use benchcaddy show -j to inspect available run IDs.",
+        )
     if trend.get("error") == "reference_run_wrong_suite":
-        _console().print(f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'.",
+            reason="reference_run_wrong_suite",
+            error_code="reference_run_wrong_suite",
+            suggested_action="Choose a baseline run from the requested suite.",
+        )
     if trend.get("error") == "baseline_not_found":
-        _console().print(f"Suite '{suite_name}' does not have a recorded baseline in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Suite '{suite_name}' does not have a recorded baseline in {database_path}.",
+            reason="baseline_not_found",
+            error_code="baseline_not_found",
+            suggested_action="Pin a baseline with benchcaddy baseline SUITE --pin RUN_ID -j before using --baseline/-b.",
+        )
     if trend.get("error") == "config_filter_no_matches":
-        _console().print(f"No runs in suite '{suite_name}' matched the requested config filter.")
-        raise typer.Exit(code=1)
+        if json_output:
+            _emit_json_response(
+                command="trend",
+                status="inconclusive",
+                reason="config_filter_no_matches",
+                suggested_action="Relax the filter or record more runs for that configuration.",
+                confidence=None,
+                result={
+                    "suite_name": suite_name,
+                    "config_filter": config_filter,
+                },
+            )
+        else:
+            _console().print(f"No runs in suite '{suite_name}' matched the requested config filter.")
+        raise typer.Exit(code=0)
     if trend.get("error") == "config_filter_conflicts_with_basis":
-        _console().print("--config/-c cannot be combined with an explicit baseline run ID or --baseline/-b.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=2,
+            message="--config/-c cannot be combined with an explicit baseline run ID or --baseline/-b.",
+            reason="config_filter_conflicts_with_basis",
+            error_code="config_filter_conflicts_with_basis",
+            suggested_action="Use either --config/-c or an explicit/pinned basis, not both.",
+        )
     if trend.get("mode") != "summary" and trend.get("basis_run") is None:
-        _console().print(f"Suite '{suite_name}' does not have any recorded runs in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="trend",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Suite '{suite_name}' does not have any recorded runs in {database_path}.",
+            reason="no_runs_found",
+            error_code="no_runs_found",
+            suggested_action="Record one or more runs for this suite before trending it.",
+        )
 
     if json_output:
-        _emit_json(trend)
+        if trend.get("mode") == "summary":
+            status = "inconclusive"
+            reason = "multiple_configurations_summary"
+            suggested_action = "Use --config/-c or an explicit baseline run ID to inspect one configuration timeline."
+        else:
+            runs = trend.get("runs") or []
+            if any((run.get("vs_baseline") or {}).get("regression_detected") for run in runs):
+                status = "fail"
+                reason = "regression_detected"
+                suggested_action = "Inspect the regressing runs in result.runs before accepting the change."
+            elif any(_trend_run_warnings(run) or run.get("drift_status") == "noisy" for run in runs):
+                status = "inconclusive"
+                reason = "noisy_samples"
+                suggested_action = "Increase samples or reduce environmental noise, then rerun trend -j."
+            else:
+                status = "pass"
+                reason = "trend_timeline_available"
+                suggested_action = "Use the timeline payload to inspect drift and baseline deltas."
+        _emit_json_response(
+            command="trend",
+            status=status,
+            reason=reason,
+            suggested_action=suggested_action,
+            confidence=_confidence_label(confidence_level),
+            result=trend,
+        )
         return
 
     if trend.get("mode") == "summary":

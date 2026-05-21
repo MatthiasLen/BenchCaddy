@@ -21,7 +21,7 @@ from ..presentation import (
     summary_panel,
 )
 from ._rendering import _format_optional_seconds, _styled
-from ._shared import _STATE, DatabaseOption, _as_run_id, _console, _parse_config_filter_entries, _require_run_id, app
+from ._shared import _STATE, DatabaseOption, _as_run_id, _console, _emit_json_response, _parse_config_filter_entries, _raise_cli_error, _require_run_id, app
 
 
 def _has_analysis(run: dict[str, object]) -> bool:
@@ -276,18 +276,45 @@ def show_command(
             help="Restrict a suite view to runs whose configuration contains the trailing key=value pairs.",
         ),
     ] = False,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            "-j",
+            help="Emit machine-readable run or suite details as JSON.",
+        ),
+    ] = False,
     database: DatabaseOption = None,
 ) -> None:
     database_path = get_database_path(database)
     if config:
         if not identifiers or len(identifiers) < 2:
-            _console().print("--config/-c requires a suite name followed by one or more key=value entries.")
-            raise typer.Exit(code=2)
+            _raise_cli_error(
+                command="show",
+                json_output=json_output,
+                exit_code=2,
+                message="--config/-c requires a suite name followed by one or more key=value entries.",
+                reason="missing_config_filter_scope",
+                error_code="missing_config_filter_scope",
+                suggested_action="Pass a suite name followed by one or more -c key=value entries.",
+            )
         if _as_run_id(identifiers[0]) is not None:
-            _console().print("--config/-c only supports suite views, not run IDs.")
-            raise typer.Exit(code=2)
+            _raise_cli_error(
+                command="show",
+                json_output=json_output,
+                exit_code=2,
+                message="--config/-c only supports suite views, not run IDs.",
+                reason="config_filter_requires_suite",
+                error_code="config_filter_requires_suite",
+                suggested_action="Use a suite name, not a run ID, when combining show with --config/-c.",
+            )
 
-        config_filter = _parse_config_filter_entries(identifiers[1:], option_name="-c")
+        config_filter = _parse_config_filter_entries(
+            identifiers[1:],
+            option_name="-c",
+            command="show",
+            json_output=json_output,
+        )
         details = get_suite_details(
             identifiers[0],
             database_path,
@@ -296,33 +323,81 @@ def show_command(
             config_filter=config_filter,
         )
         if details is None:
-            _console().print(f"Suite '{identifiers[0]}' was not found in {database_path}.")
-            raise typer.Exit(code=1)
-        _show_suite(details)
-
+            _raise_cli_error(
+                command="show",
+                json_output=json_output,
+                exit_code=1,
+                message=f"Suite '{identifiers[0]}' was not found in {database_path}.",
+                reason="suite_not_found",
+                error_code="suite_not_found",
+                suggested_action="Use benchcaddy list -j to inspect available suites.",
+            )
+        total_count = None
+        truncated = False
         if numitems is not None and len(details["runs"]) == numitems:
             total_count = get_suite_run_count(identifiers[0], database_path, config_filter=config_filter)
-            if total_count is not None and total_count > numitems:
-                _print_numitems_notice(
-                    shown_count=len(details["runs"]),
-                    total_count=total_count,
-                    identifiers=[identifiers[0], "-c", *identifiers[1:]],
-                    database_path=None if database is None else str(database_path),
-                )
+            truncated = total_count is not None and total_count > numitems
+        if json_output:
+            _emit_json_response(
+                command="show",
+                status="pass" if details["runs"] else "inconclusive",
+                reason="suite_details_available" if details["runs"] else "no_runs_matched_scope",
+                suggested_action=("Use benchcaddy compare -j or trend -j on this suite." if details["runs"] else "Relax the filter or record more runs for this suite."),
+                confidence=None,
+                result={
+                    "mode": "suite",
+                    "database_path": database_path,
+                    "truncated": truncated,
+                    "total_run_count": total_count,
+                    **details,
+                },
+            )
+            return
+        _show_suite(details)
+
+        if truncated and total_count is not None:
+            _print_numitems_notice(
+                shown_count=len(details["runs"]),
+                total_count=total_count,
+                identifiers=[identifiers[0], "-c", *identifiers[1:]],
+                database_path=None if database is None else str(database_path),
+            )
         return
 
     if not identifiers:
         runs = get_all_run_details(database_path, limit=numitems)
-        _show_all_runs(runs)
+        total_count = None
+        truncated = False
         if numitems is not None and len(runs) == numitems:
             total_count = get_all_run_count(database_path)
-            if total_count > numitems:
-                _print_numitems_notice(
-                    shown_count=numitems,
-                    total_count=total_count,
-                    identifiers=None,
-                    database_path=None if database is None else str(database_path),
-                )
+            truncated = total_count > numitems
+        if json_output:
+            _emit_json_response(
+                command="show",
+                status="pass" if runs else "inconclusive",
+                reason="run_list_available" if runs else "no_runs_found",
+                suggested_action=(
+                    "Use benchcaddy show -j RUN_ID or benchcaddy compare -j SUITE for a narrower view." if runs else "Record a benchmark sweep before requesting run details."
+                ),
+                confidence=None,
+                result={
+                    "mode": "all_runs",
+                    "database_path": database_path,
+                    "run_count": len(runs),
+                    "truncated": truncated,
+                    "total_run_count": total_count,
+                    "runs": runs,
+                },
+            )
+            return
+        _show_all_runs(runs)
+        if truncated and total_count is not None:
+            _print_numitems_notice(
+                shown_count=numitems,
+                total_count=total_count,
+                identifiers=None,
+                database_path=None if database is None else str(database_path),
+            )
         return
 
     if len(identifiers) == 1:
@@ -335,8 +410,29 @@ def show_command(
                 include_analysis=True,
             )
             if run is None:
-                _console().print(f"Run '{identifier}' was not found in {database_path}.")
-                raise typer.Exit(code=1)
+                _raise_cli_error(
+                    command="show",
+                    json_output=json_output,
+                    exit_code=1,
+                    message=f"Run '{identifier}' was not found in {database_path}.",
+                    reason="run_not_found",
+                    error_code="run_not_found",
+                    suggested_action="Use benchcaddy show -j without a run ID to inspect available runs.",
+                )
+            if json_output:
+                _emit_json_response(
+                    command="show",
+                    status="pass",
+                    reason="run_details_available",
+                    suggested_action="Use benchcaddy compare -j with this run ID and a candidate run for analysis.",
+                    confidence=None,
+                    result={
+                        "mode": "run",
+                        "database_path": database_path,
+                        "run": run,
+                    },
+                )
+                return
             _show_run(run)
             return
 
@@ -347,29 +443,80 @@ def show_command(
             limit=numitems,
         )
         if details is None:
-            _console().print(f"Suite '{identifier}' was not found in {database_path}.")
-            raise typer.Exit(code=1)
-        _show_suite(details)
-
+            _raise_cli_error(
+                command="show",
+                json_output=json_output,
+                exit_code=1,
+                message=f"Suite '{identifier}' was not found in {database_path}.",
+                reason="suite_not_found",
+                error_code="suite_not_found",
+                suggested_action="Use benchcaddy list -j to inspect available suites.",
+            )
+        total_count = None
+        truncated = False
         if numitems is not None and len(details["runs"]) == numitems:
             total_count = get_suite_run_count(identifier, database_path)
-            if total_count is not None and total_count > numitems:
-                _print_numitems_notice(
-                    shown_count=len(details["runs"]),
-                    total_count=total_count,
-                    identifiers=identifiers,
-                    database_path=None if database is None else str(database_path),
-                )
+            truncated = total_count is not None and total_count > numitems
+        if json_output:
+            _emit_json_response(
+                command="show",
+                status="pass" if details["runs"] else "inconclusive",
+                reason="suite_details_available" if details["runs"] else "suite_has_no_runs",
+                suggested_action=("Use benchcaddy compare -j or trend -j on this suite." if details["runs"] else "Record new runs for this suite before comparing or trending it."),
+                confidence=None,
+                result={
+                    "mode": "suite",
+                    "database_path": database_path,
+                    "truncated": truncated,
+                    "total_run_count": total_count,
+                    **details,
+                },
+            )
+            return
+        _show_suite(details)
+
+        if truncated and total_count is not None:
+            _print_numitems_notice(
+                shown_count=len(details["runs"]),
+                total_count=total_count,
+                identifiers=identifiers,
+                database_path=None if database is None else str(database_path),
+            )
         return
 
-    run_ids = [_require_run_id(identifier) for identifier in identifiers]
+    run_ids = [_require_run_id(identifier, command="show", json_output=json_output) for identifier in identifiers]
     runs = get_selected_run_details(run_ids, database_path)
 
     if runs is None:
-        _console().print(f"One or more runs were not found in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="show",
+            json_output=json_output,
+            exit_code=1,
+            message=f"One or more runs were not found in {database_path}.",
+            reason="selected_run_not_found",
+            error_code="selected_run_not_found",
+            suggested_action="Use benchcaddy show -j without explicit run IDs to inspect available runs.",
+        )
 
     visible_runs, was_limited = _limit_runs(runs, numitems)
+    if json_output:
+        _emit_json_response(
+            command="show",
+            status="pass" if visible_runs else "inconclusive",
+            reason="selected_runs_available" if visible_runs else "no_selected_runs_visible",
+            suggested_action="Use benchcaddy compare -j with these run IDs for direct analysis.",
+            confidence=None,
+            result={
+                "mode": "selected_runs",
+                "database_path": database_path,
+                "requested_run_ids": identifiers,
+                "run_count": len(visible_runs),
+                "truncated": was_limited,
+                "total_run_count": len(runs),
+                "runs": visible_runs,
+            },
+        )
+        return
     _show_selected_runs(visible_runs)
 
     if was_limited:

@@ -1015,28 +1015,34 @@ class TestEnvCommand:
         result = runner.invoke(app, ["env", "--json"])
         assert result.exit_code == 0
         payload = json.loads(result.output)
-        assert "timing_stability" in payload
-        assert "environmental_quality" in payload
-        assert "warnings" in payload
-        assert "noise_level" in payload["noise"]
-        assert "drift_level" in payload["noise"]
-        assert "environment" in payload
-        assert "noise" in payload
-        assert "affinity" in payload
-        assert payload["timing_stability"] in {"HIGH", "FAIR", "LOW"}
-        assert payload["environmental_quality"] in {"HIGH", "FAIR", "LOW"}
-        assert payload["noise"]["noise_level"] in {"low", "moderate", "high"}
-        assert payload["noise"]["drift_level"] in {"low", "moderate", "high"}
-        assert payload["environment"]["cpu_load"] == pytest.approx(0.12)
-        assert payload["environment"]["on_battery"] is False
-        assert payload["environment"]["thermal_throttling"] is False
-        assert payload["environment"]["frequency_stable"] is True
-        assert payload["noise"]["relative_jitter"] == pytest.approx(0.05)
-        assert payload["noise"]["noise_level"] == "moderate"
-        assert payload["noise"]["relative_drift"] == pytest.approx(0.01)
-        assert payload["noise"]["drift_level"] == "low"
-        assert payload["noise"]["iteration_count"] == 200
-        assert payload["affinity"] == [0, 1]
+        assert payload["command"] == "env"
+        assert payload["schema_version"] == "1.0"
+        assert payload["status"] == "inconclusive"
+        assert payload["reason"] == "environment_warnings_detected"
+
+        result_payload = payload["result"]
+        assert "timing_stability" in result_payload
+        assert "environmental_quality" in result_payload
+        assert "warnings" in result_payload
+        assert "noise_level" in result_payload["noise"]
+        assert "drift_level" in result_payload["noise"]
+        assert "environment" in result_payload
+        assert "noise" in result_payload
+        assert "affinity" in result_payload
+        assert result_payload["timing_stability"] in {"HIGH", "FAIR", "LOW"}
+        assert result_payload["environmental_quality"] in {"HIGH", "FAIR", "LOW"}
+        assert result_payload["noise"]["noise_level"] in {"low", "moderate", "high"}
+        assert result_payload["noise"]["drift_level"] in {"low", "moderate", "high"}
+        assert result_payload["environment"]["cpu_load"] == pytest.approx(0.12)
+        assert result_payload["environment"]["on_battery"] is False
+        assert result_payload["environment"]["thermal_throttling"] is False
+        assert result_payload["environment"]["frequency_stable"] is True
+        assert result_payload["noise"]["relative_jitter"] == pytest.approx(0.05)
+        assert result_payload["noise"]["noise_level"] == "moderate"
+        assert result_payload["noise"]["relative_drift"] == pytest.approx(0.01)
+        assert result_payload["noise"]["drift_level"] == "low"
+        assert result_payload["noise"]["iteration_count"] == 200
+        assert result_payload["affinity"] == [0, 1]
         assert stubbed_check_dependencies == [200]
 
     def test_env_with_noise_iterations(self, stubbed_check_dependencies: list[int]):

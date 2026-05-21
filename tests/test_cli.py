@@ -4,12 +4,14 @@ import json
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
 import benchcaddy.cli as cli_module
+import benchcaddy.cli.environment as environment_cli_module
 import benchcaddy.cli.show as show_module
 import benchcaddy.core as core_module
 import benchcaddy.db._sqlite.models as models_module
@@ -606,13 +608,17 @@ def test_cli_sweep_json_output_reports_recorded_runs(
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["command"] == "sweep"
-    assert payload["target_reference"] == "tests.test_cli:cli_variant_benchmark_target"
-    assert payload["suite_name"] == "cli-sweep-json-suite"
-    assert payload["run_count"] == 2
-    assert payload["params"] == {"variant": ["baseline", "candidate"]}
-    assert payload["runs"][0]["display_id"] == "1.1"
-    assert payload["runs"][1]["display_id"] == "1.2"
-    assert payload["runs"][0]["target_return_value"] == pytest.approx(10.0)
+    assert payload["schema_version"] == "1.0"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "runs_recorded"
+    result_payload = payload["result"]
+    assert result_payload["target_reference"] == "tests.test_cli:cli_variant_benchmark_target"
+    assert result_payload["suite_name"] == "cli-sweep-json-suite"
+    assert result_payload["run_count"] == 2
+    assert result_payload["params"] == {"variant": ["baseline", "candidate"]}
+    assert result_payload["runs"][0]["display_id"] == "1.1"
+    assert result_payload["runs"][1]["display_id"] == "1.2"
+    assert result_payload["runs"][0]["target_return_value"] == pytest.approx(10.0)
 
 
 def test_cli_sweep_rejects_json_with_verbose() -> None:
@@ -631,7 +637,11 @@ def test_cli_sweep_rejects_json_with_verbose() -> None:
     )
 
     assert result.exit_code == 2
-    assert "--json cannot be combined with --verbose." in result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "sweep"
+    assert payload["status"] == "fail"
+    assert payload["error_code"] == "json_conflicts_with_verbose"
+    assert payload["reason"] == "json_conflicts_with_verbose"
 
 
 def test_cli_sweep_subcommand_verbose_forwards_to_sweep_runtime(
@@ -731,10 +741,385 @@ def test_cli_sweep_imports_target_from_current_working_directory(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["target_reference"] == "examples.benchmark_local:benchmark_case"
-    assert payload["run_count"] == 2
-    assert payload["runs"][0]["display_id"] == "1.1"
-    assert payload["runs"][1]["display_id"] == "1.2"
+    result_payload = payload["result"]
+    assert result_payload["target_reference"] == "examples.benchmark_local:benchmark_case"
+    assert result_payload["run_count"] == 2
+    assert result_payload["runs"][0]["display_id"] == "1.1"
+    assert result_payload["runs"][1]["display_id"] == "1.2"
+
+
+def test_cli_env_json_output_uses_versioned_envelope(monkeypatch) -> None:
+    runner = CliRunner()
+
+    fake_environment = SimpleNamespace(
+        cpu_load=0.12,
+        on_battery=False,
+        thermal_throttling=False,
+        frequency_stable=True,
+    )
+    fake_noise = SimpleNamespace(
+        relative_jitter=0.01,
+        noise_level="low",
+        relative_drift=0.01,
+        drift_level="low",
+        median_sample_seconds=0.000001,
+        iteration_count=5,
+    )
+    fake_report = SimpleNamespace(
+        timing_stability="HIGH",
+        environmental_quality="HIGH",
+        warnings=(),
+    )
+
+    monkeypatch.setattr(cli_module, "collect_environment_state", lambda: fake_environment)
+    monkeypatch.setattr(cli_module, "NoiseAnalyzer", lambda: SimpleNamespace(analyze=lambda iterations: fake_noise))
+    monkeypatch.setattr(cli_module, "get_affinity", lambda: [0, 1])
+    monkeypatch.setattr(environment_cli_module, "build_reliability_report", lambda environment, noise: fake_report)
+
+    result = runner.invoke(app, ["env", "-j"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "env"
+    assert payload["schema_version"] == "1.0"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "environment_ready"
+    assert payload["confidence"] == "high"
+    assert payload["result"]["affinity"] == [0, 1]
+    assert payload["result"]["noise"]["iteration_count"] == 5
+
+
+def test_cli_list_json_reports_empty_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["list", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "list"
+    assert payload["status"] == "inconclusive"
+    assert payload["reason"] == "no_suites_found"
+    assert payload["result"]["suite_count"] == 0
+    assert payload["result"]["suites"] == []
+
+
+def test_cli_list_json_reports_suite_inventory(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="list-json-suite-a",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="list-json-suite-b",
+        configuration={"size": 1024, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["list", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "list"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "suite_inventory_available"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["suite_count"] == 2
+    suites_by_name = {suite["suite_name"]: suite for suite in payload["result"]["suites"]}
+    assert set(suites_by_name) == {"list-json-suite-a", "list-json-suite-b"}
+    assert suites_by_name["list-json-suite-a"]["run_count"] == 1
+    assert suites_by_name["list-json-suite-b"]["run_count"] == 1
+    assert suites_by_name["list-json-suite-a"]["observation_labels"] == ["inner", "outer"]
+    assert suites_by_name["list-json-suite-b"]["observation_labels"] == ["inner", "outer"]
+
+
+def test_cli_show_json_output_reports_suite_details(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-json-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-json-suite",
+        configuration={"size": 512, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["show", "show-json-suite", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "suite_details_available"
+    assert payload["result"]["mode"] == "suite"
+    assert payload["result"]["suite_name"] == "show-json-suite"
+    assert len(payload["result"]["runs"]) == 2
+
+
+def test_cli_show_json_output_reports_all_runs(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-all-suite-a",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+        target_return_value=1.0,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-all-suite-b",
+        configuration={"size": 1024, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+        target_return_value=2.0,
+    )
+
+    result = runner.invoke(app, ["show", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "run_list_available"
+    assert payload["result"]["mode"] == "all_runs"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["run_count"] == 2
+    assert payload["result"]["truncated"] is False
+    assert payload["result"]["runs"][0]["suite_name"] == "show-all-suite-b"
+    assert payload["result"]["runs"][1]["suite_name"] == "show-all-suite-a"
+    assert payload["result"]["runs"][0]["target_return_value"] == pytest.approx(2.0)
+
+
+def test_cli_show_json_output_reports_single_run_details(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-run-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+        target_return_value=10.0,
+    )
+
+    result = runner.invoke(app, ["show", "1.1", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "run_details_available"
+    assert payload["result"]["mode"] == "run"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["run"]["display_id"] == "1.1"
+    assert payload["result"]["run"]["suite_name"] == "show-run-suite"
+    assert payload["result"]["run"]["target_return_value"] == pytest.approx(10.0)
+    assert payload["result"]["run"]["environment"]["cpu_model"] == environment_payload["cpu_model"]
+
+
+def test_cli_show_json_output_reports_selected_runs(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-selected-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-selected-suite",
+        configuration={"variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["show", "1", "2.1", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "selected_runs_available"
+    assert payload["result"]["mode"] == "selected_runs"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["requested_run_ids"] == ["1", "2.1"]
+    assert payload["result"]["run_count"] == 2
+    assert payload["result"]["total_run_count"] == 2
+    assert payload["result"]["runs"][0]["display_id"] == "2.1"
+    assert payload["result"]["runs"][1]["display_id"] == "1.1"
+
+
+def test_cli_show_json_reports_config_usage_errors(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-json-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["show", "show-json-suite", "-j", "--config", "--database", str(database_path)])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "fail"
+    assert payload["error_code"] == "missing_config_filter_scope"
+
+
+def test_cli_show_json_reports_invalid_run_id_as_usage_error() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["show", "1.1", "not-a-run-id", "-j"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "fail"
+    assert payload["error_code"] == "invalid_run_id"
+
+
+@pytest.mark.parametrize(
+    (
+        "case_name",
+        "expected_exit_code",
+        "expected_status",
+        "expected_reason",
+        "expected_error_code",
+    ),
+    [
+        ("show_invalid_run_id", 2, "fail", "invalid_run_id", "invalid_run_id"),
+        ("show_missing_config_scope", 2, "fail", "missing_config_filter_scope", "missing_config_filter_scope"),
+        ("compare_strict_requires_reference_run", 2, "fail", "strict_requires_reference_run", "strict_requires_reference_run"),
+        ("compare_empty_scope", 0, "inconclusive", "no_runs_matched_scope", None),
+        ("trend_config_filter_no_matches", 0, "inconclusive", "config_filter_no_matches", None),
+        ("trend_missing_baseline", 1, "fail", "baseline_not_found", "baseline_not_found"),
+        ("sweep_json_conflicts_with_verbose", 2, "fail", "json_conflicts_with_verbose", "json_conflicts_with_verbose"),
+    ],
+)
+def test_cli_json_contract_matrix(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+    case_name: str,
+    expected_exit_code: int,
+    expected_status: str,
+    expected_reason: str,
+    expected_error_code: str | None,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    if case_name == "show_invalid_run_id":
+        args = ["show", "1.1", "not-a-run-id", "-j"]
+    elif case_name == "show_missing_config_scope":
+        _seed_run(
+            database_path=database_path,
+            suite_name="matrix-show-suite",
+            configuration={"size": 512, "variant": "baseline"},
+            median_seconds=0.100,
+            environment_payload=environment_payload,
+        )
+        args = ["show", "matrix-show-suite", "-j", "--config", "--database", str(database_path)]
+    elif case_name == "compare_strict_requires_reference_run":
+        _seed_run(
+            database_path=database_path,
+            suite_name="matrix-compare-suite",
+            configuration={"size": 33, "variant": "baseline"},
+            median_seconds=0.100,
+            environment_payload=environment_payload,
+        )
+        args = ["compare", "matrix-compare-suite", "--strict", "-j", "--database", str(database_path)]
+    elif case_name == "compare_empty_scope":
+        _seed_run(
+            database_path=database_path,
+            suite_name="matrix-empty-scope-suite",
+            configuration={"size": 33, "variant": "baseline"},
+            median_seconds=0.100,
+            environment_payload=environment_payload,
+        )
+        args = ["compare", "matrix-empty-scope-suite", "-c", "size=99", "-j", "--database", str(database_path)]
+    elif case_name == "trend_missing_baseline":
+        _seed_sampled_run(
+            database_path=database_path,
+            suite_name="matrix-trend-suite",
+            configuration={"size": 512, "variant": "baseline"},
+            samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+            environment_payload=environment_payload,
+        )
+        args = ["trend", "matrix-trend-suite", "--baseline", "-j", "--database", str(database_path)]
+    elif case_name == "trend_config_filter_no_matches":
+        _seed_sampled_run(
+            database_path=database_path,
+            suite_name="matrix-trend-suite",
+            configuration={"size": 512, "variant": "baseline"},
+            samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+            environment_payload=environment_payload,
+        )
+        args = ["trend", "matrix-trend-suite", "-c", "size=999", "-j", "--database", str(database_path)]
+    elif case_name == "sweep_json_conflicts_with_verbose":
+        _stub_sweep_runtime(monkeypatch, environment_payload)
+        args = [
+            "--verbose",
+            "sweep",
+            "tests.test_cli:cli_variant_benchmark_target",
+            "--suite-name",
+            "matrix-sweep-suite",
+            "-j",
+        ]
+    else:
+        raise AssertionError(f"Unhandled matrix case: {case_name}")
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == expected_exit_code
+    payload = json.loads(result.stdout)
+    assert payload["status"] == expected_status
+    assert payload["reason"] == expected_reason
+    assert payload["error_code"] == expected_error_code
 
 
 def test_compare_does_not_alias_missing_dotted_run_id_to_record_id(
@@ -858,18 +1243,21 @@ def test_cli_end_to_end_compare_and_trend_json_support_regression_gate(
     compare_json_result = runner.invoke(app, ["compare", "e2e-json-suite", "--json", "--database", str(database_path)])
     assert compare_json_result.exit_code == 0
     compare_payload = json.loads(compare_json_result.stdout)
-    assert compare_payload["comparison_mode"] == "suite"
-    assert len(compare_payload["runs"]) == 20
+    compare_result_payload = compare_payload["result"]
+    assert compare_payload["command"] == "compare"
+    assert compare_result_payload["comparison_mode"] == "suite"
+    assert len(compare_result_payload["runs"]) == 20
 
-    best_run = compare_payload["basis_run"]
+    best_run = compare_result_payload["basis_run"]
     trend_result = runner.invoke(app, ["trend", "e2e-json-suite", best_run["display_id"], "--json", "--database", str(database_path)])
     assert trend_result.exit_code == 0
     trend_payload = json.loads(trend_result.stdout)
-    assert trend_payload["suite_name"] == "e2e-json-suite"
-    assert trend_payload["basis_run"]["display_id"] == best_run["display_id"]
-    assert len(trend_payload["runs"]) == 20
+    trend_result_payload = trend_payload["result"]
+    assert trend_result_payload["suite_name"] == "e2e-json-suite"
+    assert trend_result_payload["basis_run"]["display_id"] == best_run["display_id"]
+    assert len(trend_result_payload["runs"]) == 20
 
-    trend_runs = trend_payload["runs"]
+    trend_runs = trend_result_payload["runs"]
     worst_run = max(trend_runs, key=lambda run: (run["median_seconds"], run["id"]))
     expected_best_run = min(trend_runs, key=lambda run: (run["median_seconds"], run["id"]))
     assert best_run["display_id"] == expected_best_run["display_id"]
@@ -897,11 +1285,13 @@ def test_cli_end_to_end_compare_and_trend_json_support_regression_gate(
 
     assert failing_gate_result.exit_code == cli_module.REGRESSION_EXIT_CODE == 3
     failing_payload = json.loads(failing_gate_result.stdout)
-    assert failing_payload["comparison_mode"] == "direct"
-    assert failing_payload["candidate"]["display_id"] == worst_run["display_id"]
-    assert failing_payload["comparison_analysis"]["regression_detected"] is True
-    assert failing_payload["gate"]["failed"] is True
-    assert failing_payload["gate"]["failing_runs"][0]["display_id"] == worst_run["display_id"]
+    failing_result_payload = failing_payload["result"]
+    assert failing_payload["status"] == "fail"
+    assert failing_result_payload["comparison_mode"] == "direct"
+    assert failing_result_payload["candidate"]["display_id"] == worst_run["display_id"]
+    assert failing_result_payload["comparison_analysis"]["regression_detected"] is True
+    assert failing_result_payload["gate"]["failed"] is True
+    assert failing_result_payload["gate"]["failing_runs"][0]["display_id"] == worst_run["display_id"]
 
     passing_gate_result = runner.invoke(
         app,
@@ -919,10 +1309,12 @@ def test_cli_end_to_end_compare_and_trend_json_support_regression_gate(
 
     assert passing_gate_result.exit_code == 0
     passing_payload = json.loads(passing_gate_result.stdout)
-    assert passing_payload["comparison_mode"] == "direct"
-    assert passing_payload["comparison_analysis"]["regression_detected"] is False
-    assert passing_payload["gate"]["failed"] is False
-    assert passing_payload["gate"]["failing_runs"] == []
+    passing_result_payload = passing_payload["result"]
+    assert passing_payload["status"] == "pass"
+    assert passing_result_payload["comparison_mode"] == "direct"
+    assert passing_result_payload["comparison_analysis"]["regression_detected"] is False
+    assert passing_result_payload["gate"]["failed"] is False
+    assert passing_result_payload["gate"]["failing_runs"] == []
 
 
 def test_show_without_arguments_lists_all_runs(
@@ -1767,6 +2159,36 @@ def test_cli_compare_rejects_config_filter_with_strict(
     assert "--strict cannot be combined with --config/-c." in result.stdout
 
 
+def test_cli_compare_json_reports_empty_scope_as_inconclusive(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="empty-scope-suite",
+        configuration={"size": 33, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "empty-scope-suite", "-c", "size=99", "-j", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "compare"
+    assert payload["status"] == "inconclusive"
+    assert payload["reason"] == "no_runs_matched_scope"
+    assert payload["confidence"] is None
+    assert payload["result"]["runs"] == []
+    assert payload["result"]["basis_run"] is None
+
+
 @pytest.mark.parametrize(
     "extra_args",
     [
@@ -1982,8 +2404,8 @@ def test_cli_baseline_uses_latest_pinned_baseline(
     assert use_result.exit_code == 0
 
     payload = json.loads(use_result.stdout)
-    assert payload["basis_source"] == "pinned"
-    assert payload["basis_run"]["display_id"] == "2.1"
+    assert payload["result"]["basis_source"] == "pinned"
+    assert payload["result"]["basis_run"]["display_id"] == "2.1"
 
 
 def test_cli_baseline_shows_history_and_note(
@@ -2500,12 +2922,14 @@ def test_cli_compare_json_output_reports_direct_regression_gate_failure(
 
     assert result.exit_code == cli_module.REGRESSION_EXIT_CODE
     payload = json.loads(result.stdout)
-    assert payload["comparison_mode"] == "direct"
-    assert payload["comparison_analysis"]["regression_detected"] is True
-    assert payload["gate"]["enabled"] is True
-    assert payload["gate"]["failed"] is True
-    assert payload["gate"]["threshold_percent"] == pytest.approx(5.0)
-    assert payload["gate"]["failing_runs"][0]["display_id"] == "2.1"
+    result_payload = payload["result"]
+    assert payload["status"] == "fail"
+    assert result_payload["comparison_mode"] == "direct"
+    assert result_payload["comparison_analysis"]["regression_detected"] is True
+    assert result_payload["gate"]["enabled"] is True
+    assert result_payload["gate"]["failed"] is True
+    assert result_payload["gate"]["threshold_percent"] == pytest.approx(5.0)
+    assert result_payload["gate"]["failing_runs"][0]["display_id"] == "2.1"
 
 
 def test_cli_compare_json_output_reports_direct_gate_pass(
@@ -2537,9 +2961,11 @@ def test_cli_compare_json_output_reports_direct_gate_pass(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["comparison_mode"] == "direct"
-    assert payload["gate"]["failed"] is False
-    assert payload["gate"]["failing_runs"] == []
+    result_payload = payload["result"]
+    assert payload["status"] == "pass"
+    assert result_payload["comparison_mode"] == "direct"
+    assert result_payload["gate"]["failed"] is False
+    assert result_payload["gate"]["failing_runs"] == []
 
 
 def test_cli_compare_json_output_reports_suite_regression_gate_failure(
@@ -2571,10 +2997,12 @@ def test_cli_compare_json_output_reports_suite_regression_gate_failure(
 
     assert result.exit_code == cli_module.REGRESSION_EXIT_CODE
     payload = json.loads(result.stdout)
-    assert payload["comparison_mode"] == "suite"
-    assert payload["basis_run"]["display_id"] == "1.1"
-    assert payload["gate"]["failed"] is True
-    assert payload["gate"]["failing_runs"][0]["display_id"] == "2.1"
+    result_payload = payload["result"]
+    assert payload["status"] == "fail"
+    assert result_payload["comparison_mode"] == "suite"
+    assert result_payload["basis_run"]["display_id"] == "1.1"
+    assert result_payload["gate"]["failed"] is True
+    assert result_payload["gate"]["failing_runs"][0]["display_id"] == "2.1"
 
 
 def test_cli_baseline_json_output_includes_pin_update(
@@ -2603,9 +3031,12 @@ def test_cli_baseline_json_output_includes_pin_update(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["pin_update"]["display_id"] == "2.1"
-    assert payload["current_baseline"]["run"]["display_id"] == "2.1"
-    assert payload["current_baseline"]["note"] == "manual"
+    result_payload = payload["result"]
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "baseline_pinned"
+    assert result_payload["pin_update"]["display_id"] == "2.1"
+    assert result_payload["current_baseline"]["run"]["display_id"] == "2.1"
+    assert result_payload["current_baseline"]["note"] == "manual"
 
 
 def test_cli_trend_json_output_is_machine_readable(
@@ -2644,9 +3075,12 @@ def test_cli_trend_json_output_is_machine_readable(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["suite_name"] == "trend-json-suite"
-    assert payload["basis_run"]["display_id"] == "1.1"
-    assert len(payload["runs"]) == 3
+    result_payload = payload["result"]
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "regression_detected"
+    assert result_payload["suite_name"] == "trend-json-suite"
+    assert result_payload["basis_run"]["display_id"] == "1.1"
+    assert len(result_payload["runs"]) == 3
     assert "Trend Basis:" not in result.stdout
 
 
@@ -2686,9 +3120,12 @@ def test_cli_trend_json_output_summarizes_mixed_configurations(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["mode"] == "summary"
-    assert payload["suite_name"] == "summary-json-suite"
-    assert payload["configuration_count"] == 2
-    assert len(payload["config_summaries"]) == 2
-    assert payload["config_summaries"][0]["latest_vs_first"]["classification"] == "regressing"
+    result_payload = payload["result"]
+    assert payload["status"] == "inconclusive"
+    assert payload["reason"] == "multiple_configurations_summary"
+    assert result_payload["mode"] == "summary"
+    assert result_payload["suite_name"] == "summary-json-suite"
+    assert result_payload["configuration_count"] == 2
+    assert len(result_payload["config_summaries"]) == 2
+    assert result_payload["config_summaries"][0]["latest_vs_first"]["classification"] == "regressing"
     assert "Trend Summary:" not in result.stdout
