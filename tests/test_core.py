@@ -450,6 +450,63 @@ def test_suite_trend_with_pinned_baseline_keeps_timeline_for_mixed_configuration
     assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1"]
 
 
+def test_suite_trend_ignores_pinned_baseline_without_flag(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="unpinned-summary-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        observations=[],
+        median_seconds=0.100,
+        min_seconds=0.099,
+        max_seconds=0.102,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="unpinned-summary-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        observations=[],
+        median_seconds=0.110,
+        min_seconds=0.109,
+        max_seconds=0.112,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="unpinned-summary-suite",
+        target_name="benchmark_target",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.199, 0.200, 0.201, 0.200, 0.199],
+        observations=[],
+        median_seconds=0.200,
+        min_seconds=0.199,
+        max_seconds=0.201,
+        std_seconds=0.0008944272,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    pinned = set_suite_baseline("unpinned-summary-suite", 1, database_path)
+
+    assert pinned is not None
+
+    trend = get_suite_trend("unpinned-summary-suite", database_path)
+
+    assert trend is not None
+    assert trend["mode"] == "summary"
+    assert len(trend["config_summaries"]) == 2
+
+
 def test_suite_trend_with_pinned_baseline_errors_when_missing(
     tmp_path: Path,
     environment_payload: dict[str, object],

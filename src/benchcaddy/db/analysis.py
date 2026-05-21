@@ -192,8 +192,8 @@ def get_suite_trend(
                     "runs": [],
                 }
 
-            basis_run = _resolve_suite_baseline_run(session, suite)
             if use_pinned_baseline:
+                basis_run = _resolve_suite_baseline_run(session, suite)
                 if basis_run is None:
                     return {"error": "baseline_not_found", "suite_name": suite.name}
                 basis_source = "pinned"
@@ -203,7 +203,7 @@ def get_suite_trend(
                 for run in runs:
                     grouped_runs.setdefault(_configuration_group_key(run.configuration), []).append(run)
 
-                if basis_run is None and len(grouped_runs) > 1:
+                if len(grouped_runs) > 1:
                     return {
                         "mode": "summary",
                         "suite_name": suite.name,
@@ -213,11 +213,8 @@ def get_suite_trend(
                         "config_summaries": [_configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit) for key in grouped_runs],
                     }
 
-                if basis_run is not None:
-                    basis_source = "pinned"
-                else:
-                    basis_run = runs[-1]
-                    basis_source = "latest"
+                basis_run = runs[-1]
+                basis_source = "latest"
 
         config_filter = dict(basis_run.configuration)
         if runs is None:
