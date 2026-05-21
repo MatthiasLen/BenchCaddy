@@ -74,6 +74,7 @@ def _validate_schema(engine: Engine, path: Path) -> None:
     inspector = inspect(engine)
     missing_tables: list[str] = []
     missing_columns: dict[str, list[str]] = {}
+    missing_indexes: dict[str, list[str]] = {}
     missing_unique_indexes: dict[str, list[str]] = {}
 
     for table in Base.metadata.sorted_tables:
@@ -95,9 +96,9 @@ def _validate_schema(engine: Engine, path: Path) -> None:
     baseline_event_indexes = inspector.get_indexes("benchmark_suite_baseline_events") if inspector.has_table("benchmark_suite_baseline_events") else []
     has_suite_history_index = any(index.get("column_names") == ["suite_id", "created_at", "id"] for index in baseline_event_indexes)
     if inspector.has_table("benchmark_suite_baseline_events") and not has_suite_history_index:
-        missing_unique_indexes["benchmark_suite_baseline_events"] = ["suite_id", "created_at", "id"]
+        missing_indexes["benchmark_suite_baseline_events"] = ["suite_id", "created_at", "id"]
 
-    if not missing_tables and not missing_columns and not missing_unique_indexes:
+    if not missing_tables and not missing_columns and not missing_indexes and not missing_unique_indexes:
         return
 
     message_parts: list[str] = []
@@ -106,6 +107,9 @@ def _validate_schema(engine: Engine, path: Path) -> None:
     if missing_columns:
         column_parts = [f"{table}({', '.join(columns)})" for table, columns in sorted(missing_columns.items())]
         message_parts.append(f"missing columns: {', '.join(column_parts)}")
+    if missing_indexes:
+        index_parts = [f"{table}({', '.join(columns)})" for table, columns in sorted(missing_indexes.items())]
+        message_parts.append(f"missing indexes: {', '.join(index_parts)}")
     if missing_unique_indexes:
         index_parts = [f"{table}({', '.join(columns)})" for table, columns in sorted(missing_unique_indexes.items())]
         message_parts.append(f"missing unique indexes: {', '.join(index_parts)}")

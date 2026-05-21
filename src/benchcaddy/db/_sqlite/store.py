@@ -4,7 +4,7 @@ from typing import Any
 
 from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .models import BenchmarkRun, BenchmarkSuite, BenchmarkSuiteBaselineEvent
 
@@ -53,6 +53,10 @@ def _resolve_suite_baseline_run(session: Session, suite: BenchmarkSuite) -> Benc
 def _list_suite_baseline_events_latest_first(session: Session, suite_id: int, limit: int | None = None) -> list[BenchmarkSuiteBaselineEvent]:
     statement: Select[tuple[BenchmarkSuiteBaselineEvent]] = (
         select(BenchmarkSuiteBaselineEvent)
+        .options(
+            joinedload(BenchmarkSuiteBaselineEvent.run).joinedload(BenchmarkRun.suite),
+            joinedload(BenchmarkSuiteBaselineEvent.run).joinedload(BenchmarkRun.environment),
+        )
         .where(BenchmarkSuiteBaselineEvent.suite_id == suite_id)
         .order_by(BenchmarkSuiteBaselineEvent.created_at.desc(), BenchmarkSuiteBaselineEvent.id.desc())
     )
