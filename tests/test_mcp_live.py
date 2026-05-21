@@ -98,7 +98,7 @@ def test_live_mcp_stdio_smoke(
 
     async def run_smoke() -> None:
         async with Client(_transport()) as client:
-            initialize_result = client._session_state.initialize_result
+            initialize_result = client.initialize_result
             assert initialize_result is not None
             assert initialize_result.serverInfo.name == "BenchCaddy MCP"
 
