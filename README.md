@@ -6,7 +6,7 @@ BenchCaddy is a lightweight Python benchmarking toolkit for software developers,
 It runs parameter sweeps in an isolated worker process, stores raw samples and environment metadata in SQLite, and gives you a CLI to inspect runs, compare configurations, pin baselines, and track drift over time.
 It is for the gap between full profilers and a directory full of `timings_final_v4_really.csv`.
 
-<br>
+
 <img src="https://raw.githubusercontent.com/MatthiasLen/BenchCaddy/main/bc_trends.png" alt="BenchCaddy trend summary overview" width="640"></img>
 
 ## Why BenchCaddy
@@ -247,6 +247,8 @@ benchcaddy env --json
 ```
 
 `env` reports timing noise, drift, affinity, CPU load, battery state, thermal throttling, and frequency stability signals when available.
+
+<img src="https://raw.githubusercontent.com/MatthiasLen/BenchCaddy/main/bc_environment.png" alt="BenchCaddy environment check" width="640"></img>
 
 ### JSON envelope for agents and MCP consumers
 
