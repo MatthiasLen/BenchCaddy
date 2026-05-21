@@ -133,6 +133,10 @@ def set_suite_baseline(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
     note: str | None = None,
+    *,
+    include_samples: bool = True,
+    include_observations: bool = True,
+    include_environment: bool = True,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         with session.begin():
@@ -154,4 +158,9 @@ def set_suite_baseline(
 
             # Baseline pins are append-only events so the full baseline history remains auditable.
             session.add(BenchmarkSuiteBaselineEvent(suite_id=suite.id, run_id=run.id, note=note))
-        return run.to_detail_payload(analysis_options)
+        return run.to_detail_payload(
+            analysis_options,
+            include_samples=include_samples,
+            include_observations=include_observations,
+            include_environment=include_environment,
+        )

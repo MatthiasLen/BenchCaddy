@@ -152,6 +152,8 @@ class BenchmarkRun(Base):
         analysis_options: AnalysisOptions | None = None,
         *,
         include_analysis: bool = False,
+        include_samples: bool = True,
+        include_observations: bool = True,
     ) -> dict[str, Any]:
         # Reuse one computed analysis payload for both the nested block and the convenience summary fields.
         analysis = self.analysis_payload(analysis_options) if include_analysis or analysis_options is not None else None
@@ -162,8 +164,7 @@ class BenchmarkRun(Base):
             "sweep_id": self.sweep_execution_id or self.id,
             "run_index": self.run_index or 1,
             "configuration": self.configuration,
-            "samples": self.samples,
-            "observations": self.observations,
+            "sample_count": len(self.samples),
             "mean_seconds": self.mean_seconds,
             "median_seconds": self.median_seconds,
             "min_seconds": self.min_seconds,
@@ -172,6 +173,10 @@ class BenchmarkRun(Base):
             "target_return_value": self.target_return_value,
             "created_at": self.created_at,
         }
+        if include_samples:
+            payload["samples"] = self.samples
+        if include_observations:
+            payload["observations"] = self.observations
         payload.update(
             {
                 "analysis": analysis,
@@ -190,14 +195,24 @@ class BenchmarkRun(Base):
         analysis_options: AnalysisOptions | None = None,
         *,
         include_analysis: bool = False,
+        include_samples: bool = True,
+        include_observations: bool = True,
+        include_environment: bool = True,
     ) -> dict[str, Any]:
-        return {
-            **self.to_payload(analysis_options, include_analysis=include_analysis),
-            # Detail views inline suite and environment data so callers do not need follow-up lookups.
+        payload = {
+            **self.to_payload(
+                analysis_options,
+                include_analysis=include_analysis,
+                include_samples=include_samples,
+                include_observations=include_observations,
+            ),
+            # Detail views inline suite data so callers do not need follow-up lookups.
             "suite_name": self.suite.name,
             "target_name": self.suite.target_name,
-            "environment": self.environment.to_payload(),
         }
+        if include_environment:
+            payload["environment"] = self.environment.to_payload()
+        return payload
 
     def to_suite_comparison_row(
         self,

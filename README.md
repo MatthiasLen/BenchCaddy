@@ -2,9 +2,11 @@
 
 [![CI](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml)
 
-BenchCaddy is a lightweight Python benchmarking toolkit for software developers, AI engineers, and data scientists who need repeatable performance measurements without building custom log-file workflows.
-It runs parameter sweeps in an isolated worker process, stores raw samples and environment metadata in SQLite, and gives you a CLI to inspect runs, compare configurations, pin baselines, and track drift over time.
-It is for the gap between full profilers and a directory full of `timings_final_v4_really.csv`.
+# BenchCaddy
+
+BenchCaddy is a lightweight Python benchmarking toolkit for repeatable performance measurements across code changes, configurations, and environments.
+It runs parameter sweeps in isolated worker processes, stores raw samples and environment metadata in SQLite, and keeps the recorded results easy to inspect from the CLI, as JSON for scripts, or via MCP for agents.
+It fits the space between heavyweight profilers and a directory full of `timings_final_v4_really.csv`: use it when the real question is not just how long something took once, but whether a change is materially faster, slower, or noisier across configurations and environments.
 
 
 <img src="https://raw.githubusercontent.com/MatthiasLen/BenchCaddy/main/bc_trends.png" alt="BenchCaddy trend summary overview" width="640"></img>
@@ -13,11 +15,12 @@ It is for the gap between full profilers and a directory full of `timings_final_
 
 - Run repeatable benchmark sweeps across parameter grids
 - Persist raw samples, observations, and machine metadata in `benchcaddy.db`
-- Compare runs with median-based summaries, confidence intervals, and noise warnings
+- Compare runs with median-based summaries, confidence intervals, and noise diagnostics
 - Pin suite baselines and reuse them for local checks or CI gates
 - Capture supported return values to validate correctness alongside runtime
+- Make the same recorded data easy to inspect from the CLI, as JSON for scripts, or via MCP for agents
 
-BenchCaddy is intentionally narrow: it helps you answer "is this actually faster, and under what environment?" It is not a profiler or tracing system.
+BenchCaddy is intentionally lean: it helps you answer whether a change is actually faster, slower, or noisier, and under what environment. It is not a profiler, tracer, or distributed observability system.
 
 ## Installation
 
@@ -33,7 +36,7 @@ pip install benchcaddy
 
 ## Quick Start
 
-BenchCaddy workflows have two steps:
+Most BenchCaddy workflows have two steps:
 
 1. Run a benchmark sweep over one or more configurations.
 2. Inspect, compare, or trend the recorded results from the database.
@@ -87,7 +90,7 @@ Sweep(
 ).run()
 ```
 
-BenchCaddy writes results to `./benchcaddy.db` relative to the directory where you run the example. Stored raw samples power richer analysis during inspection, including bootstrap confidence intervals, outlier diagnostics, noise warnings, and regression classification.
+BenchCaddy writes results to `./benchcaddy.db` relative to the directory where you run the example. Those stored raw samples support later inspection, including bootstrap confidence intervals, outlier diagnostics, noise warnings, and regression classification.
 
 The full runnable example lives at [`examples/benchmark_nonlinear_transform.py`](https://github.com/MatthiasLen/BenchCaddy/blob/main/examples/benchmark_nonlinear_transform.py).
 
@@ -250,9 +253,11 @@ benchcaddy env --json
 
 <img src="https://raw.githubusercontent.com/MatthiasLen/BenchCaddy/main/bc_environment.png" alt="BenchCaddy environment check" width="640"></img>
 
-### JSON envelope for agents and MCP consumers
+### JSON output for automation and agent wrappers
 
 All top-level CLI commands support `-j` / `--json`: `env`, `baseline`, `compare`, `list`, `show`, `sweep`, and `trend`.
+The JSON envelope is intentionally consistent so shell automation, notebooks, and simple agent wrappers can branch on outcome before they inspect command-specific payloads.
+It is also intentionally compact: for agent workflows, these payloads are usually much cheaper to pass around than raw profiler traces or the full text output of many benchmarking tools.
 
 Each JSON response uses the same top-level envelope:
 
@@ -278,9 +283,15 @@ Use `status` as the primary control signal:
 - `fail`: the command found a blocking problem, regression, or invalid request
 - `inconclusive`: the command completed, but the result needs more data, a narrower scope, or a cleaner environment before automation should treat it as decisive
 
-`reason` is a stable snake_case classifier that adds more detail without replacing `status`. Typical reasons include `runs_recorded`, `suite_details_available`, `regression_detected`, `noisy_samples`, `environment_warnings_detected`, and `suite_not_found`.
+`reason` is a stable snake_case classifier that adds more detail without replacing `status`. Typical values include `runs_recorded`, `suite_details_available`, `regression_detected`, `noisy_samples`, `environment_warnings_detected`, and `suite_not_found`.
 
-For automation, branch on `status` first, then use `reason`, `error_code`, and `suggested_action` to decide the next step. Treat `result` as the command-specific data payload and keep callers tolerant of additional keys in future schema versions.
+For automation, branch on `status` first, then use `reason`, `error_code`, and `suggested_action` to decide the next step. Treat `result` as the command-specific payload and keep callers tolerant of additional keys in future schema versions.
+
+## BenchCaddy MCP
+
+BenchCaddy also ships an MCP server for cases where an agent should call named tools instead of constructing CLI commands and parsing JSON.
+The MCP server exposes the same stored benchmark data and analysis in a form that is easier for tool-calling clients to use directly, with compact default summaries that are typically more token-efficient than feeding an agent raw traces or verbose benchmark logs.
+For MCP setup, client configuration examples, available tools, and sample chat workflows, see [README_MCP.md](README_MCP.md).
 
 ## CI And Automation
 
@@ -358,4 +369,4 @@ Each recorded run stores environment details alongside timing data, including:
 
 ## Feedback
 
-BenchCaddy is intentionally lean. If a workflow is missing, open an issue with the benchmark shape you are trying to support. The goal is to make performance tracking less chaotic, not to create another excuse for `results_new_final_fixed.csv`.
+BenchCaddy is intentionally lean. If a workflow is missing, open an issue with the benchmark shape you are trying to support. The goal is to make performance tracking less chaotic, not to create another excuse for results_new_final_fixed.csv.
