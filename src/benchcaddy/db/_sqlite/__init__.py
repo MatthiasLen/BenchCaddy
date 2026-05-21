@@ -1,0 +1,1 @@
+"""Private SQLite persistence implementation for BenchCaddy."""

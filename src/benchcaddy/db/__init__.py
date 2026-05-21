@@ -1,10 +1,10 @@
 """Public persistence surface for BenchCaddy.
 
 Import persistence workflows from here. Statistical analysis helpers,
-return-value helpers, and SQLAlchemy internals live in their own modules.
+return-value helpers, and SQLite internals live in their own modules.
 """
 
-from ._sqlalchemy.session import get_database_path
+from ._sqlite.session import get_database_path
 from .analysis import compare_runs, compare_suite_runs, get_suite_trend
 from .read import (
     get_all_run_count,

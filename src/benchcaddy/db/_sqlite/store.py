@@ -15,16 +15,25 @@ def _get_suite(session: Session, suite_name: str) -> BenchmarkSuite | None:
 
 def _get_or_create_suite(session: Session, suite_name: str, target_name: str) -> BenchmarkSuite:
     suite = _get_suite(session, suite_name)
+    # Suite names are the stable identity; reusing one for a different target would corrupt reads and comparisons.
+    if suite is not None and suite.target_name != target_name:
+        raise ValueError(f"Suite {suite_name!r} already exists for target {suite.target_name!r}, cannot reuse it for target {target_name!r}.")
     if suite is None:
         suite = BenchmarkSuite(name=suite_name, target_name=target_name)
-        session.add(suite)
         try:
-            session.flush()
-        except IntegrityError:
-            session.rollback()
+            with session.begin_nested():
+                # A savepoint lets a concurrent create race recover without aborting the caller's outer transaction.
+                session.add(suite)
+                session.flush()
+        except IntegrityError as err:
+            # Another transaction might have created the suite concurrently, so we try to fetch it again.
             suite = _get_suite(session, suite_name)
             if suite is None:
                 raise
+            if suite.target_name != target_name:
+                raise ValueError(
+                    f"Suite {suite_name!r} already exists for target {suite.target_name!r}, cannot reuse it for target {target_name!r}."
+                ) from err
     return suite
 
 
@@ -59,10 +68,14 @@ def _count_all_runs(session: Session) -> int:
 
 
 def _list_suite_runs_latest_first(session: Session, suite_id: int, limit: int | None = None) -> list[BenchmarkRun]:
-    statement: Select[tuple[BenchmarkRun]] = select(BenchmarkRun).where(BenchmarkRun.suite_id == suite_id).order_by(
-        BenchmarkRun.sweep_execution_id.desc(),
-        BenchmarkRun.run_index.desc(),
-        BenchmarkRun.id.desc(),
+    statement: Select[tuple[BenchmarkRun]] = (
+        select(BenchmarkRun)
+        .where(BenchmarkRun.suite_id == suite_id)
+        .order_by(
+            BenchmarkRun.sweep_execution_id.desc(),
+            BenchmarkRun.run_index.desc(),
+            BenchmarkRun.id.desc(),
+        )
     )
     if limit is not None:
         statement = statement.limit(limit)
@@ -87,7 +100,33 @@ def _list_suite_runs_oldest_first(session: Session, suite_id: int) -> list[Bench
     )
 
 
+def _list_suite_runs_for_configuration_oldest_first(
+    session: Session,
+    suite_id: int,
+    configuration: dict[str, Any],
+    *,
+    limit: int | None = None,
+) -> list[BenchmarkRun]:
+    if limit is None:
+        statement: Select[tuple[BenchmarkRun]] = (
+            select(BenchmarkRun)
+            .where(BenchmarkRun.suite_id == suite_id, BenchmarkRun.configuration == configuration)
+            .order_by(BenchmarkRun.sweep_execution_id.asc(), BenchmarkRun.run_index.asc(), BenchmarkRun.id.asc())
+        )
+        return session.execute(statement).scalars().all()
+
+    # Pull the newest N rows cheaply, then restore oldest-first order for trend consumers.
+    statement = (
+        select(BenchmarkRun)
+        .where(BenchmarkRun.suite_id == suite_id, BenchmarkRun.configuration == configuration)
+        .order_by(BenchmarkRun.sweep_execution_id.desc(), BenchmarkRun.run_index.desc(), BenchmarkRun.id.desc())
+        .limit(limit)
+    )
+    return list(reversed(session.execute(statement).scalars().all()))
+
+
 def _collect_observation_labels(observation_groups: list[list[dict[str, Any]]] | Any) -> list[str]:
+    # Summary tables show the union of probe labels collected across every stored sample.
     labels: set[str] = set()
     for observations in observation_groups:
         for sample in observations:
@@ -100,15 +139,11 @@ def _resolve_run(session: Session, run_id: int | tuple[int, int]) -> BenchmarkRu
     if isinstance(run_id, int):
         return session.get(BenchmarkRun, run_id)
 
+    # Tuple ids resolve the sweep-local display identifiers used throughout the CLI and API.
     sweep_id, run_index = run_id
-    run = session.scalar(
+    return session.scalar(
         select(BenchmarkRun).where(
             BenchmarkRun.sweep_execution_id == sweep_id,
             BenchmarkRun.run_index == run_index,
         )
     )
-    if run is None and run_index == 1:
-        legacy_run = session.get(BenchmarkRun, sweep_id)
-        if legacy_run is not None and legacy_run.sweep_execution_id is None and legacy_run.run_index in (None, 1):
-            return legacy_run
-    return run
