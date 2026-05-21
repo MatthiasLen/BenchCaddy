@@ -306,7 +306,7 @@ def show_command(
                 _print_numitems_notice(
                     shown_count=len(details["runs"]),
                     total_count=total_count,
-                    identifiers=identifiers,
+                    identifiers=[identifiers[0], "-c", *identifiers[1:]],
                     database_path=None if database is None else str(database_path),
                 )
         return

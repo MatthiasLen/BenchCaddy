@@ -1088,6 +1088,52 @@ def test_show_suite_can_filter_by_config(
     assert "1.1" not in result.stdout
 
 
+def test_show_filtered_suite_numitems_notice_preserves_config_flag(
+    tmp_path: Path,
+    monkeypatch,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        cli_module,
+        "console",
+        Console(force_terminal=False, color_system=None, width=160),
+    )
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="filtered-show-suite",
+        configuration={"size": 1024, "variant": "candidate-a"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="filtered-show-suite",
+        configuration={"size": 1024, "variant": "candidate-b"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="filtered-show-suite",
+        configuration={"size": 1024, "variant": "candidate-c"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(
+        app,
+        ["show", "filtered-show-suite", "-c", "size=1024", "--numitems", "2", "--database", str(database_path)],
+    )
+
+    assert result.exit_code == 0
+    assert "Output capped to the latest entries by record ID." in result.stdout
+    assert _compact_output(f"benchcaddy show filtered-show-suite -c size=1024 -n 3 --database {database_path}") in _compact_output(result.stdout)
+
+
 def test_show_config_requires_suite_name_and_entries(tmp_path: Path) -> None:
     database_path = tmp_path / "benchcaddy.db"
     runner = CliRunner()
