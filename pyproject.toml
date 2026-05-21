@@ -55,6 +55,7 @@ Issues = "https://github.com/MatthiasLen/BenchCaddy/issues"
 
 [project.scripts]
 benchcaddy = "benchcaddy.cli:main"
+benchcaddy-mcp = "benchcaddy_mcp.server:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
