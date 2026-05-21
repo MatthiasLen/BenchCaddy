@@ -34,9 +34,11 @@ from ._shared import (
     SignificanceLevelOption,
     _analysis_options,
     _as_run_id,
+    _confidence_label,
     _console,
-    _emit_json,
+    _emit_json_response,
     _parse_config_filter_entries,
+    _raise_cli_error,
     app,
 )
 
@@ -47,7 +49,7 @@ def _format_config_filter(config_filter: dict[str, object] | None) -> str:
     return ", ".join(f"{key}={config_filter[key]}" for key in sorted(config_filter))
 
 
-def _parse_compare_operands(values: list[str] | None, strict: bool, config: bool) -> tuple[str | None, list[str], list[str]]:
+def _parse_compare_operands(values: list[str] | None, strict: bool, config: bool, *, json_output: bool) -> tuple[str | None, list[str], list[str]]:
     if not values:
         return None, [], []
 
@@ -59,8 +61,15 @@ def _parse_compare_operands(values: list[str] | None, strict: bool, config: bool
     if strict and _as_run_id(right) is None:
         return None, list(dict.fromkeys(values)), []
     if extra and not strict:
-        _console().print(f"Unexpected arguments: {' '.join(extra)}")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message=f"Unexpected arguments: {' '.join(extra)}",
+            reason="unexpected_arguments",
+            error_code="unexpected_arguments",
+            suggested_action="Pass a single candidate run ID for direct compare, or use --strict / --config for suite comparison scope.",
+        )
     return right, list(dict.fromkeys(extra)) if strict else [], []
 
 
@@ -73,15 +82,30 @@ def _run_direct_compare(
     strict_keys: list[str],
     config_filter: dict[str, object] | None,
     use_baseline: bool,
+    json_output: bool,
 ) -> dict[str, object]:
     if strict_keys or config_filter or use_baseline:
-        _console().print("--strict, --config/-c, and --baseline/-b are only supported for suite comparisons.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message="--strict, --config/-c, and --baseline/-b are only supported for suite comparisons.",
+            reason="invalid_direct_compare_options",
+            error_code="invalid_direct_compare_options",
+            suggested_action="Remove suite-only flags when comparing two explicit run IDs.",
+        )
 
     comparison = compare_runs(left_run_id, right_run_id, database_path, analysis_options=analysis_options)
     if comparison is None:
-        _console().print(f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Run comparison {left_run_id} vs {right_run_id} was not found in {database_path}.",
+            reason="run_not_found",
+            error_code="run_not_found",
+            suggested_action="Use benchcaddy show -j to inspect available run IDs.",
+        )
     return comparison
 
 
@@ -92,15 +116,30 @@ def _resolve_compare_strict_keys(
     right: str | None,
     right_run_id: int | tuple[int, int] | None,
     database_path: Path,
+    json_output: bool,
 ) -> list[str]:
     if strict and right_run_id is None:
-        _console().print("--strict requires a suite comparison with a reference run ID.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message="--strict requires a suite comparison with a reference run ID.",
+            reason="strict_requires_reference_run",
+            error_code="strict_requires_reference_run",
+            suggested_action="Pass a suite name and reference run ID before using --strict.",
+        )
     if strict and right_run_id is not None and not strict_keys:
         reference_run = get_run_details(right_run_id, database_path, include_analysis=False)
         if reference_run is None:
-            _console().print(f"Reference run '{right}' was not found in {database_path}.")
-            raise typer.Exit(code=1)
+            _raise_cli_error(
+                command="compare",
+                json_output=json_output,
+                exit_code=1,
+                message=f"Reference run '{right}' was not found in {database_path}.",
+                reason="reference_run_not_found",
+                error_code="reference_run_not_found",
+                suggested_action="Use benchcaddy show -j to inspect available run IDs.",
+            )
         return list(reference_run["configuration"].keys())
     return strict_keys
 
@@ -109,10 +148,18 @@ def _validate_suite_compare_options(
     *,
     right_run_id: int | tuple[int, int] | None,
     use_baseline: bool,
+    json_output: bool,
 ) -> None:
     if use_baseline and right_run_id is not None:
-        _console().print("--baseline/-b cannot be combined with an explicit reference run ID.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message="--baseline/-b cannot be combined with an explicit reference run ID.",
+            reason="baseline_conflicts_with_reference_run",
+            error_code="baseline_conflicts_with_reference_run",
+            suggested_action="Choose either an explicit reference run ID or --baseline/-b, not both.",
+        )
 
 
 def _raise_for_suite_compare_error(
@@ -121,51 +168,122 @@ def _raise_for_suite_compare_error(
     left: str,
     right: str | None,
     database_path: Path,
+    json_output: bool,
 ) -> dict[str, object]:
     if comparison is None:
-        _console().print(f"Suite '{left}' was not found in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Suite '{left}' was not found in {database_path}.",
+            reason="suite_not_found",
+            error_code="suite_not_found",
+            suggested_action="Use benchcaddy list -j to inspect available suites.",
+        )
 
     error = comparison.get("error")
     if error == "reference_run_not_found":
-        _console().print(f"Reference run '{right}' was not found in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Reference run '{right}' was not found in {database_path}.",
+            reason="reference_run_not_found",
+            error_code="reference_run_not_found",
+            suggested_action="Use benchcaddy show -j to inspect available run IDs.",
+        )
     if error == "reference_run_wrong_suite":
-        _console().print(f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Reference run '{right}' belongs to suite '{comparison['reference_run_suite_name']}', not '{left}'.",
+            reason="reference_run_wrong_suite",
+            error_code="reference_run_wrong_suite",
+            suggested_action="Choose a reference run from the requested suite.",
+        )
     if error == "strict_requires_reference_run":
-        _console().print("--strict requires a suite comparison with a reference run ID.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message="--strict requires a suite comparison with a reference run ID.",
+            reason="strict_requires_reference_run",
+            error_code="strict_requires_reference_run",
+            suggested_action="Pass a suite name and reference run ID before using --strict.",
+        )
     if error == "strict_keys_not_found":
         missing_keys = ", ".join(comparison["missing_strict_keys"])
-        _console().print(f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}.",
+            reason="strict_keys_not_found",
+            error_code="strict_keys_not_found",
+            suggested_action="Use keys that exist on the reference run configuration.",
+        )
     if error == "reference_run_does_not_match_config_filter":
         config_label = _format_config_filter(comparison.get("config_filter"))
         suffix = "." if not config_label else f": {config_label}."
-        _console().print(f"Reference run '{right}' does not match the requested config filter{suffix}")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Reference run '{right}' does not match the requested config filter{suffix}",
+            reason="reference_run_does_not_match_config_filter",
+            error_code="reference_run_does_not_match_config_filter",
+            suggested_action="Choose a reference run that matches the config filter or relax the filter.",
+        )
     if error == "baseline_not_found":
-        _console().print(f"Suite '{left}' does not have a recorded baseline in {database_path}.")
-        raise typer.Exit(code=1)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=1,
+            message=f"Suite '{left}' does not have a recorded baseline in {database_path}.",
+            reason="baseline_not_found",
+            error_code="baseline_not_found",
+            suggested_action="Pin a baseline with benchcaddy baseline SUITE --pin RUN_ID -j before using --baseline/-b.",
+        )
     return comparison
 
 
-def _parse_percent_option(value: str, *, option_name: str) -> float:
+def _parse_percent_option(value: str, *, option_name: str, json_output: bool) -> float:
     normalized = value.strip()
     if normalized.endswith("%"):
         normalized = normalized[:-1].strip()
     if not normalized:
-        _console().print(f"{option_name} requires a numeric percent value.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message=f"{option_name} requires a numeric percent value.",
+            reason="missing_percent_value",
+            error_code="missing_percent_value",
+            suggested_action=f"Pass {option_name} as a number like 5 or 5%.",
+        )
     try:
         parsed = float(normalized)
-    except ValueError as exc:
-        _console().print(f"{option_name} must be a number like 5 or 5%.")
-        raise typer.Exit(code=2) from exc
+    except ValueError:
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message=f"{option_name} must be a number like 5 or 5%.",
+            reason="invalid_percent_value",
+            error_code="invalid_percent_value",
+            suggested_action=f"Pass {option_name} as a number like 5 or 5%.",
+        )
     if parsed < 0.0:
-        _console().print(f"{option_name} must be zero or greater.")
-        raise typer.Exit(code=2)
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message=f"{option_name} must be zero or greater.",
+            reason="negative_percent_value",
+            error_code="negative_percent_value",
+            suggested_action=f"Pass {option_name} as zero or a positive number.",
+        )
     return parsed
 
 
@@ -232,13 +350,55 @@ def _finalize_compare_result(
     mode: str,
     threshold_percent: float | None,
     json_output: bool,
+    confidence_level: float,
     render: Callable[[dict[str, object]], None],
 ) -> None:
     gate = _evaluate_compare_gate(comparison, mode=mode, threshold_percent=threshold_percent)
     if gate is not None:
         comparison["gate"] = gate
     if json_output:
-        _emit_json(comparison)
+        status = "pass"
+        reason = "comparison_complete"
+        suggested_action = "Use the result payload to inspect classifications and candidate deltas."
+        confidence = _confidence_label(confidence_level)
+        if gate is not None and gate["failed"]:
+            status = "fail"
+            reason = "regression_gate_failed"
+            suggested_action = "Inspect gate.failing_runs and candidate deltas before accepting the change."
+        elif mode == "direct":
+            comparison_analysis = comparison.get("comparison_analysis") or {}
+            if comparison_analysis.get("regression_detected"):
+                status = "fail"
+                reason = str(comparison_analysis.get("classification") or "regression_detected")
+                suggested_action = "Increase samples or inspect the candidate run before accepting the regression."
+            elif comparison_analysis.get("classification") == "noisy" or comparison_analysis.get("warnings"):
+                status = "inconclusive"
+                reason = "noisy_samples"
+                suggested_action = "Increase samples or reduce environmental noise, then rerun compare -j."
+        else:
+            analyses = [run.get("comparison_analysis") or {} for run in comparison["runs"]]
+            if not comparison["runs"]:
+                status = "inconclusive"
+                reason = "no_runs_matched_scope"
+                suggested_action = "Relax the comparison scope or record more runs before treating the result as decisive."
+                confidence = None
+            elif any(analysis.get("regression_detected") for analysis in analyses):
+                status = "fail"
+                reason = "regression_detected"
+                suggested_action = "Inspect regressing runs in result.runs before accepting the change."
+            elif any(analysis.get("classification") == "noisy" or analysis.get("warnings") for analysis in analyses):
+                status = "inconclusive"
+                reason = "noisy_samples"
+                suggested_action = "Increase samples or narrow the comparison scope, then rerun compare -j."
+        _emit_json_response(
+            command="compare",
+            status=status,
+            reason=reason,
+            suggested_action=suggested_action,
+            confidence=confidence,
+            result=comparison,
+            exit_code=REGRESSION_EXIT_CODE if gate is not None and gate["failed"] else 0,
+        )
     else:
         render(comparison)
         if gate is not None:
@@ -606,21 +766,36 @@ def compare_command(
         bool,
         typer.Option(
             "--json",
+            "-j",
             help="Emit machine-readable JSON output for this comparison.",
         ),
     ] = False,
     database: DatabaseOption = None,
 ) -> None:
-    right, strict_keys, config_entries = _parse_compare_operands(operands, strict, config)
+    right, strict_keys, config_entries = _parse_compare_operands(operands, strict, config, json_output=json_output)
     database_path = get_database_path(database)
     if strict and config:
-        _console().print("--strict cannot be combined with --config/-c.")
-        raise typer.Exit(code=2)
-    config_filter = _parse_config_filter_entries(config_entries, option_name="-c") if config else None
+        _raise_cli_error(
+            command="compare",
+            json_output=json_output,
+            exit_code=2,
+            message="--strict cannot be combined with --config/-c.",
+            reason="strict_conflicts_with_config_filter",
+            error_code="strict_conflicts_with_config_filter",
+            suggested_action="Use either --strict or --config/-c, not both.",
+        )
+    config_filter = _parse_config_filter_entries(
+        config_entries,
+        option_name="-c",
+        command="compare",
+        json_output=json_output,
+    ) if config else None
+
     effective_regression_threshold = regression_threshold
     gate_threshold: float | None = None
+    
     if fail_if_regression is not None:
-        gate_threshold = _parse_percent_option(fail_if_regression, option_name="--fail-if-regression")
+        gate_threshold = _parse_percent_option(fail_if_regression, option_name="--fail-if-regression", json_output=json_output)
         effective_regression_threshold = gate_threshold
 
     analysis_options = _analysis_options(
@@ -643,6 +818,7 @@ def compare_command(
             strict_keys=strict_keys,
             config_filter=config_filter,
             use_baseline=use_baseline,
+            json_output=json_output,
         )
         comparison_mode = "direct"
         render = _print_run_comparison
@@ -650,6 +826,7 @@ def compare_command(
         _validate_suite_compare_options(
             right_run_id=right_run_id,
             use_baseline=use_baseline,
+            json_output=json_output,
         )
         strict_keys = _resolve_compare_strict_keys(
             strict_keys,
@@ -657,6 +834,7 @@ def compare_command(
             right=right,
             right_run_id=right_run_id,
             database_path=database_path,
+            json_output=json_output,
         )
         comparison = _raise_for_suite_compare_error(
             compare_suite_runs(
@@ -671,6 +849,7 @@ def compare_command(
             left=left,
             right=right,
             database_path=database_path,
+            json_output=json_output,
         )
         comparison_mode = "suite"
         render = _print_suite_comparison
@@ -681,5 +860,6 @@ def compare_command(
         mode=comparison_mode,
         threshold_percent=gate_threshold,
         json_output=json_output,
+        confidence_level=confidence_level,
         render=render,
     )

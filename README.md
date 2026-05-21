@@ -248,6 +248,38 @@ benchcaddy env --json
 
 `env` reports timing noise, drift, affinity, CPU load, battery state, thermal throttling, and frequency stability signals when available.
 
+### JSON envelope for agents and MCP consumers
+
+All top-level CLI commands support `-j` / `--json`: `env`, `baseline`, `compare`, `list`, `show`, `sweep`, and `trend`.
+
+Each JSON response uses the same top-level envelope:
+
+```json
+{
+    "schema_version": "1.0",
+    "command": "compare",
+    "status": "pass|fail|inconclusive",
+    "reason": "machine_readable_reason",
+    "error_code": null,
+    "suggested_action": "next step for the caller",
+    "confidence": "high|medium|low|null",
+    "exit_code": 0,
+    "result": {
+        "...": "command-specific payload"
+    }
+}
+```
+
+Use `status` as the primary control signal:
+
+- `pass`: the command completed and the result is actionable as-is
+- `fail`: the command found a blocking problem, regression, or invalid request
+- `inconclusive`: the command completed, but the result needs more data, a narrower scope, or a cleaner environment before automation should treat it as decisive
+
+`reason` is a stable snake_case classifier that adds more detail without replacing `status`. Typical reasons include `runs_recorded`, `suite_details_available`, `regression_detected`, `noisy_samples`, `environment_warnings_detected`, and `suite_not_found`.
+
+For automation, branch on `status` first, then use `reason`, `error_code`, and `suggested_action` to decide the next step. Treat `result` as the command-specific data payload and keep callers tolerant of additional keys in future schema versions.
+
 ## CI And Automation
 
 Use `compare --json` for machine-readable output:

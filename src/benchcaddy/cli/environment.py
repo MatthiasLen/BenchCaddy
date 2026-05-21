@@ -7,7 +7,7 @@ import typer
 from ..isolation import build_reliability_report
 from ..presentation import render_table, summary_panel
 from ._rendering import _styled
-from ._shared import _console, _emit_json, app
+from ._shared import _console, _emit_json_response, app
 
 
 def _quality_style(level: str) -> str:
@@ -28,6 +28,7 @@ def env_command(
         bool,
         typer.Option(
             "--json",
+            "-j",
             help="Emit machine-readable JSON output.",
         ),
     ] = False,
@@ -38,10 +39,35 @@ def env_command(
     noise = NoiseAnalyzer().analyze(iterations=noise_iterations)
     report = build_reliability_report(environment=env, noise=noise)
     affinity = get_affinity()
+    if report.timing_stability == "LOW" or report.environmental_quality == "LOW":
+        status = "fail"
+        reason = "unreliable_environment"
+        suggested_action = "Reduce system noise, stabilize power and thermal conditions, then rerun benchcaddy env -j."
+        confidence = "low"
+    elif report.warnings:
+        status = "inconclusive"
+        reason = "environment_warnings_detected"
+        suggested_action = "Address the reported warnings before treating benchmark comparisons as reliable."
+        confidence = "medium"
+    elif report.timing_stability == "FAIR" or report.environmental_quality == "FAIR":
+        status = "inconclusive"
+        reason = "environment_marginal"
+        suggested_action = "Use more samples or reduce background load before trusting small deltas."
+        confidence = "medium"
+    else:
+        status = "pass"
+        reason = "environment_ready"
+        suggested_action = "Run a benchmark sweep or comparison."
+        confidence = "high"
 
     if json_output:
-        _emit_json(
-            {
+        _emit_json_response(
+            command="env",
+            status=status,
+            reason=reason,
+            suggested_action=suggested_action,
+            confidence=confidence,
+            result={
                 "timing_stability": report.timing_stability,
                 "environmental_quality": report.environmental_quality,
                 "warnings": list(report.warnings),
@@ -60,7 +86,7 @@ def env_command(
                     "iteration_count": noise.iteration_count,
                 },
                 "affinity": affinity,
-            }
+            },
         )
         return
 
