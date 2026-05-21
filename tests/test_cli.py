@@ -2038,9 +2038,11 @@ def test_cli_compare_rejects_removed_pin_baseline_option(
     )
 
     result = runner.invoke(app, ["compare", "removed-pin-suite", "1.1", "--pin-baseline", "--database", str(database_path)])
+    normalized_output = _strip_ansi(result.output)
 
     assert result.exit_code == 2
-    assert "No such option: --pin-baseline" in result.output
+    assert "No such option" in normalized_output
+    assert "--pin-baseline" in normalized_output
 
 
 def test_cli_verbose_trend_preserves_warning_categories(
