@@ -784,16 +784,20 @@ def compare_command(
             error_code="strict_conflicts_with_config_filter",
             suggested_action="Use either --strict or --config/-c, not both.",
         )
-    config_filter = _parse_config_filter_entries(
-        config_entries,
-        option_name="-c",
-        command="compare",
-        json_output=json_output,
-    ) if config else None
+    config_filter = (
+        _parse_config_filter_entries(
+            config_entries,
+            option_name="-c",
+            command="compare",
+            json_output=json_output,
+        )
+        if config
+        else None
+    )
 
     effective_regression_threshold = regression_threshold
     gate_threshold: float | None = None
-    
+
     if fail_if_regression is not None:
         gate_threshold = _parse_percent_option(fail_if_regression, option_name="--fail-if-regression", json_output=json_output)
         effective_regression_threshold = gate_threshold

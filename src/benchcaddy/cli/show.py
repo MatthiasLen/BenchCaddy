@@ -342,11 +342,7 @@ def show_command(
                 command="show",
                 status="pass" if details["runs"] else "inconclusive",
                 reason="suite_details_available" if details["runs"] else "no_runs_matched_scope",
-                suggested_action=(
-                    "Use benchcaddy compare -j or trend -j on this suite."
-                    if details["runs"]
-                    else "Relax the filter or record more runs for this suite."
-                ),
+                suggested_action=("Use benchcaddy compare -j or trend -j on this suite." if details["runs"] else "Relax the filter or record more runs for this suite."),
                 confidence=None,
                 result={
                     "mode": "suite",
@@ -360,12 +356,12 @@ def show_command(
         _show_suite(details)
 
         if truncated and total_count is not None:
-                _print_numitems_notice(
-                    shown_count=len(details["runs"]),
-                    total_count=total_count,
-                    identifiers=[identifiers[0], "-c", *identifiers[1:]],
-                    database_path=None if database is None else str(database_path),
-                )
+            _print_numitems_notice(
+                shown_count=len(details["runs"]),
+                total_count=total_count,
+                identifiers=[identifiers[0], "-c", *identifiers[1:]],
+                database_path=None if database is None else str(database_path),
+            )
         return
 
     if not identifiers:
@@ -381,9 +377,7 @@ def show_command(
                 status="pass" if runs else "inconclusive",
                 reason="run_list_available" if runs else "no_runs_found",
                 suggested_action=(
-                    "Use benchcaddy show -j RUN_ID or benchcaddy compare -j SUITE for a narrower view."
-                    if runs
-                    else "Record a benchmark sweep before requesting run details."
+                    "Use benchcaddy show -j RUN_ID or benchcaddy compare -j SUITE for a narrower view." if runs else "Record a benchmark sweep before requesting run details."
                 ),
                 confidence=None,
                 result={
@@ -398,12 +392,12 @@ def show_command(
             return
         _show_all_runs(runs)
         if truncated and total_count is not None:
-                _print_numitems_notice(
-                    shown_count=numitems,
-                    total_count=total_count,
-                    identifiers=None,
-                    database_path=None if database is None else str(database_path),
-                )
+            _print_numitems_notice(
+                shown_count=numitems,
+                total_count=total_count,
+                identifiers=None,
+                database_path=None if database is None else str(database_path),
+            )
         return
 
     if len(identifiers) == 1:
@@ -468,11 +462,7 @@ def show_command(
                 command="show",
                 status="pass" if details["runs"] else "inconclusive",
                 reason="suite_details_available" if details["runs"] else "suite_has_no_runs",
-                suggested_action=(
-                    "Use benchcaddy compare -j or trend -j on this suite."
-                    if details["runs"]
-                    else "Record new runs for this suite before comparing or trending it."
-                ),
+                suggested_action=("Use benchcaddy compare -j or trend -j on this suite." if details["runs"] else "Record new runs for this suite before comparing or trending it."),
                 confidence=None,
                 result={
                     "mode": "suite",
@@ -486,12 +476,12 @@ def show_command(
         _show_suite(details)
 
         if truncated and total_count is not None:
-                _print_numitems_notice(
-                    shown_count=len(details["runs"]),
-                    total_count=total_count,
-                    identifiers=identifiers,
-                    database_path=None if database is None else str(database_path),
-                )
+            _print_numitems_notice(
+                shown_count=len(details["runs"]),
+                total_count=total_count,
+                identifiers=identifiers,
+                database_path=None if database is None else str(database_path),
+            )
         return
 
     run_ids = [_require_run_id(identifier, command="show", json_output=json_output) for identifier in identifiers]

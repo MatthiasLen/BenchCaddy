@@ -384,12 +384,16 @@ def trend_command(
             error_code="config_filter_conflicts_with_baseline_flag",
             suggested_action="Use either --config/-c or --baseline/-b, not both.",
         )
-    config_filter = _parse_config_filter_entries(
-        config_entries,
-        option_name="-c",
-        command="trend",
-        json_output=json_output,
-    ) if config else None
+    config_filter = (
+        _parse_config_filter_entries(
+            config_entries,
+            option_name="-c",
+            command="trend",
+            json_output=json_output,
+        )
+        if config
+        else None
+    )
 
     analysis_options = _analysis_options(
         confidence_level=confidence_level,
@@ -449,15 +453,21 @@ def trend_command(
             suggested_action="Pin a baseline with benchcaddy baseline SUITE --pin RUN_ID -j before using --baseline/-b.",
         )
     if trend.get("error") == "config_filter_no_matches":
-        _raise_cli_error(
-            command="trend",
-            json_output=json_output,
-            exit_code=1,
-            message=f"No runs in suite '{suite_name}' matched the requested config filter.",
-            reason="config_filter_no_matches",
-            error_code="config_filter_no_matches",
-            suggested_action="Relax the filter or record more runs for that configuration.",
-        )
+        if json_output:
+            _emit_json_response(
+                command="trend",
+                status="inconclusive",
+                reason="config_filter_no_matches",
+                suggested_action="Relax the filter or record more runs for that configuration.",
+                confidence=None,
+                result={
+                    "suite_name": suite_name,
+                    "config_filter": config_filter,
+                },
+            )
+        else:
+            _console().print(f"No runs in suite '{suite_name}' matched the requested config filter.")
+        raise typer.Exit(code=0)
     if trend.get("error") == "config_filter_conflicts_with_basis":
         _raise_cli_error(
             command="trend",

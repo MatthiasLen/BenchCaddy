@@ -104,7 +104,7 @@ def _emit_json_response(
     result: dict[str, object] | None = None,
     error_code: str | None = None,
     suggested_action: str | None = None,
-    confidence: object | None = None,
+    confidence: str | None = None,
     exit_code: int = 0,
 ) -> None:
     payload: dict[str, object] = {
@@ -141,7 +141,7 @@ def _raise_cli_error(
     reason: str,
     error_code: str,
     suggested_action: str | None = None,
-    confidence: object | None = None,
+    confidence: str | None = None,
     result: dict[str, object] | None = None,
 ) -> NoReturn:
     if json_output:

@@ -1035,6 +1035,7 @@ def test_cli_show_json_reports_invalid_run_id_as_usage_error() -> None:
         ("show_missing_config_scope", 2, "fail", "missing_config_filter_scope", "missing_config_filter_scope"),
         ("compare_strict_requires_reference_run", 2, "fail", "strict_requires_reference_run", "strict_requires_reference_run"),
         ("compare_empty_scope", 0, "inconclusive", "no_runs_matched_scope", None),
+        ("trend_config_filter_no_matches", 0, "inconclusive", "config_filter_no_matches", None),
         ("trend_missing_baseline", 1, "fail", "baseline_not_found", "baseline_not_found"),
         ("sweep_json_conflicts_with_verbose", 2, "fail", "json_conflicts_with_verbose", "json_conflicts_with_verbose"),
     ],
@@ -1090,6 +1091,15 @@ def test_cli_json_contract_matrix(
             environment_payload=environment_payload,
         )
         args = ["trend", "matrix-trend-suite", "--baseline", "-j", "--database", str(database_path)]
+    elif case_name == "trend_config_filter_no_matches":
+        _seed_sampled_run(
+            database_path=database_path,
+            suite_name="matrix-trend-suite",
+            configuration={"size": 512, "variant": "baseline"},
+            samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+            environment_payload=environment_payload,
+        )
+        args = ["trend", "matrix-trend-suite", "-c", "size=999", "-j", "--database", str(database_path)]
     elif case_name == "sweep_json_conflicts_with_verbose":
         _stub_sweep_runtime(monkeypatch, environment_payload)
         args = [
