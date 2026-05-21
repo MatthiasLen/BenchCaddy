@@ -54,7 +54,7 @@ def get_capabilities(database_path: str | None = None, response_detail: Response
             "database": result["database"],
         },
         result=result,
-        suggested_action="Use server_status for a quick connectivity check, then call one of the listed tools.",
+        suggested_action="Use the per-tool when_to_use and example_queries fields to choose the next tool, then call server_status or list_suites if you still need orientation.",
         confidence="high",
         response_detail=normalized_response_detail,
     )

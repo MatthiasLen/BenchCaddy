@@ -34,7 +34,7 @@ def server_status(database_path: str | None = None, response_detail: ResponseDet
         "tool_names": _tool_names(),
         "database": database,
     }
-    suggested_action = "Call get_capabilities for the full contract or list_suites to inspect benchmark data."
+    suggested_action = "Call get_capabilities to see which tool matches the request, then use list_suites to discover suites or get_suite to inspect one suite."
     if not result["database"]["exists"]:
         suggested_action = "Provide database_path or create ./benchcaddy.db before calling data inspection tools."
     return _response(

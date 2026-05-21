@@ -136,6 +136,18 @@ def test_get_capabilities_returns_predictable_contract(tmp_path: Path) -> None:
         "result",
     ]
     assert payload["result"]["tool_argument_conventions"]["response_detail"].startswith("Optional response detail mode")
+    compare_suite_spec = next(tool for tool in payload["result"]["tools"] if tool["name"] == "compare_suite")
+    assert compare_suite_spec["description"].startswith("Compare an entire suite against a chosen reference run")
+    assert compare_suite_spec["when_to_use"].startswith("Use this when the user wants a suite-wide comparison")
+    assert "compare nonlinear-transform against run 4.1" in compare_suite_spec["example_queries"]
+    compare_runs_spec = next(tool for tool in payload["result"]["tools"] if tool["name"] == "compare_runs")
+    assert compare_runs_spec["description"].startswith("Compare two specific benchmark runs directly")
+    assert compare_runs_spec["when_to_use"].startswith("Use this when the user wants a direct run-vs-run comparison")
+    assert "compare run 4.1 against run 4.2" in compare_runs_spec["example_queries"]
+    trend_suite_spec = next(tool for tool in payload["result"]["tools"] if tool["name"] == "trend_suite")
+    assert trend_suite_spec["description"].startswith("Inspect how a benchmark suite or one configuration changes over time")
+    assert trend_suite_spec["when_to_use"].startswith("Use this when the user asks about history, drift")
+    assert "show the trend for nonlinear-transform" in trend_suite_spec["example_queries"]
     assert payload["result"]["database"]["resolved_path"] == str(database_path)
 
 
@@ -171,7 +183,7 @@ def test_list_suites_reports_empty_inventory_as_inconclusive(tmp_path: Path) -> 
 
     assert payload["status"] == "inconclusive"
     assert payload["reason"] == "no_suites_found"
-    assert payload["suggested_action"] == "Record a benchmark sweep to create suite history."
+    assert payload["suggested_action"] == "Record a benchmark sweep to create suite history, then call list_suites again or use get_capabilities to review the analysis tools."
     assert payload["summary"]["suites"] == []
     assert payload["summary"]["suite_count"] == 0
 
@@ -254,7 +266,7 @@ def test_get_suite_reports_missing_suite_with_error_payload(tmp_path: Path) -> N
     assert payload["status"] == "fail"
     assert payload["reason"] == "suite_not_found"
     assert payload["error_code"] == "suite_not_found"
-    assert payload["suggested_action"] == "Use list_suites to inspect available suites."
+    assert payload["suggested_action"] == "Use list_suites to discover valid suite names, then call get_suite, compare_suite, or trend_suite for the suite you want."
     assert "result" not in payload
 
 
@@ -496,7 +508,7 @@ def test_compare_runs_reports_missing_candidate_without_result_payload(
     assert payload["status"] == "fail"
     assert payload["reason"] == "run_not_found"
     assert payload["error_code"] == "run_not_found"
-    assert payload["suggested_action"] == "Use get_run or get_suite to inspect available run IDs."
+    assert payload["suggested_action"] == "Use get_run to inspect that run ID or get_suite to browse valid run IDs in the target suite."
     assert "result" not in payload
 
 

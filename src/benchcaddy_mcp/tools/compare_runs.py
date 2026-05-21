@@ -17,7 +17,7 @@ from .._shared import (
 )
 
 
-@app.tool(description="Compare two specific runs head-to-head.")
+@app.tool(description="Compare two specific benchmark runs directly. Use this when the user asks to compare run 4.1 against run 4.2 or wants a head-to-head run comparison instead of a suite-wide comparison.")
 def compare_runs(
     left_run_id: int | str,
     right_run_id: int | str,
@@ -82,7 +82,7 @@ def compare_runs(
             status="fail",
             reason="run_not_found",
             error_code="run_not_found",
-            suggested_action="Use get_run or get_suite to inspect available run IDs.",
+            suggested_action="Use get_run to inspect that run ID or get_suite to browse valid run IDs in the target suite.",
             response_detail=normalized_response_detail,
         )
 

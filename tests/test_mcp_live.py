@@ -98,6 +98,10 @@ def test_live_mcp_stdio_smoke(
 
     async def run_smoke() -> None:
         async with Client(_transport()) as client:
+            initialize_result = client._session_state.initialize_result
+            assert initialize_result is not None
+            assert initialize_result.serverInfo.name == "BenchCaddy MCP"
+
             tools = await client.list_tools()
             assert {tool.name for tool in tools} == {
                 "compare_runs",
@@ -115,11 +119,11 @@ def test_live_mcp_stdio_smoke(
             tool_schemas = {tool.name: tool.inputSchema for tool in tools}
             assert "database_path" in tool_schemas["compare_runs"]["properties"]
             assert "response_detail" in tool_schemas["compare_runs"]["properties"]
-            assert tool_schemas["compare_runs"]["additionalProperties"] is True
+            assert tool_schemas["compare_runs"]["additionalProperties"] is False
             assert "database_path" in tool_schemas["trend_suite"]["properties"]
             assert "response_detail" in tool_schemas["trend_suite"]["properties"]
             assert "config_filter" in tool_schemas["trend_suite"]["properties"]
-            assert tool_schemas["trend_suite"]["additionalProperties"] is True
+            assert tool_schemas["trend_suite"]["additionalProperties"] is False
             assert tool_schemas["compare_suite"]["additionalProperties"] is False
 
             status_payload = await _call_tool(client, "server_status", {"database_path": str(database_path)})
@@ -132,6 +136,7 @@ def test_live_mcp_stdio_smoke(
             assert capabilities_payload["reason"] == "capabilities_available"
             assert capabilities_payload["summary"]["tool_count"] == 10
             assert "compare_runs" in capabilities_payload["summary"]["tool_names"]
+            assert initialize_result.serverInfo.version == capabilities_payload["summary"]["server_version"]
 
             list_payload = await _call_tool(client, "list_suites", {"database_path": str(database_path)})
             assert list_payload["status"] == "pass"

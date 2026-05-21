@@ -20,7 +20,7 @@ from .._shared import (
 )
 
 
-@app.tool(description="Compare all runs in one suite against the chosen basis run or pinned baseline.")
+@app.tool(description="Compare an entire suite against a chosen reference run, best run, or pinned baseline. Use this when the user asks to compare a suite against run 4.1, a baseline, or the best run.")
 def compare_suite(
     suite_name: str,
     reference_run_id: int | str | None = None,

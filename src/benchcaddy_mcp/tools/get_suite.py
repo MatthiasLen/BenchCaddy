@@ -67,7 +67,7 @@ def get_suite(
             status="fail",
             reason="suite_not_found",
             error_code="suite_not_found",
-            suggested_action="Use list_suites to inspect available suites.",
+            suggested_action="Use list_suites to discover valid suite names, then call get_suite, compare_suite, or trend_suite for the suite you want.",
             response_detail=normalized_response_detail,
         )
 
@@ -83,7 +83,7 @@ def get_suite(
             status="pass",
             reason="suite_details_available",
             result=result,
-            suggested_action="Use compare_suite or trend_suite on this suite.",
+            suggested_action="Use compare_suite to compare this suite against a reference run or baseline, trend_suite to inspect drift over time, or get_run to inspect one run ID in detail.",
             confidence=None,
             response_detail=normalized_response_detail,
         )
@@ -92,7 +92,7 @@ def get_suite(
         status="inconclusive",
         reason="no_runs_matched_scope" if config_filter else "suite_has_no_runs",
         result=result,
-        suggested_action=("Relax the filter or record more runs for this suite." if config_filter else "Record new runs for this suite before comparing or trending it."),
+        suggested_action=("Relax the filter or call get_suite without config_filter to find matching run IDs before using compare_suite or trend_suite." if config_filter else "Record new runs for this suite before using compare_suite or trend_suite on it."),
         confidence=None,
         response_detail=normalized_response_detail,
     )

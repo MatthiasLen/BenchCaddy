@@ -19,7 +19,6 @@ from ._sqlite.store import (
     _resolve_run,
     _resolve_suite_baseline_run,
 )
-from .read import get_run_details
 
 
 def compare_suite_runs(

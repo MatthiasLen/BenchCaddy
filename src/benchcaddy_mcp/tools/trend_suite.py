@@ -19,7 +19,7 @@ from .._shared import (
 )
 
 
-@app.tool(description="Inspect suite performance drift over time.")
+@app.tool(description="Inspect how a benchmark suite or one configuration changes over time. Use this when the user asks about drift, history, regressions over time, or long-term trends for a suite.")
 def trend_suite(
     suite_name: str,
     baseline_run_id: int | str | None = None,
@@ -86,6 +86,7 @@ def trend_suite(
         )
 
     error_code = trend.get("error")
+
     if error_code == "reference_run_not_found":
         return _response(
             tool_name="trend_suite",
@@ -149,6 +150,7 @@ def trend_suite(
             suggested_action="Record one or more runs for this suite before trending it.",
             response_detail=normalized_response_detail,
         )
+
     if trend.get("mode") == "summary":
         return _response(
             tool_name="trend_suite",
@@ -163,6 +165,7 @@ def trend_suite(
     _capped_rows(trend, "runs", limit)
     confidence = _confidence_label(confidence_level)
     runs = trend.get("runs") or []
+    
     if any((run.get("vs_baseline") or {}).get("regression_detected") for run in runs):
         return _response(
             tool_name="trend_suite",

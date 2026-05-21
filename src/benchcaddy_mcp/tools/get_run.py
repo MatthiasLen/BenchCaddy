@@ -74,7 +74,7 @@ def get_run(
             status="fail",
             reason="run_not_found",
             error_code="run_not_found",
-            suggested_action="Use get_suite or list_suites to inspect available runs.",
+            suggested_action="Use get_suite to find run IDs within a suite, or list_suites first if you need to discover suite names.",
             response_detail=normalized_response_detail,
         )
     result = {
@@ -87,7 +87,7 @@ def get_run(
         status="pass",
         reason="run_details_available",
         result=result,
-        suggested_action="Use compare_runs with this run ID and a candidate run for analysis.",
+        suggested_action="Use compare_runs for a head-to-head run comparison, or compare_suite to use this run ID as the reference run for a whole suite.",
         confidence=None,
         response_detail=normalized_response_detail,
     )
