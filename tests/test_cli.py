@@ -804,6 +804,45 @@ def test_cli_list_json_reports_empty_database(tmp_path: Path) -> None:
     assert payload["result"]["suites"] == []
 
 
+def test_cli_list_json_reports_suite_inventory(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="list-json-suite-a",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="list-json-suite-b",
+        configuration={"size": 1024, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["list", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "list"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "suite_inventory_available"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["suite_count"] == 2
+    suites_by_name = {suite["suite_name"]: suite for suite in payload["result"]["suites"]}
+    assert set(suites_by_name) == {"list-json-suite-a", "list-json-suite-b"}
+    assert suites_by_name["list-json-suite-a"]["run_count"] == 1
+    assert suites_by_name["list-json-suite-b"]["run_count"] == 1
+    assert suites_by_name["list-json-suite-a"]["observation_labels"] == ["inner", "outer"]
+    assert suites_by_name["list-json-suite-b"]["observation_labels"] == ["inner", "outer"]
+
+
 def test_cli_show_json_output_reports_suite_details(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -836,6 +875,115 @@ def test_cli_show_json_output_reports_suite_details(
     assert payload["result"]["mode"] == "suite"
     assert payload["result"]["suite_name"] == "show-json-suite"
     assert len(payload["result"]["runs"]) == 2
+
+
+def test_cli_show_json_output_reports_all_runs(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-all-suite-a",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+        target_return_value=1.0,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-all-suite-b",
+        configuration={"size": 1024, "variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+        target_return_value=2.0,
+    )
+
+    result = runner.invoke(app, ["show", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "run_list_available"
+    assert payload["result"]["mode"] == "all_runs"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["run_count"] == 2
+    assert payload["result"]["truncated"] is False
+    assert payload["result"]["runs"][0]["suite_name"] == "show-all-suite-b"
+    assert payload["result"]["runs"][1]["suite_name"] == "show-all-suite-a"
+    assert payload["result"]["runs"][0]["target_return_value"] == pytest.approx(2.0)
+
+
+def test_cli_show_json_output_reports_single_run_details(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-run-suite",
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+        target_return_value=10.0,
+    )
+
+    result = runner.invoke(app, ["show", "1.1", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "run_details_available"
+    assert payload["result"]["mode"] == "run"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["run"]["display_id"] == "1.1"
+    assert payload["result"]["run"]["suite_name"] == "show-run-suite"
+    assert payload["result"]["run"]["target_return_value"] == pytest.approx(10.0)
+    assert payload["result"]["run"]["environment"]["cpu_model"] == environment_payload["cpu_model"]
+
+
+def test_cli_show_json_output_reports_selected_runs(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-selected-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-selected-suite",
+        configuration={"variant": "candidate"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["show", "1", "2.1", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "show"
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "selected_runs_available"
+    assert payload["result"]["mode"] == "selected_runs"
+    assert payload["result"]["database_path"] == str(database_path)
+    assert payload["result"]["requested_run_ids"] == ["1", "2.1"]
+    assert payload["result"]["run_count"] == 2
+    assert payload["result"]["total_run_count"] == 2
+    assert payload["result"]["runs"][0]["display_id"] == "2.1"
+    assert payload["result"]["runs"][1]["display_id"] == "1.1"
 
 
 def test_cli_show_json_reports_config_usage_errors(
