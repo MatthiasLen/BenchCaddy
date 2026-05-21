@@ -57,10 +57,13 @@ def get_suite_details(
         if suite is None:
             return None
 
-        all_runs = _list_suite_runs_latest_first(session, suite.id)
-        runs = [run for run in all_runs if _configuration_matches_filter(run.configuration, config_filter)]
-        if limit is not None:
-            runs = runs[:limit]
+        if config_filter is None:
+            runs = _list_suite_runs_latest_first(session, suite.id, limit=limit)
+        else:
+            all_runs = _list_suite_runs_latest_first(session, suite.id)
+            runs = [run for run in all_runs if _configuration_matches_filter(run.configuration, config_filter)]
+            if limit is not None:
+                runs = runs[:limit]
         # Suite views show the newest recorded environment snapshot alongside the selected run slice.
         environment = runs[0].environment if runs else None
         baseline_run = _resolve_suite_baseline_run(session, suite)
