@@ -282,6 +282,11 @@ Use `status` as the primary control signal:
 
 For automation, branch on `status` first, then use `reason`, `error_code`, and `suggested_action` to decide the next step. Treat `result` as the command-specific data payload and keep callers tolerant of additional keys in future schema versions.
 
+## BenchCaddy MCP
+
+BenchCaddy also ships an MCP server so coding agents can inspect benchmark data through tools instead of shelling out to `benchcaddy ... --json`.
+For setup, client examples, tool overview, and a sample transcript, see [README_MCP.md](README_MCP.md).
+
 ## CI And Automation
 
 Use `compare --json` for machine-readable output:

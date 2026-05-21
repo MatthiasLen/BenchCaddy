@@ -54,6 +54,29 @@ def test_benchcaddy_mcp_entrypoint_invokes_app_run(monkeypatch) -> None:
     assert calls == ["run"]
 
 
+def test_mcp_responses_use_consistent_envelope_fields(
+    tmp_path: Path,
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(database_path=database_path, suite_name="suite-envelope", configuration={"variant": "baseline"})
+
+    payloads = [
+        ("list_suites", list_suites(str(database_path))),
+        ("get_suite", get_suite("missing-suite", str(database_path))),
+        ("get_run", get_run("not-a-run-id", str(database_path))),
+        ("get_baseline_history", get_baseline_history("suite-envelope", str(database_path))),
+    ]
+
+    for command, payload in payloads:
+        assert payload["schema_version"] == "1.0"
+        assert payload["command"] == command
+        assert payload["status"] in {"pass", "fail", "inconclusive"}
+        assert isinstance(payload["reason"], str)
+        assert payload["suggested_action"] is None or isinstance(payload["suggested_action"], str)
+        assert "confidence" in payload
+
+
 def test_list_suites_returns_machine_readable_inventory(
     tmp_path: Path,
     record_simple_run,
@@ -75,6 +98,8 @@ def test_list_suites_reports_empty_inventory_as_inconclusive(tmp_path: Path) -> 
 
     assert payload["status"] == "inconclusive"
     assert payload["reason"] == "no_suites_found"
+    assert payload["suggested_action"] == "Record a benchmark sweep to create suite history."
+    assert payload["result"]["suites"] == []
     assert payload["result"]["suite_count"] == 0
 
 
@@ -118,6 +143,26 @@ def test_get_run_accepts_display_ids(
     assert payload["result"]["mode"] == "run"
     assert payload["result"]["database_path"] == str(database_path)
     assert payload["result"]["run"]["display_id"] == "1.1"
+
+
+def test_get_suite_reports_missing_suite_with_error_payload(tmp_path: Path) -> None:
+    payload = get_suite("missing-suite", str(tmp_path / "benchcaddy.db"))
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "suite_not_found"
+    assert payload["error_code"] == "suite_not_found"
+    assert payload["suggested_action"] == "Use list_suites to inspect available suites."
+    assert "result" not in payload
+
+
+def test_get_run_reports_invalid_run_id_payload_fields(tmp_path: Path) -> None:
+    payload = get_run("not-a-run-id", str(tmp_path / "benchcaddy.db"))
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "invalid_run_id"
+    assert payload["error_code"] == "invalid_run_id"
+    assert payload["result"]["requested_run_id"] == "not-a-run-id"
+    assert payload["result"]["message"] == "'not-a-run-id' is not a valid run ID."
 
 
 def test_get_suite_reports_config_filter_miss_as_inconclusive(
@@ -231,6 +276,51 @@ def test_compare_runs_returns_head_to_head_payload(
     assert payload["result"]["percent_change"] == pytest.approx(2.0)
 
 
+def test_compare_runs_reports_missing_candidate_without_result_payload(
+    tmp_path: Path,
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(database_path=database_path, suite_name="suite-missing-run", configuration={"variant": "baseline"})
+
+    payload = compare_runs("1.1", "2.1", str(database_path))
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "run_not_found"
+    assert payload["error_code"] == "run_not_found"
+    assert payload["suggested_action"] == "Use get_run or get_suite to inspect available run IDs."
+    assert "result" not in payload
+
+
+def test_compare_runs_reports_regressing_payload_with_analysis(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-regressing-direct",
+        configuration={"variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-regressing-direct",
+        configuration={"variant": "candidate"},
+        samples=[0.129, 0.130, 0.131, 0.130, 0.132, 0.129, 0.131],
+        environment_payload=environment_payload,
+    )
+
+    payload = compare_runs("1.1", "2.1", str(database_path))
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "regressing"
+    assert payload["result"]["comparison_mode"] == "direct"
+    assert payload["result"]["comparison_analysis"]["regression_detected"] is True
+    assert payload["result"]["comparison_analysis"]["classification"] == "regressing"
+
+
 def test_compare_suite_reports_invalid_reference_run_id(
     tmp_path: Path,
     record_simple_run,
@@ -242,6 +332,45 @@ def test_compare_suite_reports_invalid_reference_run_id(
 
     assert payload["status"] == "fail"
     assert payload["reason"] == "invalid_run_id"
+
+
+def test_compare_suite_reports_wrong_suite_reference_payload_fields(
+    tmp_path: Path,
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(database_path=database_path, suite_name="suite-left", configuration={"variant": "baseline"})
+    record_simple_run(database_path=database_path, suite_name="suite-right", configuration={"variant": "candidate"})
+
+    payload = compare_suite("suite-left", reference_run_id="2.1", database_path=str(database_path))
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "reference_run_wrong_suite"
+    assert payload["error_code"] == "reference_run_wrong_suite"
+    assert payload["result"]["reference_run_display_id"] == "2.1"
+    assert payload["result"]["reference_run_suite_name"] == "suite-right"
+
+
+def test_compare_suite_reports_empty_scope_payload_context(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-empty-scope",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+
+    payload = compare_suite("suite-empty-scope", config_filter={"size": 2048}, database_path=str(database_path))
+
+    assert payload["status"] == "inconclusive"
+    assert payload["reason"] == "no_runs_matched_scope"
+    assert payload["result"]["suite_name"] == "suite-empty-scope"
+    assert payload["result"]["config_filter"] == {"size": 2048}
+    assert payload["result"]["runs"] == []
 
 
 def test_compare_suite_payload_matches_requested_reference_and_scope(
@@ -352,6 +481,62 @@ def test_trend_suite_payload_matches_requested_filter_context(
     assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["result"]["runs"])
 
 
+def test_trend_suite_reports_conflicting_basis_payload_fields(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-trend-conflict",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+
+    payload = trend_suite(
+        "suite-trend-conflict",
+        baseline_run_id="1.1",
+        config_filter={"size": 512},
+        database_path=str(database_path),
+    )
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "config_filter_conflicts_with_basis"
+    assert payload["error_code"] == "config_filter_conflicts_with_basis"
+    assert payload["result"]["suite_name"] == "suite-trend-conflict"
+    assert payload["result"]["config_filter"] == {"size": 512}
+
+
+def test_trend_suite_reports_summary_mode_for_mixed_configurations(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-trend-summary",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101, 0.100, 0.102, 0.099, 0.101],
+        environment_payload=environment_payload,
+    )
+    _record_sampled_run(
+        database_path=database_path,
+        suite_name="suite-trend-summary",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.109, 0.110, 0.111, 0.110, 0.112, 0.109, 0.111],
+        environment_payload=environment_payload,
+    )
+
+    payload = trend_suite("suite-trend-summary", database_path=str(database_path))
+
+    assert payload["status"] == "inconclusive"
+    assert payload["reason"] == "multiple_configurations_summary"
+    assert payload["result"]["mode"] == "summary"
+    assert payload["result"]["configuration_count"] == 2
+    assert len(payload["result"]["config_summaries"]) == 2
+
+
 def test_pin_baseline_and_history_are_available(
     tmp_path: Path,
     record_simple_run,
@@ -379,6 +564,23 @@ def test_pin_baseline_and_history_are_available(
     assert payload["result"]["current_baseline"]["note"] == f"pin-{DEFAULT_LIMIT + 1}"
 
 
+def test_pin_baseline_reports_wrong_suite_payload_fields(
+    tmp_path: Path,
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(database_path=database_path, suite_name="suite-pin-left", configuration={"variant": "baseline"})
+    record_simple_run(database_path=database_path, suite_name="suite-pin-right", configuration={"variant": "candidate"})
+
+    payload = pin_baseline("suite-pin-left", "2.1", database_path=str(database_path))
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "reference_run_wrong_suite"
+    assert payload["error_code"] == "reference_run_wrong_suite"
+    assert payload["result"]["reference_run_display_id"] == "2.1"
+    assert payload["result"]["reference_run_suite_name"] == "suite-pin-right"
+
+
 def test_get_baseline_history_reports_missing_history_as_inconclusive(
     tmp_path: Path,
     record_simple_run,
@@ -390,3 +592,12 @@ def test_get_baseline_history_reports_missing_history_as_inconclusive(
 
     assert payload["status"] == "inconclusive"
     assert payload["reason"] == "no_baseline_history"
+
+
+def test_get_baseline_history_reports_missing_suite_without_result_payload(tmp_path: Path) -> None:
+    payload = get_baseline_history("missing-suite", str(tmp_path / "benchcaddy.db"))
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "suite_not_found"
+    assert payload["error_code"] == "suite_not_found"
+    assert "result" not in payload
