@@ -2,6 +2,7 @@ include README.md
 include LICENSE
 include benchcaddy_logo.png
 include bc_trends.png
+include bc_environment.png
 include examples/benchmark_nonlinear_transform.py
 include examples/benchmark_return_value_types.py
 include examples/benchmark_pi_approximations.py
