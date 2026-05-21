@@ -14,6 +14,7 @@ from ._sqlite.store import (
     _get_suite,
     _list_all_runs_latest_first,
     _list_all_suites,
+    _list_suite_baseline_events_latest_first,
     _list_suite_runs_created_desc,
     _list_suite_runs_latest_first,
     _resolve_run,
@@ -154,3 +155,39 @@ def get_suite_run_count(
             return _count_suite_runs(session, suite.id)
         runs = _list_suite_runs_latest_first(session, suite.id)
         return sum(1 for run in runs if _configuration_matches_filter(run.configuration, config_filter))
+
+
+def get_suite_baseline_history(
+    suite_name: str,
+    database_path: str | Path | None = None,
+    analysis_options: AnalysisOptions | None = None,
+    *,
+    limit: int | None = None,
+    include_analysis: bool = False,
+) -> dict[str, Any] | None:
+    with db_session(database_path) as session:
+        suite = _get_suite(session, suite_name)
+        if suite is None:
+            return None
+
+        baseline_events = _list_suite_baseline_events_latest_first(session, suite.id, limit=limit)
+
+        history: list[dict[str, Any]] = []
+        for index, event in enumerate(baseline_events):
+            history.append(
+                {
+                    "event_id": event.id,
+                    "created_at": event.created_at,
+                    "note": event.note,
+                    "is_current": index == 0,
+                    "run": event.run.to_detail_payload(analysis_options, include_analysis=include_analysis),
+                }
+            )
+
+        current_baseline = None if not history else history[0]
+        return {
+            "suite_name": suite.name,
+            "target_name": suite.target_name,
+            "current_baseline": current_baseline,
+            "history": history,
+        }

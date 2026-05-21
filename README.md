@@ -218,12 +218,16 @@ Compare a suite against a selected recorded run instead of the best run:
 benchcaddy compare nonlinear-transform 2.4
 ```
 
-Pin a suite baseline and reuse it later without repeating the run ID:
+Pin a suite baseline, optionally annotate it, and reuse it later without repeating the run ID:
 
 ```bash
-benchcaddy compare nonlinear-transform 2.4 --pin-baseline
-benchcaddy compare nonlinear-transform --use-baseline
+benchcaddy baseline nonlinear-transform --pin 2.4 --note "post-optimization"
+benchcaddy baseline nonlinear-transform
+benchcaddy compare nonlinear-transform --baseline
+benchcaddy trend nonlinear-transform --baseline
 ```
+
+Each pin is stored as a new baseline selection event. `benchcaddy baseline <suite>` shows the current baseline and history, and `--baseline` reuses the latest recorded baseline for compare and trend.
 
 Restrict a suite comparison to runs that match selected configuration keys from
 the reference run:
@@ -299,7 +303,7 @@ regression threshold for that invocation, so the reported classification and
 the exit condition stay aligned.
 
 ```bash
-benchcaddy compare nonlinear-transform --use-baseline --fail-if-regression 5%
+benchcaddy compare nonlinear-transform --baseline --fail-if-regression 5%
 benchcaddy compare 2.3 3 --json --fail-if-regression 5
 ```
 
@@ -335,9 +339,11 @@ jobs:
 For a baseline-driven workflow, pin the reference run once and reuse it in CI:
 
 ```bash
-benchcaddy compare nonlinear-transform 2.4 --pin-baseline
-benchcaddy compare nonlinear-transform --use-baseline --json --fail-if-regression 5%
+benchcaddy baseline nonlinear-transform --pin 2.4 --note "ci baseline"
+benchcaddy compare nonlinear-transform --baseline --json --fail-if-regression 5%
 ```
+
+That keeps the CI input stable while preserving the full baseline selection history in the database.
 
 For more detail in the inspection output, add `--verbose`:
 

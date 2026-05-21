@@ -6,7 +6,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .models import BenchmarkRun, BenchmarkSuite, BenchmarkSuiteBaseline
+from .models import BenchmarkRun, BenchmarkSuite, BenchmarkSuiteBaselineEvent
 
 
 def _get_suite(session: Session, suite_name: str) -> BenchmarkSuite | None:
@@ -31,21 +31,34 @@ def _get_or_create_suite(session: Session, suite_name: str, target_name: str) ->
             if suite is None:
                 raise
             if suite.target_name != target_name:
-                raise ValueError(
-                    f"Suite {suite_name!r} already exists for target {suite.target_name!r}, cannot reuse it for target {target_name!r}."
-                ) from err
+                raise ValueError(f"Suite {suite_name!r} already exists for target {suite.target_name!r}, cannot reuse it for target {target_name!r}.") from err
     return suite
 
 
-def _get_suite_baseline_record(session: Session, suite_id: int) -> BenchmarkSuiteBaseline | None:
-    return session.scalar(select(BenchmarkSuiteBaseline).where(BenchmarkSuiteBaseline.suite_id == suite_id))
+def _get_latest_suite_baseline_event(session: Session, suite_id: int) -> BenchmarkSuiteBaselineEvent | None:
+    return session.scalar(
+        select(BenchmarkSuiteBaselineEvent)
+        .where(BenchmarkSuiteBaselineEvent.suite_id == suite_id)
+        .order_by(BenchmarkSuiteBaselineEvent.created_at.desc(), BenchmarkSuiteBaselineEvent.id.desc())
+    )
 
 
 def _resolve_suite_baseline_run(session: Session, suite: BenchmarkSuite) -> BenchmarkRun | None:
-    baseline_record = _get_suite_baseline_record(session, suite.id)
-    if baseline_record is None:
+    baseline_event = _get_latest_suite_baseline_event(session, suite.id)
+    if baseline_event is None:
         return None
-    return session.get(BenchmarkRun, baseline_record.run_id)
+    return session.get(BenchmarkRun, baseline_event.run_id)
+
+
+def _list_suite_baseline_events_latest_first(session: Session, suite_id: int, limit: int | None = None) -> list[BenchmarkSuiteBaselineEvent]:
+    statement: Select[tuple[BenchmarkSuiteBaselineEvent]] = (
+        select(BenchmarkSuiteBaselineEvent)
+        .where(BenchmarkSuiteBaselineEvent.suite_id == suite_id)
+        .order_by(BenchmarkSuiteBaselineEvent.created_at.desc(), BenchmarkSuiteBaselineEvent.id.desc())
+    )
+    if limit is not None:
+        statement = statement.limit(limit)
+    return session.execute(statement).scalars().all()
 
 
 def _list_all_suites(session: Session) -> list[BenchmarkSuite]:

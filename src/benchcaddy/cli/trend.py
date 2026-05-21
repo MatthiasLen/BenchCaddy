@@ -76,7 +76,7 @@ def _trend_basis_panel(trend: dict[str, object]) -> Panel:
     return summary_panel(
         f"Trend Basis: {trend['suite_name']}",
         [
-            ("Source", _styled(str(trend.get("basis_source", "latest")), "yellow")),
+            ("Source", _styled("baseline" if trend.get("basis_source") == "pinned" else str(trend.get("basis_source", "latest")), "yellow")),
             ("Run ID", _styled(basis_run["display_id"], "yellow")),
             ("Record ID", _styled(basis_run["id"], "yellow")),
             ("Selected configuration", _styled(dump_json(trend.get("config_filter")), "yellow")),
@@ -284,7 +284,7 @@ def _print_trend(trend: dict[str, object]) -> None:
 @app.command(
     "trend",
     help=(
-        "Inspect one suite configuration over time. With a positional baseline run or --pinned, trend shows the matching configuration timeline. "
+        "Inspect one suite configuration over time. With a positional baseline run or --baseline/-b, trend shows the matching configuration timeline. "
         "Without either, mixed suites show a compact per-configuration trend summary."
     ),
 )
@@ -298,7 +298,7 @@ def trend_command(
         typer.Argument(
             help=(
                 "Optional baseline run ID to anchor a single-configuration timeline. "
-                "If omitted, trend shows a mixed-suite summary when multiple configurations are present unless --pinned is used. "
+                "If omitted, trend shows a mixed-suite summary when multiple configurations are present unless --baseline/-b is used. "
                 "With --config/-c, trailing key=value pairs filter the suite and trend uses the best filtered run as the basis."
             ),
         ),
@@ -311,12 +311,12 @@ def trend_command(
             help="Restrict trend analysis to runs whose configuration contains the trailing key=value pairs.",
         ),
     ] = False,
-    use_pinned_baseline: Annotated[
+    use_baseline: Annotated[
         bool,
         typer.Option(
-            "--pinned",
-            "-p",
-            help="Use the pinned suite baseline as the trend anchor instead of showing the mixed-suite summary.",
+            "--baseline",
+            "-b",
+            help="Use the suite baseline as the trend anchor instead of showing the mixed-suite summary.",
         ),
     ] = False,
     limit: Annotated[
@@ -357,8 +357,8 @@ def trend_command(
     if config and baseline_run_id is not None:
         _console().print("--config/-c cannot be combined with an explicit baseline run ID.")
         raise typer.Exit(code=2)
-    if config and use_pinned_baseline:
-        _console().print("--config/-c cannot be combined with --pinned.")
+    if config and use_baseline:
+        _console().print("--config/-c cannot be combined with --baseline/-b.")
         raise typer.Exit(code=2)
     config_filter = _parse_config_filter_entries(config_entries, option_name="-c") if config else None
 
@@ -375,7 +375,7 @@ def trend_command(
         database_path,
         analysis_options=analysis_options,
         baseline_run_id=baseline_run_id,
-        use_pinned_baseline=use_pinned_baseline,
+        use_pinned_baseline=use_baseline,
         limit=limit,
         config_filter=config_filter,
     )
@@ -389,13 +389,13 @@ def trend_command(
         _console().print(f"Reference run '{baseline}' belongs to suite '{trend['reference_run_suite_name']}', not '{suite_name}'.")
         raise typer.Exit(code=1)
     if trend.get("error") == "baseline_not_found":
-        _console().print(f"Suite '{suite_name}' does not have a pinned baseline in {database_path}.")
+        _console().print(f"Suite '{suite_name}' does not have a recorded baseline in {database_path}.")
         raise typer.Exit(code=1)
     if trend.get("error") == "config_filter_no_matches":
         _console().print(f"No runs in suite '{suite_name}' matched the requested config filter.")
         raise typer.Exit(code=1)
     if trend.get("error") == "config_filter_conflicts_with_basis":
-        _console().print("--config/-c cannot be combined with an explicit baseline run ID or --pinned.")
+        _console().print("--config/-c cannot be combined with an explicit baseline run ID or --baseline/-b.")
         raise typer.Exit(code=2)
     if trend.get("mode") != "summary" and trend.get("basis_run") is None:
         _console().print(f"Suite '{suite_name}' does not have any recorded runs in {database_path}.")

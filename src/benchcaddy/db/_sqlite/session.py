@@ -92,6 +92,11 @@ def _validate_schema(engine: Engine, path: Path) -> None:
     if not has_unique_sweep_run_index:
         missing_unique_indexes["benchmark_runs"] = ["sweep_execution_id", "run_index"]
 
+    baseline_event_indexes = inspector.get_indexes("benchmark_suite_baseline_events") if inspector.has_table("benchmark_suite_baseline_events") else []
+    has_suite_history_index = any(index.get("column_names") == ["suite_id", "created_at", "id"] for index in baseline_event_indexes)
+    if inspector.has_table("benchmark_suite_baseline_events") and not has_suite_history_index:
+        missing_unique_indexes["benchmark_suite_baseline_events"] = ["suite_id", "created_at", "id"]
+
     if not missing_tables and not missing_columns and not missing_unique_indexes:
         return
 

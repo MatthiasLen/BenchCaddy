@@ -61,10 +61,7 @@ def compare_suite_runs(
         if config_filter and reference_from_pinned and reference_run is not None and not _configuration_matches_filter(reference_run.configuration, config_filter):
             config_filter_warning = {
                 "kind": "pinned_baseline_outside_filter",
-                "message": (
-                    f"Pinned baseline {reference_run.display_id} does not match the requested config filter. "
-                    "Comparing it against the filtered suite runs."
-                ),
+                "message": (f"Baseline {reference_run.display_id} does not match the requested config filter. Comparing it against the filtered suite runs."),
                 "config_filter": dict(config_filter),
                 "baseline_configuration": dict(reference_run.configuration),
             }

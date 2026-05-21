@@ -6,12 +6,11 @@ from typing import Any
 
 from ..return_values import StoredReturnValue, normalize_return_value
 from ..stats import AnalysisOptions
-from ._sqlite.models import BenchmarkRun, BenchmarkSuiteBaseline, BenchmarkSweepExecution, EnvironmentInfo
+from ._sqlite.models import BenchmarkRun, BenchmarkSuiteBaselineEvent, BenchmarkSweepExecution, EnvironmentInfo
 from ._sqlite.session import db_session
 from ._sqlite.store import (
     _get_or_create_suite,
     _get_suite,
-    _get_suite_baseline_record,
     _resolve_run,
 )
 
@@ -133,6 +132,7 @@ def set_suite_baseline(
     run_id: int | tuple[int, int],
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
+    note: str | None = None,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         with session.begin():
@@ -152,11 +152,6 @@ def set_suite_baseline(
                     "reference_run_suite_name": run.suite.name,
                 }
 
-            # Upsert the one baseline row owned by this suite.
-            baseline = _get_suite_baseline_record(session, suite.id)
-            if baseline is None:
-                baseline = BenchmarkSuiteBaseline(suite_id=suite.id, run_id=run.id)
-                session.add(baseline)
-            else:
-                baseline.run_id = run.id
+            # Baseline pins are append-only events so the full baseline history remains auditable.
+            session.add(BenchmarkSuiteBaselineEvent(suite_id=suite.id, run_id=run.id, note=note))
         return run.to_detail_payload(analysis_options)
