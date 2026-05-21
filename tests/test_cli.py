@@ -877,6 +877,47 @@ def test_cli_show_json_output_reports_suite_details(
     assert len(payload["result"]["runs"]) == 2
 
 
+def test_cli_show_json_output_limits_suite_runs_with_numitems(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-json-limited-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-json-limited-suite",
+        configuration={"variant": "candidate-a"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-json-limited-suite",
+        configuration={"variant": "candidate-b"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["show", "show-json-limited-suite", "-n", "2", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["result"]["mode"] == "suite"
+    assert payload["result"]["truncated"] is True
+    assert payload["result"]["total_run_count"] == 3
+    assert len(payload["result"]["runs"]) == 2
+    assert payload["result"]["runs"][0]["display_id"] == "3.1"
+    assert payload["result"]["runs"][1]["display_id"] == "2.1"
+
+
 def test_cli_show_json_output_reports_all_runs(
     tmp_path: Path,
     environment_payload: dict[str, object],
@@ -915,6 +956,48 @@ def test_cli_show_json_output_reports_all_runs(
     assert payload["result"]["runs"][0]["suite_name"] == "show-all-suite-b"
     assert payload["result"]["runs"][1]["suite_name"] == "show-all-suite-a"
     assert payload["result"]["runs"][0]["target_return_value"] == pytest.approx(2.0)
+
+
+def test_cli_show_json_output_limits_all_runs_with_numitems(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-all-suite-a",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-all-suite-b",
+        configuration={"variant": "candidate-a"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-all-suite-c",
+        configuration={"variant": "candidate-b"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["show", "-n", "2", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["result"]["mode"] == "all_runs"
+    assert payload["result"]["run_count"] == 2
+    assert payload["result"]["truncated"] is True
+    assert payload["result"]["total_run_count"] == 3
+    assert len(payload["result"]["runs"]) == 2
+    assert payload["result"]["runs"][0]["display_id"] == "3.1"
+    assert payload["result"]["runs"][1]["display_id"] == "2.1"
 
 
 def test_cli_show_json_output_reports_single_run_details(
@@ -984,6 +1067,49 @@ def test_cli_show_json_output_reports_selected_runs(
     assert payload["result"]["total_run_count"] == 2
     assert payload["result"]["runs"][0]["display_id"] == "2.1"
     assert payload["result"]["runs"][1]["display_id"] == "1.1"
+
+
+def test_cli_show_json_output_limits_selected_runs_with_numitems(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    runner = CliRunner()
+
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-selected-limited-suite",
+        configuration={"variant": "baseline"},
+        median_seconds=0.100,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-selected-limited-suite",
+        configuration={"variant": "candidate-a"},
+        median_seconds=0.110,
+        environment_payload=environment_payload,
+    )
+    _seed_run(
+        database_path=database_path,
+        suite_name="show-selected-limited-suite",
+        configuration={"variant": "candidate-b"},
+        median_seconds=0.120,
+        environment_payload=environment_payload,
+    )
+
+    result = runner.invoke(app, ["show", "1", "2.1", "3.1", "-n", "2", "-j", "--database", str(database_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["result"]["mode"] == "selected_runs"
+    assert payload["result"]["requested_run_ids"] == ["1", "2.1", "3.1"]
+    assert payload["result"]["run_count"] == 2
+    assert payload["result"]["truncated"] is True
+    assert payload["result"]["total_run_count"] == 3
+    assert len(payload["result"]["runs"]) == 2
+    assert payload["result"]["runs"][0]["display_id"] == "3.1"
+    assert payload["result"]["runs"][1]["display_id"] == "2.1"
 
 
 def test_cli_show_json_reports_config_usage_errors(
