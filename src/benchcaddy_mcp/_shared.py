@@ -10,6 +10,8 @@ from ._summary import ResponseSummaryBuilder
 JSON_SCHEMA_VERSION = "1.0"
 DEFAULT_LIMIT = 20
 ResponseDetail = Literal["summary", "full"]
+DEFAULT_RESPONSE_DETAIL: ResponseDetail = "summary"
+ALLOWED_RESPONSE_DETAILS: tuple[ResponseDetail, ResponseDetail] = ("summary", "full")
 
 
 def _analysis_options(
@@ -48,7 +50,7 @@ def _confidence_label(confidence_level: float | None) -> str | None:
 
 
 def _normalized_response_detail(response_detail: str) -> ResponseDetail:
-    if response_detail in {"summary", "full"}:
+    if response_detail in ALLOWED_RESPONSE_DETAILS:
         return response_detail
     raise ValueError(f"'{response_detail}' is not a valid response detail.")
 
@@ -63,7 +65,7 @@ def _response(
     error_code: str | None = None,
     suggested_action: str | None = None,
     confidence: str | None = None,
-    response_detail: ResponseDetail = "full",
+    response_detail: ResponseDetail = DEFAULT_RESPONSE_DETAIL,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": JSON_SCHEMA_VERSION,
@@ -124,7 +126,7 @@ def _invalid_response_detail_response(*, tool_name: str, response_detail: object
         result={
             "message": f"'{response_detail}' is not a valid response detail.",
             "requested_response_detail": response_detail,
-            "allowed_values": ["summary", "full"],
+            "allowed_values": list(ALLOWED_RESPONSE_DETAILS),
         },
     )
 

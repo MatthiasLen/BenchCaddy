@@ -11,10 +11,12 @@ from benchcaddy_mcp.tools import (
     compare_runs,
     compare_suite,
     get_baseline_history,
+    get_capabilities,
     get_run,
     get_suite,
     list_suites,
     pin_baseline,
+    server_status,
     trend_suite,
 )
 
@@ -62,6 +64,8 @@ def test_mcp_responses_use_consistent_envelope_fields(
     record_simple_run(database_path=database_path, suite_name="suite-envelope", configuration={"variant": "baseline"})
 
     payloads = [
+        ("server_status", server_status(str(database_path))),
+        ("get_capabilities", get_capabilities(str(database_path))),
         ("list_suites", list_suites(str(database_path))),
         ("get_suite", get_suite("missing-suite", str(database_path))),
         ("get_run", get_run("not-a-run-id", str(database_path))),
@@ -76,6 +80,66 @@ def test_mcp_responses_use_consistent_envelope_fields(
         assert payload["suggested_action"] is None or isinstance(payload["suggested_action"], str)
         assert "confidence" in payload
         assert payload["response_detail"] in {"summary", "full"}
+
+
+def test_server_status_returns_ping_friendly_summary(tmp_path: Path) -> None:
+    database_path = tmp_path / "missing.db"
+
+    payload = server_status(str(database_path))
+
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "server_ready"
+    assert payload["response_detail"] == "summary"
+    assert payload["summary"]["server_name"] == "BenchCaddy MCP"
+    assert payload["summary"]["database"]["resolved_path"] == str(database_path)
+    assert payload["summary"]["database"]["exists"] is False
+    assert "result" not in payload
+
+
+def test_get_capabilities_returns_predictable_contract(tmp_path: Path) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    payload = get_capabilities(str(database_path), response_detail="full")
+
+    assert payload["status"] == "pass"
+    assert payload["reason"] == "capabilities_available"
+    assert payload["response_detail"] == "full"
+    assert payload["summary"]["tool_count"] == 10
+    assert payload["summary"]["tool_names"] == [
+        "server_status",
+        "get_capabilities",
+        "list_suites",
+        "get_suite",
+        "get_run",
+        "compare_suite",
+        "compare_runs",
+        "trend_suite",
+        "get_baseline_history",
+        "pin_baseline",
+    ]
+    assert payload["result"]["response_envelope_fields"] == [
+        "schema_version",
+        "command",
+        "status",
+        "reason",
+        "error_code",
+        "suggested_action",
+        "confidence",
+        "response_detail",
+        "summary",
+        "result",
+    ]
+    assert payload["result"]["tool_argument_conventions"]["response_detail"].startswith("Optional response detail mode")
+    assert payload["result"]["database"]["resolved_path"] == str(database_path)
+
+
+def test_server_status_reports_invalid_response_detail(tmp_path: Path) -> None:
+    payload = server_status(str(tmp_path / "benchcaddy.db"), response_detail="verbose")
+
+    assert payload["status"] == "fail"
+    assert payload["reason"] == "invalid_response_detail"
+    assert payload["error_code"] == "invalid_response_detail"
+    assert payload["summary"]["requested_response_detail"] == "verbose"
 
 
 def test_list_suites_returns_machine_readable_inventory(

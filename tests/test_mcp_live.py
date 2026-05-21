@@ -102,13 +102,26 @@ def test_live_mcp_stdio_smoke(
             assert {tool.name for tool in tools} == {
                 "compare_runs",
                 "compare_suite",
+                "get_capabilities",
                 "get_baseline_history",
                 "get_run",
                 "get_suite",
                 "list_suites",
                 "pin_baseline",
+                "server_status",
                 "trend_suite",
             }
+
+            status_payload = await _call_tool(client, "server_status", {"database_path": str(database_path)})
+            assert status_payload["status"] == "pass"
+            assert status_payload["reason"] == "server_ready"
+            assert status_payload["summary"]["database"]["exists"] is True
+
+            capabilities_payload = await _call_tool(client, "get_capabilities", {"database_path": str(database_path)})
+            assert capabilities_payload["status"] == "pass"
+            assert capabilities_payload["reason"] == "capabilities_available"
+            assert capabilities_payload["summary"]["tool_count"] == 10
+            assert "compare_runs" in capabilities_payload["summary"]["tool_names"]
 
             list_payload = await _call_tool(client, "list_suites", {"database_path": str(database_path)})
             assert list_payload["status"] == "pass"
