@@ -21,7 +21,7 @@ from ..presentation import (
     summary_panel,
 )
 from ._rendering import _format_optional_seconds, _styled
-from ._shared import _STATE, DatabaseOption, _as_run_id, _console, _require_run_id, app
+from ._shared import _STATE, DatabaseOption, _as_run_id, _console, _parse_config_filter_entries, _require_run_id, app
 
 
 def _has_analysis(run: dict[str, object]) -> bool:
@@ -178,7 +178,12 @@ def _show_run(run: dict[str, object]) -> None:
 
 
 def _show_suite(details: dict[str, object]) -> None:
-    _console().print(_render_run_table(f"Suite: {details['suite_name']}", details["runs"]))
+    title = f"Suite: {details['suite_name']}"
+    config_filter = details.get("config_filter") or {}
+    if config_filter:
+        title = f"{title} (config: {', '.join(f'{key}={config_filter[key]}' for key in sorted(config_filter))})"
+
+    _console().print(_render_run_table(title, details["runs"]))
     if details.get("baseline_run") is not None:
         baseline_run = details["baseline_run"]
         rows: list[tuple[object, object]] = [
@@ -263,9 +268,48 @@ def show_command(
             help="Limit list-style show output to the latest N entries by record ID.",
         ),
     ] = 100,
+    config: Annotated[
+        bool,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Restrict a suite view to runs whose configuration contains the trailing key=value pairs.",
+        ),
+    ] = False,
     database: DatabaseOption = None,
 ) -> None:
     database_path = get_database_path(database)
+    if config:
+        if not identifiers or len(identifiers) < 2:
+            _console().print("--config/-c requires a suite name followed by one or more key=value entries.")
+            raise typer.Exit(code=2)
+        if _as_run_id(identifiers[0]) is not None:
+            _console().print("--config/-c only supports suite views, not run IDs.")
+            raise typer.Exit(code=2)
+
+        config_filter = _parse_config_filter_entries(identifiers[1:], option_name="-c")
+        details = get_suite_details(
+            identifiers[0],
+            database_path,
+            include_analysis=True,
+            limit=numitems,
+            config_filter=config_filter,
+        )
+        if details is None:
+            _console().print(f"Suite '{identifiers[0]}' was not found in {database_path}.")
+            raise typer.Exit(code=1)
+        _show_suite(details)
+
+        if numitems is not None and len(details["runs"]) == numitems:
+            total_count = get_suite_run_count(identifiers[0], database_path, config_filter=config_filter)
+            if total_count is not None and total_count > numitems:
+                _print_numitems_notice(
+                    shown_count=len(details["runs"]),
+                    total_count=total_count,
+                    identifiers=[identifiers[0], "-c", *identifiers[1:]],
+                    database_path=None if database is None else str(database_path),
+                )
+        return
 
     if not identifiers:
         runs = get_all_run_details(database_path, limit=numitems)

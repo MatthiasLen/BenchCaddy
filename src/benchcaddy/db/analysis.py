@@ -11,6 +11,7 @@ from ..stats import AnalysisOptions, compare_sample_sets
 from ._sqlite.models import BenchmarkRun, BenchmarkSuite
 from ._sqlite.session import db_session
 from ._sqlite.store import (
+    _configuration_matches_filter,
     _get_suite,
     _list_suite_runs_for_configuration_oldest_first,
     _list_suite_runs_latest_first,
@@ -28,6 +29,7 @@ def compare_suite_runs(
     database_path: str | Path | None = None,
     analysis_options: AnalysisOptions | None = None,
     use_pinned_baseline: bool = False,
+    config_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         suite = _get_suite(session, suite_name)
@@ -45,13 +47,37 @@ def compare_suite_runs(
             return reference_context
         reference_run, pinned_baseline_run, reference_run_id, reference_run_suite_name, reference_from_pinned = reference_context
         runs = _list_suite_runs_latest_first(session, suite.id)
+        filtered_runs = [run for run in runs if _configuration_matches_filter(run.configuration, config_filter)]
+
+        if config_filter and reference_run is not None and not reference_from_pinned and not _configuration_matches_filter(reference_run.configuration, config_filter):
+            return {
+                "error": "reference_run_does_not_match_config_filter",
+                "suite_name": suite.name,
+                "reference_run_display_id": reference_run.display_id,
+                "config_filter": dict(config_filter),
+            }
+
+        config_filter_warning = None
+        if config_filter and reference_from_pinned and reference_run is not None and not _configuration_matches_filter(reference_run.configuration, config_filter):
+            config_filter_warning = {
+                "kind": "pinned_baseline_outside_filter",
+                "message": (
+                    f"Pinned baseline {reference_run.display_id} does not match the requested config filter. "
+                    "Comparing it against the filtered suite runs."
+                ),
+                "config_filter": dict(config_filter),
+                "baseline_configuration": dict(reference_run.configuration),
+            }
 
     if not runs:
-        return _empty_suite_comparison_payload(suite)
+        return _empty_suite_comparison_payload(suite, config_filter=config_filter)
+
+    if not filtered_runs and reference_run_id is None:
+        return _empty_suite_comparison_payload(suite, config_filter=config_filter)
 
     basis = _resolve_suite_basis(
         suite,
-        runs,
+        filtered_runs,
         reference_run,
         reference_run_id,
         reference_run_suite_name,
@@ -62,7 +88,7 @@ def compare_suite_runs(
 
     strict_result = _apply_strict_comparison_filter(
         suite,
-        runs,
+        filtered_runs,
         basis_run,
         strict_keys,
         reference_run_id,
@@ -80,6 +106,8 @@ def compare_suite_runs(
         ratio_column_label=ratio_column_label,
         strict_keys=strict_keys,
         strict_config=strict_config,
+        config_filter=config_filter,
+        config_filter_warning=config_filter_warning,
         reference_from_pinned=reference_from_pinned,
         reference_run_id=reference_run_id,
         pinned_baseline_run=pinned_baseline_run,
@@ -157,30 +185,25 @@ def get_suite_trend(
     baseline_run_id: int | tuple[int, int] | None = None,
     use_pinned_baseline: bool = False,
     limit: int | None = None,
+    config_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     chosen_options = analysis_options or AnalysisOptions()
     with db_session(database_path) as session:
         suite = _get_suite(session, suite_name)
         if suite is None:
             return None
+        suite_runs = _list_suite_runs_oldest_first(session, suite.id)
+        available_suite_configurations = _available_suite_configurations_payload(suite_runs)
 
-        runs: list[BenchmarkRun] | None = None
+        if config_filter is not None and (baseline_run_id is not None or use_pinned_baseline):
+            return {
+                "error": "config_filter_conflicts_with_basis",
+                "suite_name": suite.name,
+                "config_filter": dict(config_filter),
+            }
 
-        if baseline_run_id is not None:
-            basis_run = _resolve_run(session, baseline_run_id)
-            if basis_run is None:
-                return {"error": "reference_run_not_found", "suite_name": suite.name}
-            if basis_run.suite_id != suite.id:
-                return {
-                    "error": "reference_run_wrong_suite",
-                    "suite_name": suite.name,
-                    "reference_run_display_id": basis_run.display_id,
-                    "reference_run_record_id": basis_run.id,
-                    "reference_run_suite_name": basis_run.suite.name,
-                }
-            basis_source = "explicit"
-        else:
-            runs = _list_suite_runs_oldest_first(session, suite.id)
+        if config_filter is not None:
+            runs = suite_runs
             if not runs:
                 return {
                     "mode": "timeline",
@@ -188,48 +211,97 @@ def get_suite_trend(
                     "target_name": suite.target_name,
                     "basis_run": None,
                     "basis_source": "empty",
-                    "config_filter": None,
+                    "config_filter": dict(config_filter),
+                    "available_suite_configurations": [],
                     "runs": [],
                 }
 
-            if use_pinned_baseline:
-                basis_run = _resolve_suite_baseline_run(session, suite)
-                if basis_run is None:
-                    return {"error": "baseline_not_found", "suite_name": suite.name}
-                basis_source = "pinned"
-            else:
-                # Mixed configurations without an explicit basis are summarized separately instead of merged into one timeline.
-                grouped_runs: dict[str, list[BenchmarkRun]] = {}
-                for run in runs:
-                    grouped_runs.setdefault(_configuration_group_key(run.configuration), []).append(run)
+            filtered_runs = [run for run in runs if _configuration_matches_filter(run.configuration, config_filter)]
+            if not filtered_runs:
+                return {
+                    "error": "config_filter_no_matches",
+                    "suite_name": suite.name,
+                    "config_filter": dict(config_filter),
+                }
 
-                if len(grouped_runs) > 1:
+            basis_run = min(filtered_runs, key=lambda run: (run.median_seconds, run.id))
+            basis_source = "best"
+            visible_runs = filtered_runs[-limit:] if limit is not None else filtered_runs
+            basis_payload = basis_run.to_detail_payload(chosen_options)
+            basis_samples = list(basis_run.samples)
+            basis_run_id = basis_run.id
+            filtered_payloads = [run.to_payload(chosen_options) for run in visible_runs]
+            filtered_samples = [list(run.samples) for run in visible_runs]
+            filtered_ids = [run.id for run in visible_runs]
+            config_filter = dict(config_filter)
+        else:
+            runs: list[BenchmarkRun] | None = None
+
+            if baseline_run_id is not None:
+                basis_run = _resolve_run(session, baseline_run_id)
+                if basis_run is None:
+                    return {"error": "reference_run_not_found", "suite_name": suite.name}
+                if basis_run.suite_id != suite.id:
                     return {
-                        "mode": "summary",
+                        "error": "reference_run_wrong_suite",
+                        "suite_name": suite.name,
+                        "reference_run_display_id": basis_run.display_id,
+                        "reference_run_record_id": basis_run.id,
+                        "reference_run_suite_name": basis_run.suite.name,
+                    }
+                basis_source = "explicit"
+            else:
+                runs = _list_suite_runs_oldest_first(session, suite.id)
+                if not runs:
+                    return {
+                        "mode": "timeline",
                         "suite_name": suite.name,
                         "target_name": suite.target_name,
-                        "configuration_count": len(grouped_runs),
-                        "limit": limit,
-                        "config_summaries": [_configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit) for key in grouped_runs],
+                        "basis_run": None,
+                        "basis_source": "empty",
+                        "config_filter": None,
+                        "available_suite_configurations": [],
+                        "runs": [],
                     }
 
-                basis_run = runs[-1]
-                basis_source = "latest"
+                if use_pinned_baseline:
+                    basis_run = _resolve_suite_baseline_run(session, suite)
+                    if basis_run is None:
+                        return {"error": "baseline_not_found", "suite_name": suite.name}
+                    basis_source = "pinned"
+                else:
+                    # Mixed configurations without an explicit basis are summarized separately instead of merged into one timeline.
+                    grouped_runs: dict[str, list[BenchmarkRun]] = {}
+                    for run in runs:
+                        grouped_runs.setdefault(_configuration_group_key(run.configuration), []).append(run)
 
-        config_filter = dict(basis_run.configuration)
-        if runs is None:
-            # An explicit or pinned basis may target one configuration, so refetch only that history slice.
-            filtered_runs = _list_suite_runs_for_configuration_oldest_first(session, suite.id, config_filter, limit=limit)
-        else:
-            filtered_runs = [run for run in runs if run.configuration == config_filter]
-            if limit is not None:
-                filtered_runs = filtered_runs[-limit:]
-        basis_payload = basis_run.to_detail_payload(chosen_options)
-        basis_samples = list(basis_run.samples)
-        basis_run_id = basis_run.id
-        filtered_payloads = [run.to_payload(chosen_options) for run in filtered_runs]
-        filtered_samples = [list(run.samples) for run in filtered_runs]
-        filtered_ids = [run.id for run in filtered_runs]
+                    if len(grouped_runs) > 1:
+                        return {
+                            "mode": "summary",
+                            "suite_name": suite.name,
+                            "target_name": suite.target_name,
+                            "configuration_count": len(grouped_runs),
+                            "limit": limit,
+                            "config_summaries": [_configuration_trend_summary_payload(grouped_runs[key], chosen_options, limit=limit) for key in grouped_runs],
+                        }
+
+                    basis_run = runs[-1]
+                    basis_source = "latest"
+
+            config_filter = dict(basis_run.configuration)
+            if runs is None:
+                # An explicit or pinned basis may target one configuration, so refetch only that history slice.
+                filtered_runs = _list_suite_runs_for_configuration_oldest_first(session, suite.id, config_filter, limit=limit)
+            else:
+                filtered_runs = [run for run in runs if run.configuration == config_filter]
+                if limit is not None:
+                    filtered_runs = filtered_runs[-limit:]
+            basis_payload = basis_run.to_detail_payload(chosen_options)
+            basis_samples = list(basis_run.samples)
+            basis_run_id = basis_run.id
+            filtered_payloads = [run.to_payload(chosen_options) for run in filtered_runs]
+            filtered_samples = [list(run.samples) for run in filtered_runs]
+            filtered_ids = [run.id for run in filtered_runs]
 
     trend_rows: list[dict[str, Any]] = []
     for index, payload in enumerate(filtered_payloads):
@@ -260,8 +332,21 @@ def get_suite_trend(
         "basis_run": basis_payload,
         "basis_source": basis_source,
         "config_filter": config_filter,
+        "available_suite_configurations": available_suite_configurations,
         "runs": trend_rows,
     }
+
+
+def _available_suite_configurations_payload(runs: Sequence[BenchmarkRun]) -> list[dict[str, Any]]:
+    configurations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for run in runs:
+        group_key = _configuration_group_key(run.configuration)
+        if group_key in seen:
+            continue
+        seen.add(group_key)
+        configurations.append(dict(run.configuration))
+    return configurations
 
 
 def _resolve_suite_reference(
@@ -300,7 +385,11 @@ def _resolve_suite_reference(
     )
 
 
-def _empty_suite_comparison_payload(suite: BenchmarkSuite) -> dict[str, Any]:
+def _empty_suite_comparison_payload(
+    suite: BenchmarkSuite,
+    *,
+    config_filter: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "suite_name": suite.name,
         "target_name": suite.target_name,
@@ -309,6 +398,8 @@ def _empty_suite_comparison_payload(suite: BenchmarkSuite) -> dict[str, Any]:
         "basis_metric_label": "Best Median (s)",
         "delta_column_label": "Delta vs Best (s)",
         "ratio_column_label": "Slowdown",
+        "config_filter": None if config_filter is None else dict(config_filter),
+        "config_filter_warning": None,
         "runs": [],
         "pinned_baseline": None,
     }
@@ -389,6 +480,8 @@ def _suite_comparison_payload(
     ratio_column_label: str,
     strict_keys: Sequence[str],
     strict_config: dict[str, Any] | None,
+    config_filter: dict[str, Any] | None,
+    config_filter_warning: dict[str, Any] | None,
     reference_from_pinned: bool,
     reference_run_id: int | tuple[int, int] | None,
     pinned_baseline_run: BenchmarkRun | None,
@@ -410,6 +503,8 @@ def _suite_comparison_payload(
         "ratio_column_label": ratio_column_label,
         "strict_keys": list(strict_keys),
         "strict_config": strict_config,
+        "config_filter": None if config_filter is None else dict(config_filter),
+        "config_filter_warning": config_filter_warning,
         "basis_source": "pinned" if reference_from_pinned else "reference" if reference_run_id is not None else "best",
         "pinned_baseline": None if pinned_baseline_run is None else pinned_baseline_run.to_payload(analysis_options),
         "runs": [

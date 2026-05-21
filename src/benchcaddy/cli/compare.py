@@ -36,21 +36,32 @@ from ._shared import (
     _as_run_id,
     _console,
     _emit_json,
+    _parse_config_filter_entries,
     app,
 )
 
 
-def _parse_compare_operands(values: list[str] | None, strict: bool) -> tuple[str | None, list[str]]:
+def _format_config_filter(config_filter: dict[str, object] | None) -> str:
+    if not config_filter:
+        return ""
+    return ", ".join(f"{key}={config_filter[key]}" for key in sorted(config_filter))
+
+
+def _parse_compare_operands(values: list[str] | None, strict: bool, config: bool) -> tuple[str | None, list[str], list[str]]:
     if not values:
-        return None, []
+        return None, [], []
 
     right, *extra = values
+    if config:
+        if _as_run_id(right) is None:
+            return None, [], list(dict.fromkeys(values))
+        return right, [], list(dict.fromkeys(extra))
     if strict and _as_run_id(right) is None:
-        return None, list(dict.fromkeys(values))
+        return None, list(dict.fromkeys(values)), []
     if extra and not strict:
         _console().print(f"Unexpected arguments: {' '.join(extra)}")
         raise typer.Exit(code=2)
-    return right, list(dict.fromkeys(extra)) if strict else []
+    return right, list(dict.fromkeys(extra)) if strict else [], []
 
 
 def _run_direct_compare(
@@ -60,11 +71,12 @@ def _run_direct_compare(
     analysis_options: AnalysisOptions,
     *,
     strict_keys: list[str],
+    config_filter: dict[str, object] | None,
     use_baseline: bool,
     pin_baseline: bool,
 ) -> dict[str, object]:
-    if strict_keys or use_baseline or pin_baseline:
-        _console().print("--strict, --use-baseline, and --pin-baseline are only supported for suite comparisons.")
+    if strict_keys or config_filter or use_baseline or pin_baseline:
+        _console().print("--strict, --config/-c, --use-baseline, and --pin-baseline are only supported for suite comparisons.")
         raise typer.Exit(code=2)
 
     comparison = compare_runs(left_run_id, right_run_id, database_path, analysis_options=analysis_options)
@@ -132,6 +144,11 @@ def _raise_for_suite_compare_error(
     if error == "strict_keys_not_found":
         missing_keys = ", ".join(comparison["missing_strict_keys"])
         _console().print(f"Strict key(s) {missing_keys} were not found on reference run {comparison['reference_run_display_id']}.")
+        raise typer.Exit(code=1)
+    if error == "reference_run_does_not_match_config_filter":
+        config_label = _format_config_filter(comparison.get("config_filter"))
+        suffix = "." if not config_label else f": {config_label}."
+        _console().print(f"Reference run '{right}' does not match the requested config filter{suffix}")
         raise typer.Exit(code=1)
     if error == "baseline_not_found":
         _console().print(f"Suite '{left}' does not have a pinned baseline in {database_path}.")
@@ -280,9 +297,23 @@ def _best_vs_reference_panel(comparison: dict[str, object]) -> Panel | None:
     basis_run = comparison.get("basis_run")
     if basis_run is None:
         return None
+    if not comparison["runs"]:
+        return summary_panel(
+            "Best Run vs Reference",
+            [
+                ("Reference Run", _styled(f"{basis_run['display_id']} ({basis_run['id']})", "yellow")),
+                ("Status", "No suite runs matched the requested comparison scope."),
+            ],
+        )
     best_run = _best_run(comparison["runs"])
 
-    scope = f"strict: {', '.join(comparison.get('strict_keys', []))}" if comparison.get("strict_keys") else "full suite"
+    config_filter = comparison.get("config_filter") or {}
+    if config_filter:
+        scope = f"config: {_format_config_filter(config_filter)}"
+    elif comparison.get("strict_keys"):
+        scope = f"strict: {', '.join(comparison.get('strict_keys', []))}"
+    else:
+        scope = "full suite"
     if best_run["id"] == basis_run["id"]:
         return summary_panel(
             "Best Run vs Reference",
@@ -360,7 +391,10 @@ def _suite_row_style(comparison: dict[str, object], run: dict[str, object]) -> s
 def _suite_comparison_table(comparison: dict[str, object], *, verbose: bool) -> Table:
     strict_keys = comparison.get("strict_keys") or []
     title = f"Comparison: {comparison['suite_name']}"
-    if strict_keys:
+    config_filter = comparison.get("config_filter") or {}
+    if config_filter:
+        title = f"{title} (config: {_format_config_filter(config_filter)})"
+    elif strict_keys:
         title = f"{title} (strict: {', '.join(strict_keys)})"
 
     table = Table(title=title, pad_edge=False, collapse_padding=True)
@@ -418,6 +452,18 @@ def _comparison_basis_panel(comparison: dict[str, object]) -> Panel | None:
             ("Return Error", "relative to this basis run"),
         ],
     )
+
+
+def _config_filter_warning_panel(comparison: dict[str, object]) -> Panel | None:
+    warning = comparison.get("config_filter_warning")
+    if not warning:
+        return None
+
+    rows = Table.grid(padding=(0, 2))
+    rows.add_row("Warning", _styled(str(warning.get("message", "-")), "yellow"))
+    if warning.get("config_filter"):
+        rows.add_row("Filter", _format_config_filter(warning["config_filter"]))
+    return Panel(rows, title="Filter Warning", border_style="yellow", width=100)
 
 
 def _print_run_comparison(
@@ -507,6 +553,9 @@ def _print_run_comparison(
 
 def _print_suite_comparison(comparison: dict[str, object]) -> None:
     _console().print(_suite_comparison_table(comparison, verbose=_STATE.verbose))
+    config_warning = _config_filter_warning_panel(comparison)
+    if config_warning is not None:
+        _console().print(config_warning)
     _console().print(_suite_findings_panel(comparison))
     best_vs_reference = _best_vs_reference_panel(comparison)
     if best_vs_reference is not None:
@@ -534,7 +583,8 @@ def compare_command(
             help=(
                 "For suite comparison: optional reference run ID, then strict config keys when "
                 "--strict is used. With --strict and no trailing keys, BenchCaddy matches the "
-                "reference run's full configuration. For direct run comparison: the candidate "
+                "reference run's full configuration. With --config/-c, trailing key=value "
+                "pairs filter the comparison scope. For direct run comparison: the candidate "
                 "run ID."
             ),
         ),
@@ -549,6 +599,14 @@ def compare_command(
                 "run for the given trailing config keys. If no keys are provided, all "
                 "reference run configuration keys are used."
             ),
+        ),
+    ] = False,
+    config: Annotated[
+        bool,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Restrict suite comparison to runs whose configuration contains the trailing key=value pairs.",
         ),
     ] = False,
     use_baseline: Annotated[
@@ -587,8 +645,12 @@ def compare_command(
     ] = False,
     database: DatabaseOption = None,
 ) -> None:
-    right, strict_keys = _parse_compare_operands(operands, strict)
+    right, strict_keys, config_entries = _parse_compare_operands(operands, strict, config)
     database_path = get_database_path(database)
+    if strict and config:
+        _console().print("--strict cannot be combined with --config/-c.")
+        raise typer.Exit(code=2)
+    config_filter = _parse_config_filter_entries(config_entries, option_name="-c") if config else None
     effective_regression_threshold = regression_threshold
     gate_threshold: float | None = None
     if fail_if_regression is not None:
@@ -613,6 +675,7 @@ def compare_command(
             database_path,
             analysis_options,
             strict_keys=strict_keys,
+            config_filter=config_filter,
             use_baseline=use_baseline,
             pin_baseline=pin_baseline,
         )
@@ -639,6 +702,7 @@ def compare_command(
                 database_path,
                 analysis_options=analysis_options,
                 use_pinned_baseline=use_baseline,
+                config_filter=config_filter,
             ),
             left=left,
             right=right,

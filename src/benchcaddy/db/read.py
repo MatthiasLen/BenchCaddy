@@ -8,6 +8,7 @@ from ..stats import AnalysisOptions
 from ._sqlite.session import db_session
 from ._sqlite.store import (
     _collect_observation_labels,
+    _configuration_matches_filter,
     _count_all_runs,
     _count_suite_runs,
     _get_suite,
@@ -49,22 +50,32 @@ def get_suite_details(
     *,
     limit: int | None = None,
     include_analysis: bool = False,
+    config_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     with db_session(database_path) as session:
         suite = _get_suite(session, suite_name)
         if suite is None:
             return None
 
-        runs = _list_suite_runs_latest_first(session, suite.id, limit=limit)
+        if config_filter is None:
+            runs = _list_suite_runs_latest_first(session, suite.id, limit=limit)
+        else:
+            all_runs = _list_suite_runs_latest_first(session, suite.id)
+            runs = [run for run in all_runs if _configuration_matches_filter(run.configuration, config_filter)]
+            if limit is not None:
+                runs = runs[:limit]
         # Suite views show the newest recorded environment snapshot alongside the selected run slice.
         environment = runs[0].environment if runs else None
         baseline_run = _resolve_suite_baseline_run(session, suite)
+        if baseline_run is not None and not _configuration_matches_filter(baseline_run.configuration, config_filter):
+            baseline_run = None
 
     run_payloads = [run.to_payload(analysis_options, include_analysis=include_analysis) for run in runs]
 
     return {
         "suite_name": suite.name,
         "target_name": suite.target_name,
+        "config_filter": None if config_filter is None else dict(config_filter),
         "runs": run_payloads,
         "environment": None if environment is None else environment.to_payload(),
         "baseline_run": None if baseline_run is None else baseline_run.to_payload(analysis_options, include_analysis=include_analysis),
@@ -129,9 +140,17 @@ def get_all_run_count(database_path: str | Path | None = None) -> int:
         return _count_all_runs(session)
 
 
-def get_suite_run_count(suite_name: str, database_path: str | Path | None = None) -> int | None:
+def get_suite_run_count(
+    suite_name: str,
+    database_path: str | Path | None = None,
+    *,
+    config_filter: dict[str, Any] | None = None,
+) -> int | None:
     with db_session(database_path) as session:
         suite = _get_suite(session, suite_name)
         if suite is None:
             return None
-        return _count_suite_runs(session, suite.id)
+        if config_filter is None:
+            return _count_suite_runs(session, suite.id)
+        runs = _list_suite_runs_latest_first(session, suite.id)
+        return sum(1 for run in runs if _configuration_matches_filter(run.configuration, config_filter))

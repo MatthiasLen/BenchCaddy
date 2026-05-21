@@ -19,11 +19,28 @@ from ._shared import (
     RegressionThresholdOption,
     SignificanceLevelOption,
     _analysis_options,
+    _as_run_id,
     _console,
     _emit_json,
+    _parse_config_filter_entries,
     _require_run_id,
     app,
 )
+
+
+def _parse_trend_operands(values: list[str] | None, config: bool) -> tuple[str | None, list[str]]:
+    if not values:
+        return None, []
+
+    baseline, *extra = values
+    if config:
+        if _as_run_id(baseline) is None:
+            return None, list(dict.fromkeys(values))
+        return baseline, list(dict.fromkeys(extra))
+    if extra:
+        _console().print(f"Unexpected arguments: {' '.join(extra)}")
+        raise typer.Exit(code=2)
+    return baseline, []
 
 
 def _combine_warning_lists(*values: object) -> tuple[str, ...]:
@@ -42,15 +59,28 @@ def _trend_run_warnings(run: dict[str, object]) -> tuple[str, ...]:
     )
 
 
+def _format_configuration(configuration: dict[str, object] | None) -> str:
+    if not configuration:
+        return "-"
+    return ", ".join(f"{key}={configuration[key]}" for key in sorted(configuration))
+
+
+def _format_configuration_list(configurations: list[dict[str, object]] | None) -> str:
+    if not configurations:
+        return "-"
+    return "\n".join(_format_configuration(configuration) for configuration in configurations)
+
+
 def _trend_basis_panel(trend: dict[str, object]) -> Panel:
     basis_run = trend["basis_run"]
     return summary_panel(
         f"Trend Basis: {trend['suite_name']}",
         [
-            ("Source", str(trend.get("basis_source", "latest"))),
+            ("Source", _styled(str(trend.get("basis_source", "latest")), "yellow")),
             ("Run ID", _styled(basis_run["display_id"], "yellow")),
             ("Record ID", _styled(basis_run["id"], "yellow")),
-            ("Configuration", dump_json(trend.get("config_filter"))),
+            ("Selected configuration", _styled(dump_json(trend.get("config_filter")), "yellow")),
+            ("Available suite configurations", _format_configuration_list(trend.get("available_suite_configurations"))),
             ("Median CI (s)", format_interval(basis_run.get("ci_lower_seconds"), basis_run.get("ci_upper_seconds"))),
         ],
         width=102,
@@ -263,15 +293,24 @@ def trend_command(
         str,
         typer.Argument(help="Suite name to inspect as a time-series trend."),
     ],
-    baseline: Annotated[
-        str | None,
+    operands: Annotated[
+        list[str] | None,
         typer.Argument(
             help=(
                 "Optional baseline run ID to anchor a single-configuration timeline. "
-                "If omitted, trend shows a mixed-suite summary when multiple configurations are present unless --pinned is used."
+                "If omitted, trend shows a mixed-suite summary when multiple configurations are present unless --pinned is used. "
+                "With --config/-c, trailing key=value pairs filter the suite and trend uses the best filtered run as the basis."
             ),
         ),
     ] = None,
+    config: Annotated[
+        bool,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Restrict trend analysis to runs whose configuration contains the trailing key=value pairs.",
+        ),
+    ] = False,
     use_pinned_baseline: Annotated[
         bool,
         typer.Option(
@@ -311,9 +350,17 @@ def trend_command(
     database: DatabaseOption = None,
 ) -> None:
     database_path = get_database_path(database)
+    baseline, config_entries = _parse_trend_operands(operands, config)
     baseline_run_id = None
     if baseline is not None:
         baseline_run_id = _require_run_id(baseline)
+    if config and baseline_run_id is not None:
+        _console().print("--config/-c cannot be combined with an explicit baseline run ID.")
+        raise typer.Exit(code=2)
+    if config and use_pinned_baseline:
+        _console().print("--config/-c cannot be combined with --pinned.")
+        raise typer.Exit(code=2)
+    config_filter = _parse_config_filter_entries(config_entries, option_name="-c") if config else None
 
     analysis_options = _analysis_options(
         confidence_level=confidence_level,
@@ -330,6 +377,7 @@ def trend_command(
         baseline_run_id=baseline_run_id,
         use_pinned_baseline=use_pinned_baseline,
         limit=limit,
+        config_filter=config_filter,
     )
     if trend is None:
         _console().print(f"Suite '{suite_name}' was not found in {database_path}.")
@@ -343,6 +391,12 @@ def trend_command(
     if trend.get("error") == "baseline_not_found":
         _console().print(f"Suite '{suite_name}' does not have a pinned baseline in {database_path}.")
         raise typer.Exit(code=1)
+    if trend.get("error") == "config_filter_no_matches":
+        _console().print(f"No runs in suite '{suite_name}' matched the requested config filter.")
+        raise typer.Exit(code=1)
+    if trend.get("error") == "config_filter_conflicts_with_basis":
+        _console().print("--config/-c cannot be combined with an explicit baseline run ID or --pinned.")
+        raise typer.Exit(code=2)
     if trend.get("mode") != "summary" and trend.get("basis_run") is None:
         _console().print(f"Suite '{suite_name}' does not have any recorded runs in {database_path}.")
         raise typer.Exit(code=1)

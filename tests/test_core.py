@@ -447,6 +447,10 @@ def test_suite_trend_with_pinned_baseline_keeps_timeline_for_mixed_configuration
     assert trend["mode"] == "timeline"
     assert trend["basis_source"] == "pinned"
     assert trend["config_filter"] == {"size": 512, "variant": "baseline"}
+    assert trend["available_suite_configurations"] == [
+        {"size": 512, "variant": "baseline"},
+        {"size": 1024, "variant": "baseline"},
+    ]
     assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1"]
 
 
@@ -1150,6 +1154,175 @@ def test_compare_suite_runs_can_filter_to_matching_reference_config(
     assert stricter_comparison is not None
     assert stricter_comparison["strict_config"] == {"size": 33, "variant": "candidate"}
     assert [run["display_id"] for run in stricter_comparison["runs"]] == ["4.1", "2.1"]
+
+
+def test_compare_suite_runs_can_filter_by_config_pairs(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    for configuration, median_seconds in [
+        ({"size": 33, "variant": "baseline"}, 0.10),
+        ({"size": 33, "variant": "candidate"}, 0.12),
+        ({"size": 34, "variant": "candidate"}, 0.09),
+        ({"size": 33, "variant": "candidate", "mode": "extra"}, 0.11),
+    ]:
+        record_simple_run(
+            suite_name="filtered-suite",
+            database_path=database_path,
+            configuration=configuration,
+            median_seconds=median_seconds,
+            environment=environment_payload,
+        )
+
+    comparison = compare_suite_runs("filtered-suite", database_path=database_path, config_filter={"size": 33})
+
+    assert comparison is not None
+    assert comparison["basis_source"] == "best"
+    assert comparison["config_filter"] == {"size": 33}
+    assert comparison["basis_run"]["display_id"] == "1.1"
+    assert [run["display_id"] for run in comparison["runs"]] == ["4.1", "2.1", "1.1"]
+
+
+def test_compare_suite_runs_warns_when_pinned_baseline_is_outside_config_filter(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_simple_run(
+        suite_name="pinned-filter-suite",
+        database_path=database_path,
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.10,
+        environment=environment_payload,
+    )
+    record_simple_run(
+        suite_name="pinned-filter-suite",
+        database_path=database_path,
+        configuration={"size": 1024, "variant": "candidate-a"},
+        median_seconds=0.12,
+        environment=environment_payload,
+    )
+    record_simple_run(
+        suite_name="pinned-filter-suite",
+        database_path=database_path,
+        configuration={"size": 1024, "variant": "candidate-b"},
+        median_seconds=0.11,
+        environment=environment_payload,
+    )
+
+    pinned = set_suite_baseline("pinned-filter-suite", 1, database_path)
+    assert pinned is not None
+
+    comparison = compare_suite_runs(
+        "pinned-filter-suite",
+        database_path=database_path,
+        use_pinned_baseline=True,
+        config_filter={"size": 1024},
+    )
+
+    assert comparison is not None
+    assert comparison["basis_source"] == "pinned"
+    assert comparison["basis_run"]["display_id"] == "1.1"
+    assert [run["display_id"] for run in comparison["runs"]] == ["3.1", "2.1"]
+    assert comparison["config_filter_warning"] is not None
+    assert comparison["config_filter_warning"]["kind"] == "pinned_baseline_outside_filter"
+
+
+def test_get_suite_details_can_filter_by_config_pairs(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_simple_run(
+        suite_name="show-filter-suite",
+        database_path=database_path,
+        configuration={"size": 512, "variant": "baseline"},
+        median_seconds=0.10,
+        environment=environment_payload,
+    )
+    record_simple_run(
+        suite_name="show-filter-suite",
+        database_path=database_path,
+        configuration={"size": 1024, "variant": "candidate-a"},
+        median_seconds=0.12,
+        environment=environment_payload,
+    )
+    record_simple_run(
+        suite_name="show-filter-suite",
+        database_path=database_path,
+        configuration={"size": 1024, "variant": "candidate-b"},
+        median_seconds=0.11,
+        environment=environment_payload,
+    )
+
+    details = get_suite_details("show-filter-suite", database_path, config_filter={"size": 1024})
+
+    assert details is not None
+    assert details["config_filter"] == {"size": 1024}
+    assert [run["display_id"] for run in details["runs"]] == ["3.1", "2.1"]
+
+
+def test_suite_trend_can_filter_by_config_pairs_and_use_best_filtered_run(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+
+    record_benchmark_run(
+        suite_name="filtered-trend-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.099, 0.100, 0.101],
+        observations=[],
+        median_seconds=0.100,
+        min_seconds=0.099,
+        max_seconds=0.101,
+        std_seconds=0.0008164966,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="filtered-trend-suite",
+        target_name="benchmark_target",
+        configuration={"size": 512, "variant": "baseline"},
+        samples=[0.119, 0.120, 0.121],
+        observations=[],
+        median_seconds=0.120,
+        min_seconds=0.119,
+        max_seconds=0.121,
+        std_seconds=0.0008164966,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+    record_benchmark_run(
+        suite_name="filtered-trend-suite",
+        target_name="benchmark_target",
+        configuration={"size": 1024, "variant": "baseline"},
+        samples=[0.079, 0.080, 0.081],
+        observations=[],
+        median_seconds=0.080,
+        min_seconds=0.079,
+        max_seconds=0.081,
+        std_seconds=0.0008164966,
+        environment=environment_payload,
+        database_path=database_path,
+    )
+
+    trend = get_suite_trend("filtered-trend-suite", database_path, config_filter={"size": 512})
+
+    assert trend is not None
+    assert trend["mode"] == "timeline"
+    assert trend["basis_source"] == "best"
+    assert trend["config_filter"] == {"size": 512}
+    assert trend["basis_run"]["display_id"] == "1.1"
+    assert [run["display_id"] for run in trend["runs"]] == ["1.1", "2.1"]
 
 
 def test_compare_suite_runs_uses_explicit_reference_for_basis_and_relative_metrics(
