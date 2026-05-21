@@ -25,13 +25,15 @@ def _get_or_create_suite(session: Session, suite_name: str, target_name: str) ->
                 # A savepoint lets a concurrent create race recover without aborting the caller's outer transaction.
                 session.add(suite)
                 session.flush()
-        except IntegrityError:
+        except IntegrityError as err:
             # Another transaction might have created the suite concurrently, so we try to fetch it again.
             suite = _get_suite(session, suite_name)
             if suite is None:
                 raise
             if suite.target_name != target_name:
-                raise ValueError(f"Suite {suite_name!r} already exists for target {suite.target_name!r}, cannot reuse it for target {target_name!r}.")
+                raise ValueError(
+                    f"Suite {suite_name!r} already exists for target {suite.target_name!r}, cannot reuse it for target {target_name!r}."
+                ) from err
     return suite
 
 
