@@ -1,6 +1,8 @@
-# BenchCaddy MCP
-
 <img src="benchcaddy_mcp_logo.png" alt="BenchCaddy MCP logo" width="220"></img>
+
+[![CI](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml)
+
+# BenchCaddy MCP
 
 BenchCaddy MCP exposes BenchCaddy benchmark data and analysis as named MCP tools.
 If the CLI or JSON output already fits your workflow, that is often enough. MCP is the simpler path when an agent should inspect suites, compare runs, review trends, or manage baselines through direct tool calls.
