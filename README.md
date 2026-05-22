@@ -127,6 +127,8 @@ Observation labels come from the decorated function name or qualname.
 
 `Sweep` executes targets in a fresh worker process. Your target must therefore be importable by the child process: use a module-level function, static method, or class method.
 
+BenchCaddy executes the benchmark code you point it at and is not a sandbox for untrusted repositories. The worker re-imports the target and verifies it resolved the same source file the parent validated before execution.
+
 Unsupported targets include lambdas, nested or local functions, bound instance methods, arbitrary callable instances, and script-path targets.
 
 BenchCaddy measures synchronous completion from its point of view. If your workload schedules asynchronous device or background work, the benchmarked function must wait for completion before returning.

@@ -109,12 +109,15 @@ def request_to_json_payload(request: dict[str, Any]) -> dict[str, Any]:
     args = json_compatible_value(request.get("args", ()), field_name="worker request arguments")
     kwargs = json_compatible_value(request.get("kwargs", {}), field_name="worker request keyword arguments")
     import_paths = json_compatible_value(request.get("import_paths", []), field_name="worker request import paths")
+    source_path = request.get("source_path")
     if not isinstance(args, list):
         raise TypeError("worker request field 'args' must serialize to a JSON array")
     if not isinstance(kwargs, dict):
         raise TypeError("worker request field 'kwargs' must serialize to a JSON object")
     if not isinstance(import_paths, list) or any(not isinstance(path, str) for path in import_paths):
         raise TypeError("worker request field 'import_paths' must be a list of strings")
+    if source_path is not None and not isinstance(source_path, str):
+        raise TypeError("worker request field 'source_path' must be a string when provided")
 
     disable_gc = request.get("disable_gc", False)
     lock_cpu_affinity = request.get("lock_cpu_affinity", True)
@@ -130,6 +133,7 @@ def request_to_json_payload(request: dict[str, Any]) -> dict[str, Any]:
         "args": args,
         "kwargs": kwargs,
         "import_paths": import_paths,
+        "source_path": source_path,
         "disable_gc": disable_gc,
         "warmup_runs": warmup_runs,
         "lock_cpu_affinity": lock_cpu_affinity,
@@ -146,11 +150,14 @@ def request_from_json_payload(request: Any) -> dict[str, Any]:
         "args",
         "kwargs",
         "import_paths",
+        "source_path",
         "disable_gc",
         "warmup_runs",
         "lock_cpu_affinity",
     }:
-        raise TypeError("worker request must contain exactly 'module_name', 'qualname', 'args', 'kwargs', 'import_paths', 'disable_gc', 'warmup_runs', and 'lock_cpu_affinity'")
+        raise TypeError(
+            "worker request must contain exactly 'module_name', 'qualname', 'args', 'kwargs', 'import_paths', 'source_path', 'disable_gc', 'warmup_runs', and 'lock_cpu_affinity'"
+        )
 
     serialized_request = request_to_json_payload(request)
     return {
@@ -159,6 +166,7 @@ def request_from_json_payload(request: Any) -> dict[str, Any]:
         "args": tuple(serialized_request["args"]),
         "kwargs": dict(serialized_request["kwargs"]),
         "import_paths": list(serialized_request["import_paths"]),
+        "source_path": serialized_request["source_path"],
         "disable_gc": serialized_request["disable_gc"],
         "warmup_runs": serialized_request["warmup_runs"],
         "lock_cpu_affinity": serialized_request["lock_cpu_affinity"],

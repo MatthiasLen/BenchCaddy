@@ -765,6 +765,21 @@ class TestRunIsolated:
         assert payload.observations[1]["kind"] == "time"
         assert len(payload.observations) == 2
 
+    def test_execute_worker_request_rejects_mismatched_source_path(self):
+        with pytest.raises(RuntimeError, match="different source file than the parent validated"):
+            isolation_process_module._execute_worker_request(
+                {
+                    "module_name": __name__,
+                    "qualname": "_record_call",
+                    "args": (2, 3),
+                    "kwargs": {},
+                    "source_path": str((isolation_process_module.Path(__file__).parent / "wrong_target.py").resolve()),
+                    "disable_gc": False,
+                    "warmup_runs": 0,
+                    "lock_cpu_affinity": True,
+                }
+            )
+
     def test_run_isolated_reuses_cached_target_validation(self, monkeypatch: pytest.MonkeyPatch):
         isolation_process_module._validated_target_reference.cache_clear()
         validation_calls: list[Callable[..., object]] = []
@@ -817,9 +832,14 @@ class TestRunIsolated:
 
     def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
         commands: list[list[str]] = []
+        envs: list[dict[str, str]] = []
+
+        monkeypatch.setenv("PYTHONPATH", "c:/tmp/poisoned")
+        monkeypatch.setenv("PYTHONHOME", "c:/tmp/home")
 
         def fake_popen(cmd, **kwargs):
             commands.append(cmd)
+            envs.append(kwargs["env"])
             assert kwargs["stdin"] == isolation_process_module.subprocess.PIPE
 
             class _FakeProc:
@@ -830,7 +850,7 @@ class TestRunIsolated:
                     request = json.loads(input.decode("utf-8"))
                     assert request["qualname"] == "add"
                     assert isolation_process_module._resolve_callable(request["module_name"], request["qualname"])(2, 3) == 5
-                    with isolation_process_module.Path(cmd[4]).open("w", encoding="utf-8") as handle:
+                    with isolation_process_module.Path(cmd[-1]).open("w", encoding="utf-8") as handle:
                         json.dump(
                             {
                                 "ok": True,
@@ -854,12 +874,15 @@ class TestRunIsolated:
         assert commands == [
             [
                 sys.executable,
+                "-I",
                 "-m",
                 "benchcaddy.isolation.process",
                 isolation_process_module._WORKER_FLAG,
-                commands[0][4],
+                commands[0][-1],
             ]
         ]
+        assert "PYTHONPATH" not in envs[0]
+        assert "PYTHONHOME" not in envs[0]
 
     def test_invalid_worker_json_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch):
         def fake_popen(command, **kwargs):
@@ -870,7 +893,7 @@ class TestRunIsolated:
 
                 def communicate(self, input=None, timeout=None):
                     del input, timeout
-                    isolation_process_module.Path(command[4]).write_text("{not-json", encoding="utf-8")
+                    isolation_process_module.Path(command[-1]).write_text("{not-json", encoding="utf-8")
                     return (b"", b"")
 
             return _FakeProc()

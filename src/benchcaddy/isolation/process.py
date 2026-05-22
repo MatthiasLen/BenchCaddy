@@ -135,6 +135,16 @@ def _resolve_callable(module_name: str, qualname: str) -> Callable[..., Any]:
     return target
 
 
+def _callable_source_path(fn: Callable[..., Any]) -> str | None:
+    """Return the canonical source path for a callable when Python can resolve one."""
+    resolved_target = inspect.unwrap(fn)
+    with suppress(OSError, TypeError, ValueError):
+        source_path = inspect.getsourcefile(resolved_target) or inspect.getfile(resolved_target)
+        if source_path:
+            return str(Path(source_path).resolve())
+    return None
+
+
 def _child_error_payload(exc: Exception) -> dict[str, str]:
     """Convert a worker exception into the plain-string payload sent across IPC."""
     return {
@@ -202,16 +212,13 @@ def _import_paths_for_module_name(source_path: str | None, module_name: str) -> 
     return import_roots
 
 
-def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list[str]]:
+def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list[str], str | None]:
     """Extract the module name, qualname, and potential import paths for a callable target, validating that it is suitable for subprocess isolation."""
 
     resolved_target = inspect.unwrap(fn)
     module_name = getattr(resolved_target, "__module__", None)
     qualname = getattr(resolved_target, "__qualname__", None)
-    source_path = None
-
-    with suppress(OSError, TypeError):
-        source_path = inspect.getsourcefile(resolved_target) or inspect.getfile(resolved_target)
+    source_path = _callable_source_path(resolved_target)
 
     if not module_name or not qualname:
         raise _unsupported_target_error("the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process.")
@@ -227,11 +234,11 @@ def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list
     else:
         import_paths = _import_paths_for_module_name(source_path, module_name)
 
-    return module_name, qualname, import_paths
+    return module_name, qualname, import_paths, source_path
 
 
 @cache
-def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple[str, ...]]:
+def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple[str, ...], str | None]:
     if inspect.ismethod(fn) and getattr(fn, "__self__", None) is not None and not isinstance(fn.__self__, type):
         raise _unsupported_target_error(
             "bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, "
@@ -244,7 +251,7 @@ def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple
             "Expose a module-level function, static method, or class method instead."
         )
 
-    module_name, qualname, import_paths = _importable_target_reference(fn)
+    module_name, qualname, import_paths, source_path = _importable_target_reference(fn)
 
     if "<lambda>" in qualname:
         raise _unsupported_target_error("lambdas are unsupported because they do not provide a stable import path for the worker. Define a named module-level function instead.")
@@ -262,12 +269,12 @@ def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple
             f"could not resolve {module_name}.{qualname}. Ensure the symbol is importable in the child process and exposed at that module path."
         ) from exc
 
-    return module_name, qualname, tuple(import_paths)
+    return module_name, qualname, tuple(import_paths), source_path
 
 
 def validate_isolated_target(fn: Callable[..., Any]) -> tuple[str, str, list[str]]:
     """Validate that the provided callable is a supported target for fresh subprocess isolation and return its module and qualname for later import."""
-    module_name, qualname, import_paths = _validated_target_reference(fn)
+    module_name, qualname, import_paths, _source_path = _validated_target_reference(fn)
     return module_name, qualname, list(import_paths)
 
 
@@ -297,6 +304,13 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
             sys.path.insert(0, import_path)
 
     fn = _resolve_callable(request["module_name"], request["qualname"])
+    expected_source_path = request.get("source_path")
+    if expected_source_path:
+        resolved_source_path = _callable_source_path(fn)
+        if resolved_source_path != expected_source_path:
+            raise RuntimeError(
+                f"Worker resolved the target from a different source file than the parent validated. Expected {expected_source_path}, got {resolved_source_path or 'unresolved'}."
+            )
     args = tuple(request.get("args", ()))
     kwargs = dict(request.get("kwargs", {}))
     warmup_runs = int(request.get("warmup_runs", 0))
@@ -329,17 +343,23 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
 
         cmd = [
             sys.executable,
+            "-I",
             "-m",
             "benchcaddy.isolation.process",
             _WORKER_FLAG,
             str(response_path),
         ]
 
+        worker_env = os.environ.copy()
+        for variable_name in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE"):
+            worker_env.pop(variable_name, None)
+
         popen_kwargs = {
             "stdin": subprocess.PIPE,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
             "close_fds": True,
+            "env": worker_env,
         }
 
         # Windows: avoid creating a visible console for the child. POSIX: create
@@ -480,7 +500,7 @@ def run_isolated(
     if not fresh_process:
         return _run_observed_call(fn, args, kw)
 
-    module_name, qualname, import_paths = _validated_target_reference(fn)
+    module_name, qualname, import_paths, source_path = _validated_target_reference(fn)
 
     # Pass the resolved import reference into the worker request so the child can re-import the target without inspecting the host process.
     # The worker process will re-import the target function and execute it with the provided arguments,
@@ -493,6 +513,7 @@ def run_isolated(
             "args": args,
             "kwargs": kw,
             "import_paths": list(import_paths),
+            "source_path": source_path,
             "disable_gc": disable_gc,
             "warmup_runs": warmup_runs,
             "lock_cpu_affinity": lock_cpu_affinity,
