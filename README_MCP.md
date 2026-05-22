@@ -6,7 +6,7 @@
 
 BenchCaddy MCP exposes BenchCaddy benchmark data and analysis as named MCP tools.
 If the CLI or JSON output already fits your workflow, that is often enough. MCP is the simpler path when an agent should inspect suites, compare runs, review trends, or manage baselines through direct tool calls.
-The default payloads are designed to stay compact, so they are usually much cheaper to pass to an agent than raw profiler traces or long benchmark logs.
+The default payloads are designed to stay compact and answer-first, so they are usually much cheaper to pass to an agent than raw profiler traces or long benchmark logs.
 
 ## What It Is
 
@@ -156,10 +156,10 @@ The tool surface is intentionally small and analysis-oriented:
 - `pin_baseline`: update the pinned baseline for a suite
 
 Most tools accept an optional `database_path`. If omitted, they read `./benchcaddy.db`.
-All tools accept `response_detail`, which defaults to `summary`. Use `response_detail="full"` when you want the complete nested payload.
+All tools accept `response_detail`, which defaults to `summary`. Summary responses are intentionally bounded and optimized for direct agent answers. Use `response_detail="full"` when you want the complete nested payload.
 
 The response envelope is stable across all tools. Callers can branch on `status` and `reason` first, inspect `summary` for direct answers, and only opt into `result` when they need the full nested payload.
-That summary-first shape is deliberate: it keeps typical agent interactions compact while still leaving the full nested payload available when deeper inspection is necessary.
+That summary-first shape is deliberate: it keeps typical agent interactions compact while still leaving the full nested payload available when deeper inspection is necessary. For example, suite summaries expose bounded `latest_runs` plus distinct `available_configurations`, compare summaries expose `comparison_verdict` plus bounded `comparison_runs`, trend summaries expose `trend_verdict` plus bounded `timeline_runs` or `configuration_summaries`, and baseline history summaries expose compact `baseline_history` entries.
 
 ## First-Call Smoke Check
 
@@ -176,7 +176,7 @@ Client: Call server_status with {"database_path": "/home/bench/benchcaddy/benchc
 
 BenchCaddy MCP:
 {
-    "schema_version": "1.0",
+    "schema_version": "2.0",
     "command": "server_status",
     "status": "pass",
     "reason": "server_ready",
@@ -187,7 +187,7 @@ BenchCaddy MCP:
     "summary": {
         "server_name": "BenchCaddy MCP",
         "server_version": "0.1.10",
-        "schema_version": "1.0",
+        "schema_version": "2.0",
         "default_response_detail": "summary",
         "tool_count": 10,
         "tool_names": [
@@ -252,7 +252,7 @@ Client: Call compare_runs with {"left_run_id": "4.2", "right_run_id": "4.3", "da
 
 BenchCaddy MCP:
 {
-    "schema_version": "1.0",
+    "schema_version": "2.0",
     "command": "compare_runs",
     "status": "pass",
     "reason": "comparison_complete",

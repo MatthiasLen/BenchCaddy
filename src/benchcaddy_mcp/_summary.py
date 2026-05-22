@@ -5,9 +5,9 @@ from typing import Any
 
 class ResponseSummaryBuilder:
     def build(self, tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
-        if tool_name == "compare_runs" and self._is_direct_comparison(result):
+        if tool_name == "compare_runs" and "baseline" in result and "candidate" in result:
             return self._direct_comparison_summary(result)
-        if tool_name == "compare_suite" and self._is_suite_comparison(result):
+        if tool_name == "compare_suite" and "basis_run" in result and "runs" in result:
             return self._suite_comparison_summary(result)
         if tool_name == "trend_suite" and result.get("mode") in {"summary", "timeline"}:
             return self._trend_summary(result)
@@ -22,12 +22,6 @@ class ResponseSummaryBuilder:
         if tool_name == "pin_baseline" and "pin_update" in result:
             return self._pin_update_summary(result)
         return result
-
-    def _is_direct_comparison(self, comparison: dict[str, Any]) -> bool:
-        return "baseline" in comparison and "candidate" in comparison
-
-    def _is_suite_comparison(self, comparison: dict[str, Any]) -> bool:
-        return "basis_run" in comparison and "runs" in comparison
 
     def _configuration_differences(
         self,
@@ -149,6 +143,39 @@ class ResponseSummaryBuilder:
             "drift_analysis": self._compact_analysis_summary(run.get("drift_analysis")),
         }
 
+    def _trend_verdict_from_analysis(self, analysis: dict[str, Any] | None) -> str:
+        analysis = analysis or {}
+        if analysis.get("regression_detected"):
+            return "regressing"
+        if analysis.get("classification") == "noisy" or analysis.get("warnings"):
+            return "inconclusive"
+        if analysis.get("classification") == "improving":
+            return "improving"
+        return "stable"
+
+    def _configuration_trend_verdict(self, summary: dict[str, Any]) -> str:
+        verdicts = [
+            self._trend_verdict_from_analysis(summary.get("recent_vs_window")),
+            self._trend_verdict_from_analysis(summary.get("latest_vs_best")),
+            self._trend_verdict_from_analysis(summary.get("latest_vs_first")),
+        ]
+        if "regressing" in verdicts:
+            return "regressing"
+        if "inconclusive" in verdicts:
+            return "inconclusive"
+        if verdicts and all(verdict == "improving" for verdict in verdicts):
+            return "improving"
+        return "stable"
+
+    def _timeline_trend_verdict(self, runs: list[dict[str, Any]]) -> str:
+        if any((run.get("vs_baseline") or {}).get("regression_detected") for run in runs):
+            return "regressing"
+        if any((run.get("vs_baseline") or {}).get("warnings") or run.get("drift_status") == "noisy" for run in runs):
+            return "inconclusive"
+        latest_run = runs[-1] if runs else None
+        latest_analysis = None if latest_run is None else (latest_run.get("drift_analysis") or latest_run.get("vs_baseline"))
+        return self._trend_verdict_from_analysis(latest_analysis)
+
     def _direct_comparison_summary(self, comparison: dict[str, Any]) -> dict[str, Any]:
         baseline = comparison.get("baseline") or {}
         candidate = comparison.get("candidate") or {}
@@ -181,8 +208,10 @@ class ResponseSummaryBuilder:
             "truncated": result.get("truncated", False),
             "limit": result.get("limit"),
             "run_count": len(runs),
-            "runs": [self._run_summary(run) for run in runs],
-            "baseline_run": self._run_summary(result.get("baseline_run")),
+            "configuration_count": result.get("configuration_count"),
+            "available_configurations": result.get("available_configurations") or [],
+            "latest_runs": [self._compact_run_summary(run) for run in runs],
+            "baseline_run": self._compact_run_summary(result.get("baseline_run")),
             "environment": self._environment_summary(result.get("environment")),
         }
 
@@ -207,13 +236,18 @@ class ResponseSummaryBuilder:
     def _suite_comparison_summary(self, comparison: dict[str, Any]) -> dict[str, Any]:
         runs = comparison.get("runs") or []
         analyses = [run.get("comparison_analysis") or {} for run in runs]
+        comparison_verdict = "stable"
+        if any(analysis.get("regression_detected") for analysis in analyses):
+            comparison_verdict = "regressing"
+        elif any(analysis.get("classification") == "noisy" or analysis.get("warnings") for analysis in analyses):
+            comparison_verdict = "inconclusive"
         return {
             "comparison_mode": comparison.get("comparison_mode"),
             "suite_name": comparison.get("suite_name"),
             "target_name": comparison.get("target_name"),
             "basis_source": comparison.get("basis_source"),
             "basis_run": self._suite_comparison_row_summary(comparison.get("basis_run") or {}) if comparison.get("basis_run") else None,
-            "pinned_baseline": self._run_summary(comparison.get("pinned_baseline")),
+            "pinned_baseline": self._compact_run_summary(comparison.get("pinned_baseline")),
             "config_filter": comparison.get("config_filter"),
             "strict_keys": comparison.get("strict_keys") or [],
             "strict_config": comparison.get("strict_config"),
@@ -224,35 +258,54 @@ class ResponseSummaryBuilder:
             "run_count": len(runs),
             "regression_count": sum(1 for analysis in analyses if analysis.get("regression_detected")),
             "noisy_count": sum(1 for analysis in analyses if analysis.get("classification") == "noisy" or analysis.get("warnings")),
-            "runs": [self._suite_comparison_row_summary(run) for run in runs],
+            "comparison_verdict": comparison_verdict,
+            "comparison_runs": [self._suite_comparison_row_summary(run) for run in runs],
         }
 
     def _trend_summary(self, trend: dict[str, Any]) -> dict[str, Any]:
         if trend.get("mode") == "summary":
             config_summaries = trend.get("config_summaries") or []
+            summarized_configurations = [summary.get("configuration") for summary in config_summaries if summary.get("configuration") is not None]
+            summarized_rows = [
+                {
+                    "configuration": summary.get("configuration"),
+                    "trend_verdict": self._configuration_trend_verdict(summary),
+                    "run_count": summary.get("run_count"),
+                    "total_run_count": summary.get("total_run_count"),
+                    "first_run": self._compact_run_summary(summary.get("first_run"), include_configuration=False),
+                    "latest_run": self._compact_run_summary(summary.get("latest_run"), include_configuration=False),
+                    "best_run": self._compact_run_summary(summary.get("best_run"), include_configuration=False),
+                    "latest_vs_first": self._compact_analysis_summary(summary.get("latest_vs_first")),
+                    "recent_vs_window": self._compact_analysis_summary(summary.get("recent_vs_window")),
+                    "latest_vs_best": self._compact_analysis_summary(summary.get("latest_vs_best")),
+                }
+                for summary in config_summaries
+            ]
+            regression_count = sum(1 for summary in summarized_rows if summary["trend_verdict"] == "regressing")
+            noisy_count = sum(1 for summary in summarized_rows if summary["trend_verdict"] == "inconclusive")
+            trend_verdict = "stable"
+            if regression_count:
+                trend_verdict = "regressing"
+            elif noisy_count:
+                trend_verdict = "inconclusive"
+            elif summarized_rows and all(summary["trend_verdict"] == "improving" for summary in summarized_rows):
+                trend_verdict = "improving"
             return {
                 "mode": "summary",
                 "suite_name": trend.get("suite_name"),
                 "target_name": trend.get("target_name"),
                 "configuration_count": trend.get("configuration_count", len(config_summaries)),
+                "available_configurations": summarized_configurations,
+                "trend_verdict": trend_verdict,
+                "regression_count": regression_count,
+                "noisy_count": noisy_count,
                 "limit": trend.get("limit"),
-                "config_summaries": [
-                    {
-                        "configuration": summary.get("configuration"),
-                        "run_count": summary.get("run_count"),
-                        "total_run_count": summary.get("total_run_count"),
-                        "first_run": self._compact_run_summary(summary.get("first_run"), include_configuration=False),
-                        "latest_run": self._compact_run_summary(summary.get("latest_run"), include_configuration=False),
-                        "best_run": self._compact_run_summary(summary.get("best_run"), include_configuration=False),
-                        "latest_vs_first": self._compact_analysis_summary(summary.get("latest_vs_first")),
-                        "recent_vs_window": self._compact_analysis_summary(summary.get("recent_vs_window")),
-                        "latest_vs_best": self._compact_analysis_summary(summary.get("latest_vs_best")),
-                    }
-                    for summary in config_summaries
-                ],
+                "configuration_summaries": summarized_rows,
             }
 
         runs = trend.get("runs") or []
+        available_configurations = trend.get("available_suite_configurations") or []
+        timeline_rows = [self._trend_run_summary(run) for run in runs]
         return {
             "mode": trend.get("mode"),
             "suite_name": trend.get("suite_name"),
@@ -260,13 +313,17 @@ class ResponseSummaryBuilder:
             "basis_source": trend.get("basis_source"),
             "basis_run": self._compact_run_summary(trend.get("basis_run")),
             "config_filter": trend.get("config_filter"),
+            "available_configurations": available_configurations,
+            "configuration_count": len(available_configurations),
             "total_run_count": trend.get("total_run_count", len(runs)),
             "truncated": trend.get("truncated", False),
             "limit": trend.get("limit"),
             "run_count": len(runs),
             "regression_count": sum(1 for run in runs if (run.get("vs_baseline") or {}).get("regression_detected")),
             "noisy_count": sum(1 for run in runs if (run.get("vs_baseline") or {}).get("warnings") or run.get("drift_status") == "noisy"),
-            "runs": [self._trend_run_summary(run) for run in runs],
+            "trend_verdict": self._timeline_trend_verdict(runs),
+            "latest_run": None if not timeline_rows else timeline_rows[-1],
+            "timeline_runs": timeline_rows,
         }
 
     def _baseline_history_summary(self, history: dict[str, Any]) -> dict[str, Any]:
@@ -279,7 +336,7 @@ class ResponseSummaryBuilder:
             "limit": history.get("limit"),
             "history_count": len(entries),
             "current_baseline": self._baseline_event_summary(history.get("current_baseline")),
-            "history": [self._baseline_event_summary(entry) for entry in entries],
+            "baseline_history": [self._baseline_event_summary(entry) for entry in entries],
         }
 
     def _baseline_event_summary(self, event: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -290,7 +347,7 @@ class ResponseSummaryBuilder:
             "created_at": event.get("created_at"),
             "note": event.get("note"),
             "is_current": event.get("is_current"),
-            "run": self._run_summary(event.get("run")),
+            "run": self._compact_run_summary(event.get("run")),
         }
 
     def _pin_update_summary(self, result: dict[str, Any]) -> dict[str, Any]:

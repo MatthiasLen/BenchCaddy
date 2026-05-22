@@ -7,6 +7,7 @@ from benchcaddy.db import get_suite_details
 from .._app import app
 from .._shared import (
     DEFAULT_LIMIT,
+    DEFAULT_RESPONSE_DETAIL,
     ResponseDetail,
     _analysis_options,
     _capped_rows,
@@ -22,7 +23,7 @@ def get_suite(
     suite_name: str,
     database_path: str | None = None,
     limit: int | None = DEFAULT_LIMIT,
-    response_detail: ResponseDetail = "summary",
+    response_detail: ResponseDetail = DEFAULT_RESPONSE_DETAIL,
     config_filter: dict[str, Any] | None = None,
     include_analysis: bool = False,
     confidence_level: float = 0.95,

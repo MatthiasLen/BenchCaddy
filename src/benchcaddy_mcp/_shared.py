@@ -7,7 +7,7 @@ from benchcaddy.stats import AnalysisOptions
 
 from ._summary import ResponseSummaryBuilder
 
-JSON_SCHEMA_VERSION = "1.0"
+JSON_SCHEMA_VERSION = "2.0"
 DEFAULT_LIMIT = 20
 ResponseDetail = Literal["summary", "full"]
 DEFAULT_RESPONSE_DETAIL: ResponseDetail = "summary"

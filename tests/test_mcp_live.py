@@ -149,9 +149,10 @@ def test_live_mcp_stdio_smoke(
             assert suite_payload["status"] == "pass"
             assert suite_payload["reason"] == "suite_details_available"
             assert suite_payload["summary"]["total_run_count"] == 4
+            assert suite_payload["summary"]["configuration_count"] == 3
 
-            run_a = suite_payload["summary"]["runs"][0]["display_id"]
-            run_b = suite_payload["summary"]["runs"][1]["display_id"]
+            run_a = suite_payload["summary"]["latest_runs"][0]["display_id"]
+            run_b = suite_payload["summary"]["latest_runs"][1]["display_id"]
 
             run_payload = await _call_tool(client, "get_run", {"run_id": run_a, "database_path": str(database_path)})
             assert run_payload["status"] == "pass"

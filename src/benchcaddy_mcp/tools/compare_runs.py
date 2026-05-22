@@ -6,6 +6,7 @@ from benchcaddy.db import compare_runs as _compare_runs
 
 from .._app import app
 from .._shared import (
+    DEFAULT_RESPONSE_DETAIL,
     ResponseDetail,
     _analysis_options,
     _comparison_response,
@@ -28,7 +29,7 @@ def compare_runs(
     left_run_id: int | str,
     right_run_id: int | str,
     database_path: str | None = None,
-    response_detail: ResponseDetail = "summary",
+    response_detail: ResponseDetail = DEFAULT_RESPONSE_DETAIL,
     confidence_level: float = 0.95,
     bootstrap_resamples: int = 2000,
     bootstrap_seed: int = 0,

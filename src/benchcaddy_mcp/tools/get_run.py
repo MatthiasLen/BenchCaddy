@@ -6,6 +6,7 @@ from benchcaddy.db import get_run_details
 
 from .._app import app
 from .._shared import (
+    DEFAULT_RESPONSE_DETAIL,
     ResponseDetail,
     _analysis_options,
     _invalid_response_detail_response,
@@ -21,7 +22,7 @@ from .._shared import (
 def get_run(
     run_id: int | str,
     database_path: str | None = None,
-    response_detail: ResponseDetail = "summary",
+    response_detail: ResponseDetail = DEFAULT_RESPONSE_DETAIL,
     include_analysis: bool = False,
     confidence_level: float = 0.95,
     bootstrap_resamples: int = 2000,

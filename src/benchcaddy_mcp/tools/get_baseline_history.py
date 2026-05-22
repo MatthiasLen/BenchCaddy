@@ -7,6 +7,7 @@ from benchcaddy.db import get_suite_baseline_history as _get_suite_baseline_hist
 from .._app import app
 from .._shared import (
     DEFAULT_LIMIT,
+    DEFAULT_RESPONSE_DETAIL,
     ResponseDetail,
     _analysis_options,
     _capped_rows,
@@ -21,7 +22,7 @@ def get_baseline_history(
     suite_name: str,
     database_path: str | None = None,
     limit: int | None = DEFAULT_LIMIT,
-    response_detail: ResponseDetail = "summary",
+    response_detail: ResponseDetail = DEFAULT_RESPONSE_DETAIL,
     include_analysis: bool = False,
     confidence_level: float = 0.95,
     bootstrap_resamples: int = 2000,

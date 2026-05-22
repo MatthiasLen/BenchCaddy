@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -61,12 +62,31 @@ def get_suite_details(
             return None
 
         if config_filter is None:
-            runs = _list_suite_runs_latest_first(session, suite.id, limit=limit)
+            all_runs = _list_suite_runs_latest_first(session, suite.id)
+            runs = all_runs[:limit] if limit is not None else all_runs
         else:
             all_runs = _list_suite_runs_latest_first(session, suite.id)
             runs = [run for run in all_runs if _configuration_matches_filter(run.configuration, config_filter)]
             if limit is not None:
                 runs = runs[:limit]
+        available_configurations: list[dict[str, Any]] = []
+        seen_configurations: set[str] = set()
+        for run in all_runs:
+            configuration_key = json.dumps(run.configuration, sort_keys=True, separators=(",", ":"))
+            if configuration_key in seen_configurations:
+                continue
+            seen_configurations.add(configuration_key)
+            available_configurations.append(dict(run.configuration))
+        available_configurations.sort(
+            key=lambda configuration: tuple(
+                (
+                    key,
+                    0 if isinstance(value, int | float) else 1,
+                    value if isinstance(value, int | float) else str(value),
+                )
+                for key, value in sorted(configuration.items())
+            )
+        )
         # Suite views show the newest recorded environment snapshot alongside the selected run slice.
         environment = runs[0].environment if runs else None
         baseline_run = _resolve_suite_baseline_run(session, suite)
@@ -87,6 +107,8 @@ def get_suite_details(
         "suite_name": suite.name,
         "target_name": suite.target_name,
         "config_filter": None if config_filter is None else dict(config_filter),
+        "configuration_count": len(available_configurations),
+        "available_configurations": available_configurations,
         "runs": run_payloads,
         "environment": None if environment is None else environment.to_payload(),
         "baseline_run": (

@@ -6,6 +6,7 @@ from benchcaddy.db import set_suite_baseline
 
 from .._app import app
 from .._shared import (
+    DEFAULT_RESPONSE_DETAIL,
     ResponseDetail,
     _analysis_options,
     _invalid_response_detail_response,
@@ -22,7 +23,7 @@ def pin_baseline(
     run_id: int | str,
     note: str | None = None,
     database_path: str | None = None,
-    response_detail: ResponseDetail = "summary",
+    response_detail: ResponseDetail = DEFAULT_RESPONSE_DETAIL,
     confidence_level: float = 0.95,
     bootstrap_resamples: int = 2000,
     bootstrap_seed: int = 0,

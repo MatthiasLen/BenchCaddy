@@ -79,7 +79,7 @@ def test_mcp_responses_use_consistent_envelope_fields(
     ]
 
     for command, payload in payloads:
-        assert payload["schema_version"] == "1.0"
+        assert payload["schema_version"] == "2.0"
         assert payload["command"] == command
         assert payload["status"] in {"pass", "fail", "inconclusive"}
         assert isinstance(payload["reason"], str)
@@ -212,7 +212,9 @@ def test_get_suite_caps_runs_by_default(
     assert payload["summary"]["database_path"] == str(database_path)
     assert payload["summary"]["truncated"] is True
     assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 5
-    assert len(payload["summary"]["runs"]) == DEFAULT_LIMIT
+    assert payload["summary"]["configuration_count"] == DEFAULT_LIMIT + 5
+    assert len(payload["summary"]["available_configurations"]) == DEFAULT_LIMIT + 5
+    assert len(payload["summary"]["latest_runs"]) == DEFAULT_LIMIT
 
 
 def test_get_run_accepts_display_ids(
@@ -333,8 +335,13 @@ def test_get_suite_payload_matches_requested_filter_and_limit(
     assert payload["summary"]["config_filter"] == {"size": 512, "variant": "baseline"}
     assert payload["summary"]["total_run_count"] == 2
     assert payload["summary"]["truncated"] is True
-    assert len(payload["summary"]["runs"]) == 1
-    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["runs"])
+    assert payload["summary"]["configuration_count"] == 2
+    assert payload["summary"]["available_configurations"] == [
+        {"size": 512, "variant": "baseline"},
+        {"size": 1024, "variant": "candidate"},
+    ]
+    assert len(payload["summary"]["latest_runs"]) == 1
+    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["latest_runs"])
 
 
 def test_db_get_suite_details_can_build_lean_payloads(
@@ -394,7 +401,7 @@ def test_compare_suite_caps_runs_by_default(
     assert payload["summary"]["comparison_mode"] == "suite"
     assert payload["summary"]["truncated"] is True
     assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 3
-    assert len(payload["summary"]["runs"]) == DEFAULT_LIMIT
+    assert len(payload["summary"]["comparison_runs"]) == DEFAULT_LIMIT
 
 
 def test_compare_runs_returns_head_to_head_payload(
@@ -605,7 +612,7 @@ def test_compare_suite_reports_empty_scope_payload_context(
     assert payload["reason"] == "no_runs_matched_scope"
     assert payload["summary"]["suite_name"] == "suite-empty-scope"
     assert payload["summary"]["config_filter"] == {"size": 2048}
-    assert payload["summary"]["runs"] == []
+    assert payload["summary"]["comparison_runs"] == []
 
 
 def test_compare_suite_payload_matches_requested_reference_and_scope(
@@ -647,10 +654,11 @@ def test_compare_suite_payload_matches_requested_reference_and_scope(
     assert payload["summary"]["basis_source"] == "reference"
     assert payload["summary"]["basis_run"]["display_id"] == "1.1"
     assert payload["summary"]["config_filter"] == {"size": 512}
-    assert {run["configuration"]["size"] for run in payload["summary"]["runs"]} == {512}
-    assert {run["display_id"] for run in payload["summary"]["runs"]} == {"1.1", "2.1"}
-    assert "target_return_relative_error" not in payload["summary"]["runs"][0]
-    assert "slowdown_factor" not in payload["summary"]["runs"][0]
+    assert payload["summary"]["comparison_verdict"] == "stable"
+    assert {run["configuration"]["size"] for run in payload["summary"]["comparison_runs"]} == {512}
+    assert {run["display_id"] for run in payload["summary"]["comparison_runs"]} == {"1.1", "2.1"}
+    assert "target_return_relative_error" not in payload["summary"]["comparison_runs"][0]
+    assert "slowdown_factor" not in payload["summary"]["comparison_runs"][0]
 
 
 def test_trend_suite_caps_timeline_runs_by_default(
@@ -675,7 +683,8 @@ def test_trend_suite_caps_timeline_runs_by_default(
     assert payload["summary"]["mode"] == "timeline"
     assert payload["summary"]["truncated"] is True
     assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 4
-    assert len(payload["summary"]["runs"]) == DEFAULT_LIMIT
+    assert payload["summary"]["trend_verdict"] == "stable"
+    assert len(payload["summary"]["timeline_runs"]) == DEFAULT_LIMIT
 
 
 def test_trend_suite_payload_matches_requested_filter_context(
@@ -712,11 +721,16 @@ def test_trend_suite_payload_matches_requested_filter_context(
     assert payload["summary"]["mode"] == "timeline"
     assert payload["summary"]["config_filter"] == {"size": 512, "variant": "baseline"}
     assert payload["summary"]["basis_source"] == "best"
+    assert payload["summary"]["trend_verdict"] == "stable"
     assert payload["summary"]["total_run_count"] == 3
     assert payload["summary"]["truncated"] is True
-    assert len(payload["summary"]["runs"]) == 2
-    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["runs"])
-    assert "available_suite_configurations" not in payload["summary"]
+    assert payload["summary"]["configuration_count"] == 2
+    assert len(payload["summary"]["timeline_runs"]) == 2
+    assert all(run["configuration"] == {"size": 512, "variant": "baseline"} for run in payload["summary"]["timeline_runs"])
+    assert payload["summary"]["available_configurations"] == [
+        {"size": 512, "variant": "baseline"},
+        {"size": 1024, "variant": "baseline"},
+    ]
 
 
 def test_db_trend_suite_can_build_lean_filtered_timeline(
@@ -806,9 +820,14 @@ def test_trend_suite_reports_summary_mode_for_mixed_configurations(
     assert payload["reason"] == "multiple_configurations_summary"
     assert payload["summary"]["mode"] == "summary"
     assert payload["summary"]["configuration_count"] == 2
-    assert len(payload["summary"]["config_summaries"]) == 2
-    assert "configuration" not in payload["summary"]["config_summaries"][0]["first_run"]
-    assert "suite_name" not in payload["summary"]["config_summaries"][0]["first_run"]
+    assert payload["summary"]["trend_verdict"] == "stable"
+    assert len(payload["summary"]["configuration_summaries"]) == 2
+    assert payload["summary"]["available_configurations"] == [
+        {"size": 512, "variant": "baseline"},
+        {"size": 1024, "variant": "baseline"},
+    ]
+    assert "configuration" not in payload["summary"]["configuration_summaries"][0]["first_run"]
+    assert "suite_name" not in payload["summary"]["configuration_summaries"][0]["first_run"]
 
 
 def test_pin_baseline_and_history_are_available(
@@ -834,7 +853,7 @@ def test_pin_baseline_and_history_are_available(
     assert payload["reason"] == "baseline_available"
     assert payload["summary"]["truncated"] is True
     assert payload["summary"]["total_run_count"] == DEFAULT_LIMIT + 2
-    assert len(payload["summary"]["history"]) == DEFAULT_LIMIT
+    assert len(payload["summary"]["baseline_history"]) == DEFAULT_LIMIT
     assert payload["summary"]["current_baseline"]["note"] == f"pin-{DEFAULT_LIMIT + 1}"
 
 

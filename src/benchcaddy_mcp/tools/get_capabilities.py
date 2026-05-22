@@ -33,7 +33,7 @@ def get_capabilities(database_path: str | None = None, response_detail: Response
         "response_envelope_fields": RESPONSE_ENVELOPE_FIELDS,
         "tool_argument_conventions": {
             "database_path": "Optional path to a BenchCaddy database file. Defaults to ./benchcaddy.db.",
-            "response_detail": "Optional response detail mode. Use 'summary' by default or 'full' for nested payloads.",
+            "response_detail": "Optional response detail mode. Summary is the default bounded answer-first shape; use 'full' for the complete nested payload.",
         },
         "tool_count": len(TOOL_SPECS),
         "tools": list(TOOL_SPECS),
