@@ -1,4 +1,4 @@
-<img src="benchcaddy_mcp_logo.png" alt="BenchCaddy MCP logo" width="220"></img>
+<img src="benchcaddy_mcp_logo.png" alt="BenchCaddy MCP logo" width="240"></img>
 
 [![CI](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MatthiasLen/BenchCaddy/actions/workflows/ci.yml)
 
