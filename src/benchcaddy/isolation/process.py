@@ -263,11 +263,19 @@ def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple
         )
 
     try:
-        _resolve_callable(module_name, qualname)
+        resolved_callable = _resolve_callable(module_name, qualname)
     except Exception as exc:
         raise _unsupported_target_error(
             f"could not resolve {module_name}.{qualname}. Ensure the symbol is importable in the child process and exposed at that module path."
         ) from exc
+
+    if source_path:
+        resolved_source_path = _callable_source_path(resolved_callable)
+        if resolved_source_path != source_path:
+            raise _unsupported_target_error(
+                f"could not resolve {module_name}.{qualname} back to the same source file that defined the original target. "
+                f"Expected {source_path}, got {resolved_source_path or 'unresolved'}."
+            )
 
     return module_name, qualname, tuple(import_paths), source_path
 

@@ -780,6 +780,15 @@ class TestRunIsolated:
                 }
             )
 
+    def test_validate_isolated_target_rejects_mismatched_resolved_source_path(self, monkeypatch: pytest.MonkeyPatch):
+        isolation_process_module._validated_target_reference.cache_clear()
+        monkeypatch.setattr(isolation_process_module, "_resolve_callable", lambda module_name, qualname: _record_call)
+
+        with pytest.raises(TypeError, match="same source file that defined the original target"):
+            isolation_process_module.validate_isolated_target(observed_targets.top_level_module_target)
+
+        isolation_process_module._validated_target_reference.cache_clear()
+
     def test_run_isolated_reuses_cached_target_validation(self, monkeypatch: pytest.MonkeyPatch):
         isolation_process_module._validated_target_reference.cache_clear()
         validation_calls: list[Callable[..., object]] = []
