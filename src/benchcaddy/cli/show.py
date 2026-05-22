@@ -15,6 +15,7 @@ from ..presentation import (
     format_ratio,
     format_return_value,
     format_time_summary,
+    format_timestamp,
     format_warning_list,
     json_panel,
     render_table,
@@ -96,7 +97,7 @@ def _run_table_row(
             format_time_summary(run.get("mean_seconds"), run.get("std_seconds")),
             format_return_value(run.get("target_return_value"), compact=True),
             len(run["samples"]),
-            run["created_at"],
+            format_timestamp(run["created_at"]),
         ]
     )
     return tuple(row)
@@ -160,7 +161,7 @@ def _show_run(run: dict[str, object]) -> None:
         [
             ("Return Value", format_return_value(run.get("target_return_value"), compact=True)),
             ("Samples", len(run["samples"])),
-            ("Recorded At", run["created_at"]),
+            ("Recorded At", format_timestamp(run["created_at"])),
         ]
     )
     _console().print(

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from numbers import Real
 from pathlib import Path
 
@@ -40,10 +40,23 @@ def _json_default(value: object) -> object:
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, datetime):
-        return value.isoformat()
+        return utc_timestamp(value).isoformat(timespec="seconds").replace("+00:00", "Z")
     if isinstance(value, date):
         return value.isoformat()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def utc_timestamp(value: datetime) -> datetime:
+    # SQLite CURRENT_TIMESTAMP stores UTC without an offset, so naive DB values are interpreted as UTC.
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def format_timestamp(value: object) -> str:
+    if isinstance(value, datetime):
+        return utc_timestamp(value).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return str(value)
 
 
 def serialize_json(value: object, *, indent: int | None = 2) -> str:

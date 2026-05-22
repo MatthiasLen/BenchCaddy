@@ -6,7 +6,7 @@ import typer
 from rich.panel import Panel
 
 from ..db import get_database_path, get_suite_baseline_history, set_suite_baseline
-from ..presentation import dump_json, render_table, summary_panel
+from ..presentation import dump_json, format_timestamp, render_table, summary_panel
 from ._rendering import _styled
 from ._shared import DatabaseOption, _console, _emit_json_response, _raise_cli_error, _require_run_id, app
 
@@ -170,7 +170,7 @@ def baseline_command(
                 ("Run ID", _styled(current_run["display_id"], "yellow")),
                 ("Record ID", _styled(current_run["id"], "yellow")),
                 ("Median (s)", f"{current_run['median_seconds']:.6f}"),
-                ("Pinned At", current_baseline["created_at"]),
+                ("Pinned At", format_timestamp(current_baseline["created_at"])),
                 ("Note", current_baseline.get("note") or "-"),
             ],
         )
@@ -188,7 +188,7 @@ def baseline_command(
                     dump_json(entry["run"]["configuration"]),
                     f"{entry['run']['median_seconds']:.6f}",
                     entry.get("note") or "-",
-                    entry["created_at"],
+                    format_timestamp(entry["created_at"]),
                 )
                 for entry in history["history"]
             ],

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,7 +19,7 @@ import benchcaddy.db._sqlite.models as models_module
 from benchcaddy.cli import _suite_row_style, _trend_row_style, app
 from benchcaddy.db import compare_runs, get_run_details, get_suite_details, record_benchmark_run
 from benchcaddy.isolation import IsolatedRunResult
-from benchcaddy.presentation import format_return_error, format_return_value
+from benchcaddy.presentation import format_return_error, format_return_value, format_timestamp, serialize_json
 
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -45,6 +46,20 @@ def cli_float_vector_target() -> list[float]:
 
 def cli_bool_vector_target() -> tuple[bool, bool, bool]:
     return (True, False, True)
+
+
+def test_presentation_formats_naive_datetimes_as_explicit_utc() -> None:
+    timestamp = datetime(2026, 5, 22, 12, 9, 53)
+
+    assert format_timestamp(timestamp) == "2026-05-22 12:09:53 UTC"
+    assert '"2026-05-22T12:09:53Z"' in serialize_json({"created_at": timestamp})
+
+
+def test_presentation_normalizes_aware_datetimes_to_utc() -> None:
+    timestamp = datetime(2026, 5, 22, 14, 9, 53, tzinfo=timezone(timedelta(hours=2)))
+
+    assert format_timestamp(timestamp) == "2026-05-22 12:09:53 UTC"
+    assert '"2026-05-22T12:09:53Z"' in serialize_json({"created_at": timestamp})
 
 
 def _uniform_run_kwargs(

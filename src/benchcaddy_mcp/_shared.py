@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from benchcaddy.db import get_database_path
+from benchcaddy.presentation import utc_timestamp
 from benchcaddy.stats import AnalysisOptions
 
 from ._summary import ResponseSummaryBuilder
@@ -80,13 +82,25 @@ def _response(
     if summary is None and result is not None:
         summary = _SUMMARY_BUILDER.build(tool_name, result)
     if summary is not None:
-        payload["summary"] = summary
+        payload["summary"] = _normalize_datetimes(summary)
     if response_detail == "full" and result is not None:
-        payload["result"] = result
+        payload["result"] = _normalize_datetimes(result)
     return payload
 
 
 _SUMMARY_BUILDER = ResponseSummaryBuilder()
+
+
+def _normalize_datetimes(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return utc_timestamp(value).isoformat(timespec="seconds").replace("+00:00", "Z")
+    if isinstance(value, dict):
+        return {key: _normalize_datetimes(nested_value) for key, nested_value in value.items()}
+    if isinstance(value, list):
+        return [_normalize_datetimes(item) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_datetimes(item) for item in value]
+    return value
 
 
 def _run_id(value: int | str | tuple[int, int]) -> int | tuple[int, int]:

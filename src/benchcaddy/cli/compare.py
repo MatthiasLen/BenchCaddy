@@ -17,6 +17,7 @@ from ..presentation import (
     format_return_error,
     format_return_value,
     format_time_summary,
+    format_timestamp,
     format_warning_list,
     render_table,
     summary_panel,
@@ -505,7 +506,7 @@ def _suite_comparison_row(run: dict[str, object], *, verbose: bool) -> tuple[obj
                 format_interval(run.get("ci_lower_seconds"), run.get("ci_upper_seconds")),
                 f"{float(comparison_analysis.get('significance_p_value', 0.0)):.4f}",
                 run["sample_count"],
-                run["created_at"],
+                format_timestamp(run["created_at"]),
             ]
         )
     return tuple(row)

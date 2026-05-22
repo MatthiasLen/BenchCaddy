@@ -215,6 +215,32 @@ def test_get_suite_caps_runs_by_default(
     assert payload["summary"]["configuration_count"] == DEFAULT_LIMIT + 5
     assert len(payload["summary"]["available_configurations"]) == DEFAULT_LIMIT + 5
     assert len(payload["summary"]["latest_runs"]) == DEFAULT_LIMIT
+    assert payload["summary"]["latest_runs"][0]["created_at"].endswith("Z")
+
+
+def test_mcp_summary_and_full_payload_timestamps_are_explicit_utc(
+    tmp_path: Path,
+    environment_payload: dict[str, object],
+    record_simple_run,
+) -> None:
+    database_path = tmp_path / "benchcaddy.db"
+    record_simple_run(
+        database_path=database_path,
+        suite_name="suite-timestamps",
+        configuration={"variant": "baseline"},
+        environment=environment_payload,
+    )
+
+    list_payload = list_suites(str(database_path))
+    assert list_payload["summary"]["suites"][0]["last_run_at"].endswith("Z")
+
+    suite_payload = get_suite("suite-timestamps", str(database_path))
+    assert suite_payload["summary"]["latest_runs"][0]["created_at"].endswith("Z")
+    assert suite_payload["summary"]["baseline_run"] is None or suite_payload["summary"]["baseline_run"]["created_at"].endswith("Z")
+
+    run_payload = get_run("1.1", str(database_path), response_detail="full")
+    assert run_payload["summary"]["run"]["created_at"].endswith("Z")
+    assert run_payload["result"]["run"]["created_at"].endswith("Z")
 
 
 def test_get_run_accepts_display_ids(

@@ -8,7 +8,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..db import get_database_path, get_suite_trend
-from ..presentation import dump_json, format_interval, format_warning_list, render_table, summary_panel
+from ..presentation import dump_json, format_interval, format_timestamp, format_warning_list, render_table, summary_panel
 from ._rendering import _best_run, _row_style, _style_row, _styled
 from ._shared import (
     _STATE,
@@ -226,7 +226,7 @@ def _trend_row(run: dict[str, object], *, verbose: bool) -> tuple[object, ...]:
         _trend_delta_value(run),
         str(run.get("drift_status", "stable")),
         "basis" if run.get("is_basis") else str(run["vs_baseline"].get("classification", "stable")),
-        run["created_at"],
+        format_timestamp(run["created_at"]),
     ]
     if verbose:
         row.extend(
