@@ -1,4 +1,4 @@
-# BenchCaddy Project Guidelines
+# Implementation Guidelines
 
 ## Code Style
 

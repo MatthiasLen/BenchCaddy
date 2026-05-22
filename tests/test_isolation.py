@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import gc
 import json
+import math
 import operator
-import pickle
 import runpy
 import sys
 import textwrap
@@ -415,6 +415,17 @@ def _return_unpickleable_value():
     return lambda: None
 
 
+def _return_json_like_value() -> dict[str, object]:
+    return {
+        "metrics": [1, 2, 3],
+        "nested": {"name": "benchcaddy", "stable": True},
+    }
+
+
+def _return_infinite_value() -> float:
+    return math.inf
+
+
 def _assert_nested_observed_result(result: IsolatedRunResult) -> None:
     assert result.return_value == 6
     assert result.elapsed_seconds >= 0.0
@@ -629,6 +640,20 @@ class TestRunIsolated:
         assert result.elapsed_seconds >= 0.0
         assert result.observations == []
 
+    def test_fresh_process_preserves_json_like_return_values(self):
+        result = run_isolated(_return_json_like_value, fresh_process=True, timeout=30)
+
+        assert result.return_value == {
+            "metrics": [1, 2, 3],
+            "nested": {"name": "benchcaddy", "stable": True},
+        }
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
+
+    def test_fresh_process_rejects_non_finite_return_values(self):
+        with pytest.raises(RuntimeError, match="worker return values cannot contain non-finite floats"):
+            run_isolated(_return_infinite_value, fresh_process=True, timeout=30)
+
     def test_rejects_non_importable_callables_for_fresh_process(self):
         with pytest.raises(
             TypeError,
@@ -795,29 +820,29 @@ class TestRunIsolated:
 
         def fake_popen(cmd, **kwargs):
             commands.append(cmd)
+            assert kwargs["stdin"] == isolation_process_module.subprocess.PIPE
 
             class _FakeProc:
                 def __init__(self, cmd):
                     self.returncode = 0
 
-                def communicate(self, timeout=None):
-                    with isolation_process_module.Path(cmd[4]).open("rb") as handle:
-                        request = pickle.load(handle)
+                def communicate(self, input=None, timeout=None):
+                    request = json.loads(input.decode("utf-8"))
                     assert request["qualname"] == "add"
                     assert isolation_process_module._resolve_callable(request["module_name"], request["qualname"])(2, 3) == 5
-                    with isolation_process_module.Path(cmd[5]).open("wb") as handle:
-                        pickle.dump(
+                    with isolation_process_module.Path(cmd[4]).open("w", encoding="utf-8") as handle:
+                        json.dump(
                             {
                                 "ok": True,
-                                "payload": IsolatedRunResult(
-                                    elapsed_seconds=0.125,
-                                    return_value=5,
-                                    observations=[],
-                                ),
+                                "payload": {
+                                    "elapsed_seconds": 0.125,
+                                    "return_value": 5,
+                                    "observations": [],
+                                },
                             },
                             handle,
                         )
-                    return ("", "")
+                    return (b"", b"")
 
             return _FakeProc(cmd)
 
@@ -833,9 +858,31 @@ class TestRunIsolated:
                 "benchcaddy.isolation.process",
                 isolation_process_module._WORKER_FLAG,
                 commands[0][4],
-                commands[0][5],
             ]
         ]
+
+    def test_invalid_worker_json_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch):
+        def fake_popen(command, **kwargs):
+            del kwargs
+
+            class _FakeProc:
+                returncode = 0
+
+                def communicate(self, input=None, timeout=None):
+                    del input, timeout
+                    isolation_process_module.Path(command[4]).write_text("{not-json", encoding="utf-8")
+                    return (b"", b"")
+
+            return _FakeProc()
+
+        monkeypatch.setattr(isolation_process_module.subprocess, "Popen", fake_popen)
+
+        with pytest.raises(RuntimeError, match="Could not deserialize worker response"):
+            run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+    def test_non_json_request_argument_raises_clear_error(self):
+        with pytest.raises(TypeError, match="worker payload must be JSON-serializable"):
+            run_isolated(operator.add, args=(object(), 3), fresh_process=True, timeout=1.0)
 
     def test_child_exit_before_result_raises_runtime_error(self, monkeypatch: pytest.MonkeyPatch):
         # Simulate a child process that exits with a non-zero return code and
@@ -844,7 +891,7 @@ class TestRunIsolated:
         monkeypatch.setattr(
             isolation_process_module.subprocess,
             "Popen",
-            lambda command, **kwargs: SimpleNamespace(returncode=3, communicate=lambda timeout=None: ("", "")),
+            lambda command, **kwargs: SimpleNamespace(returncode=3, communicate=lambda input=None, timeout=None: (b"", b"")),
         )
 
         with pytest.raises(RuntimeError, match="failed before sending a result"):

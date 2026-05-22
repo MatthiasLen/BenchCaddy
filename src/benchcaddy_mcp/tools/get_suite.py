@@ -84,9 +84,7 @@ def get_suite(
             reason="suite_details_available",
             result=result,
             suggested_action=(
-                "Use compare_suite to compare this suite against a reference "
-                "run or baseline, trend_suite to inspect drift over time, or "
-                "get_run to inspect one run ID in detail."
+                "Use compare_suite to compare this suite against a reference run or baseline, trend_suite to inspect drift over time, or get_run to inspect one run ID in detail."
             ),
             confidence=None,
             response_detail=normalized_response_detail,

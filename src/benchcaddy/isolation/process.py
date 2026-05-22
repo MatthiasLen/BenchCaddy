@@ -11,9 +11,9 @@ from __future__ import annotations
 import gc
 import importlib
 import inspect
+import json
 import logging
 import os
-import pickle
 import signal
 import subprocess
 import sys
@@ -25,11 +25,16 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from time import perf_counter
-from types import SimpleNamespace
 from typing import Any
 
 import psutil
 
+from ._protocol import (
+    request_from_json_payload,
+    request_to_json_payload,
+    response_from_json_payload,
+    response_to_json_payload,
+)
 from .observability import IsolatedRunResult, collect_observations
 
 _MAX_UNIX_PRIORITY = -20
@@ -131,6 +136,7 @@ def _resolve_callable(module_name: str, qualname: str) -> Callable[..., Any]:
 
 
 def _child_error_payload(exc: Exception) -> dict[str, str]:
+    """Convert a worker exception into the plain-string payload sent across IPC."""
     return {
         "type": type(exc).__name__,
         "message": str(exc),
@@ -139,6 +145,7 @@ def _child_error_payload(exc: Exception) -> dict[str, str]:
 
 
 def _unsupported_target_error(reason: str) -> TypeError:
+    """Build the shared validation error for unsupported fresh-process call targets."""
     return TypeError(f"fresh isolated execution requires an importable module-level function, static method, or class method; {reason}")
 
 
@@ -201,12 +208,10 @@ def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list
     resolved_target = inspect.unwrap(fn)
     module_name = getattr(resolved_target, "__module__", None)
     qualname = getattr(resolved_target, "__qualname__", None)
+    source_path = None
 
     with suppress(OSError, TypeError):
         source_path = inspect.getsourcefile(resolved_target) or inspect.getfile(resolved_target)
-
-    if "source_path" not in locals():
-        source_path = None
 
     if not module_name or not qualname:
         raise _unsupported_target_error("the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process.")
@@ -271,6 +276,7 @@ def _run_observed_call(
     args: tuple[Any, ...],
     kwargs: dict[str, Any],
 ) -> IsolatedRunResult:
+    """Run one measured call while collecting observation records for the result."""
     with collect_observations() as collector:
         start = perf_counter()
         result = fn(*args, **kwargs)
@@ -317,28 +323,22 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
 
 def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> dict[str, Any]:
     """Run a worker subprocess to execute one isolated request and return its structured response."""
-    temp_dir_ctx = tempfile.TemporaryDirectory(prefix="benchcaddy-isolated-")
-    with temp_dir_ctx as temp_dir:
-        request_path = Path(temp_dir) / "request.pkl"
-        response_path = Path(temp_dir) / "response.pkl"
-
-        # Write the request payload for the worker to read.
-        with request_path.open("wb") as handle:
-            pickle.dump(request, handle)
+    with tempfile.TemporaryDirectory(prefix="benchcaddy-isolated-") as temp_dir:
+        response_path = Path(temp_dir) / "response.json"
+        request_bytes = json.dumps(request_to_json_payload(request), ensure_ascii=True, allow_nan=False).encode("utf-8")
 
         cmd = [
             sys.executable,
             "-m",
             "benchcaddy.isolation.process",
             _WORKER_FLAG,
-            str(request_path),
             str(response_path),
         ]
 
         popen_kwargs = {
+            "stdin": subprocess.PIPE,
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
-            "text": True,
             "close_fds": True,
         }
 
@@ -377,8 +377,10 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
         # Wait for the worker to finish or time out. If the timeout expires, attempt a graceful
         # termination first, then escalate to a forceful kill if the worker does not exit.
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            completed = SimpleNamespace(returncode=proc.returncode, stdout=stdout, stderr=stderr)
+            stdout, stderr = proc.communicate(input=request_bytes, timeout=timeout)
+            completed_returncode = proc.returncode
+            completed_stdout = (stdout or b"").decode("utf-8", errors="replace")
+            completed_stderr = (stderr or b"").decode("utf-8", errors="replace")
         except subprocess.TimeoutExpired as e:
             logger.debug("Worker timed out after %s seconds", timeout)
             _terminate_gracefully(proc)
@@ -395,22 +397,18 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
         # the child's stderr/stdout as an error.
         if response_path.exists():
             try:
-                with response_path.open("rb") as handle:
-                    return pickle.load(handle)
+                with response_path.open("r", encoding="utf-8") as handle:
+                    return response_from_json_payload(json.load(handle))
             except Exception as exc:
                 # The worker wrote a response file but it could not be
                 # deserialized. Surface a clear error including stderr/stdout
                 # to aid diagnosis.
-                stderr = getattr(completed, "stderr", "") or ""
-                stdout = getattr(completed, "stdout", "") or ""
-                details = stderr.strip() or stdout.strip()
+                details = completed_stderr.strip() or completed_stdout.strip()
                 raise RuntimeError(f"Could not deserialize worker response: {exc}. Child output: {details}") from exc
 
-        stderr = getattr(completed, "stderr", "") or ""
-        stdout = getattr(completed, "stdout", "") or ""
-        stderr = stderr.strip()
-        stdout = stdout.strip()
-        details = stderr or stdout or f"worker exited with code {getattr(completed, 'returncode', 'unknown')}"
+        stderr_text = completed_stderr.strip()
+        stdout_text = completed_stdout.strip()
+        details = stderr_text or stdout_text or f"worker exited with code {completed_returncode}"
         raise RuntimeError(f"Isolated worker failed before sending a result: {details}")
 
 
@@ -440,7 +438,8 @@ def run_isolated(
         Python subprocess so that GC state, import side effects, and
         JIT warm-up from the host process cannot influence timings.
         This requires *fn* to be an importable top-level callable and
-        *args* / *kwargs* to be pickle-serializable.
+        *args* / *kwargs* to be JSON-serializable, while the isolated
+        return value and observations must be JSON-serializable.
         When ``False``, *fn* is called directly in the current process.
     disable_gc:
         When ``True``, the Python garbage collector is disabled inside
@@ -485,8 +484,8 @@ def run_isolated(
 
     # Pass the resolved import reference into the worker request so the child can re-import the target without inspecting the host process.
     # The worker process will re-import the target function and execute it with the provided arguments,
-    # then send back a structured result or error payload. We use temporary files and pickle for
-    # inter-process communication (IPC) to keep the implementation simple and robust across platforms.
+    # then send back a structured result or error payload. Both directions now use strictly validated JSON,
+    # so the parent never deserializes executable worker-controlled objects and the request no longer touches pickle either.
     response = _run_subprocess_worker(
         {
             "module_name": module_name,
@@ -521,41 +520,39 @@ def run_isolated(
 
 def _main(argv: list[str]) -> int:
     """Entry point for the worker subprocess. This should never be called directly; it's invoked via subprocess in :func:`run_isolated`."""
-    if len(argv) != 3 or argv[0] != _WORKER_FLAG:
+    if len(argv) != 2 or argv[0] != _WORKER_FLAG:
         return 2
 
-    request_path = Path(argv[1])
-    response_path = Path(argv[2])
+    response_path = Path(argv[1])
     response: dict[str, Any]
 
     try:
         # The worker reads one request, executes it, and writes back one structured response.
-        with request_path.open("rb") as handle:
-            response = _execute_worker_request(pickle.load(handle))
+        response = _execute_worker_request(request_from_json_payload(json.loads(sys.stdin.buffer.read().decode("utf-8"))))
     except Exception as exc:
         response = {"ok": False, "payload": _child_error_payload(exc)}
 
     try:
-        with response_path.open("wb") as handle:
-            pickle.dump(response, handle)
-    except (AttributeError, TypeError, pickle.PickleError) as exc:
+        serializable_response = response_to_json_payload(response)
+    except (AttributeError, TypeError, ValueError) as exc:
         response = {
             "ok": False,
             "payload": {
                 "type": "SerializationError",
                 "message": (
                     "Worker could not serialize the isolated result payload. "
-                    "Ensure the benchmark return value and recorded observations are pickle-serializable. "
+                    "Ensure the benchmark return value and recorded observations are JSON-serializable. "
                     f"Original error: {exc}"
                 ),
                 "traceback": traceback.format_exc(),
             },
         }
-        try:
-            with response_path.open("wb") as handle:
-                pickle.dump(response, handle)
-        except OSError:
-            return 1
+
+        serializable_response = response_to_json_payload(response)
+
+    try:
+        with response_path.open("w", encoding="utf-8") as handle:
+            json.dump(serializable_response, handle, ensure_ascii=True, allow_nan=False)
     except OSError:
         return 1
 
