@@ -22,7 +22,6 @@ import traceback
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -159,20 +158,31 @@ def _unsupported_target_error(reason: str) -> TypeError:
     return TypeError(f"fresh isolated execution requires an importable module-level function, static method, or class method; {reason}")
 
 
-def _module_reference_from_source_path(source_path: str | None) -> tuple[str, list[str]] | None:
-    """Attempt to map a source file path back to an importable module reference."""
+def _parent_import_path_snapshot() -> list[str]:
+    """Capture the parent's effective import roots in deterministic order for child replay."""
+    import_roots: list[str] = []
+    for entry in sys.path:
+        try:
+            root = (Path.cwd() if not entry else Path(entry)).resolve()
+        except OSError:
+            continue
+
+        root_text = str(root)
+        if root_text not in import_roots:
+            import_roots.append(root_text)
+
+    return import_roots
+
+
+def _module_name_from_source_path(source_path: str | None, import_paths: list[str]) -> str | None:
+    """Attempt to map a source file path back to an importable module name using one parent import snapshot."""
     if not source_path:
         return None
 
     resolved_source = Path(source_path).resolve()
-    candidate_roots: list[Path] = []
-    for entry in sys.path:
-        try:
-            candidate_roots.append((Path.cwd() if not entry else Path(entry)).resolve())
-        except OSError:
-            continue
 
-    for root in candidate_roots:
+    for import_path in import_paths:
+        root = Path(import_path)
         with suppress(ValueError):
             relative_path = resolved_source.relative_to(root)
             module_parts = relative_path.with_suffix("").parts
@@ -181,39 +191,13 @@ def _module_reference_from_source_path(source_path: str | None) -> tuple[str, li
             if module_parts[-1] == "__init__":
                 module_parts = module_parts[:-1]
             if module_parts:
-                return ".".join(module_parts), [str(root)]
+                return ".".join(module_parts)
 
     return None
 
 
-def _import_paths_for_module_name(source_path: str | None, module_name: str) -> list[str]:
-    """Determine potential import paths for a module, given its source file path and module name."""
-
-    if not source_path:
-        return []
-
-    resolved_source = Path(source_path).resolve()
-    module_parts = module_name.split(".")
-    module_file = Path(*module_parts).with_suffix(".py")
-    package_file = Path(*module_parts) / "__init__.py"
-    import_roots: list[str] = []
-
-    for entry in sys.path:
-        try:
-            root = (Path.cwd() if not entry else Path(entry)).resolve()
-        except OSError:
-            continue
-
-        if resolved_source == root / module_file or resolved_source == root / package_file:
-            root_text = str(root)
-            if root_text not in import_roots:
-                import_roots.append(root_text)
-
-    return import_roots
-
-
-def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list[str], str | None]:
-    """Extract the module name, qualname, and potential import paths for a callable target, validating that it is suitable for subprocess isolation."""
+def _importable_target_reference(fn: Callable[..., Any], import_paths: list[str]) -> tuple[str, str, str | None]:
+    """Extract the module name, qualname, and source path for a callable target under one parent import snapshot."""
 
     resolved_target = inspect.unwrap(fn)
     module_name = getattr(resolved_target, "__module__", None)
@@ -224,21 +208,19 @@ def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list
         raise _unsupported_target_error("the target is missing module or qualname metadata, so the worker cannot re-import it in a fresh process.")
 
     if module_name == "__main__":
-        if resolved_reference := _module_reference_from_source_path(source_path):
-            module_name, import_paths = resolved_reference
+        if resolved_module_name := _module_name_from_source_path(source_path, import_paths):
+            module_name = resolved_module_name
         else:
             raise _unsupported_target_error(
                 "the target is defined in __main__ and could not be mapped back to an importable module path. "
                 "Run the benchmark from a directory where the script is importable, or move the target into an importable module."
             )
-    else:
-        import_paths = _import_paths_for_module_name(source_path, module_name)
 
-    return module_name, qualname, import_paths, source_path
+    return module_name, qualname, source_path
 
 
-@cache
-def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple[str, ...], str | None]:
+def _validated_target_reference(fn: Callable[..., Any], import_paths: list[str]) -> tuple[str, str, str | None]:
+    """Validate that one callable still resolves to the same source file under one parent import snapshot."""
     if inspect.ismethod(fn) and getattr(fn, "__self__", None) is not None and not isinstance(fn.__self__, type):
         raise _unsupported_target_error(
             "bound instance methods are unsupported because the worker reconstructs call targets from module and qualname, "
@@ -251,7 +233,7 @@ def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple
             "Expose a module-level function, static method, or class method instead."
         )
 
-    module_name, qualname, import_paths, source_path = _importable_target_reference(fn)
+    module_name, qualname, source_path = _importable_target_reference(fn, import_paths)
 
     if "<lambda>" in qualname:
         raise _unsupported_target_error("lambdas are unsupported because they do not provide a stable import path for the worker. Define a named module-level function instead.")
@@ -277,13 +259,14 @@ def _validated_target_reference(fn: Callable[..., Any]) -> tuple[str, str, tuple
                 f"Expected {source_path}, got {resolved_source_path or 'unresolved'}."
             )
 
-    return module_name, qualname, tuple(import_paths), source_path
+    return module_name, qualname, source_path
 
 
 def validate_isolated_target(fn: Callable[..., Any]) -> tuple[str, str, list[str]]:
     """Validate that the provided callable is a supported target for fresh subprocess isolation and return its module and qualname for later import."""
-    module_name, qualname, import_paths, _source_path = _validated_target_reference(fn)
-    return module_name, qualname, list(import_paths)
+    import_paths = _parent_import_path_snapshot()
+    module_name, qualname, _source_path = _validated_target_reference(fn, import_paths)
+    return module_name, qualname, import_paths
 
 
 def _run_observed_call(
@@ -307,9 +290,8 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
     """Execute one isolated request inside the worker process."""
 
     import_paths = [str(path) for path in request.get("import_paths", ()) if path]
-    for import_path in reversed(import_paths):
-        if import_path not in sys.path:
-            sys.path.insert(0, import_path)
+    if import_paths:
+        sys.path[:] = import_paths
 
     fn = _resolve_callable(request["module_name"], request["qualname"])
     expected_source_path = request.get("source_path")
@@ -348,12 +330,12 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
     with tempfile.TemporaryDirectory(prefix="benchcaddy-isolated-") as temp_dir:
         response_path = Path(temp_dir) / "response.json"
         request_bytes = json.dumps(request_to_json_payload(request), ensure_ascii=True, allow_nan=False).encode("utf-8")
+        worker_script = str(Path(__file__).with_name("worker.py").resolve())
 
         cmd = [
             sys.executable,
             "-I",
-            "-m",
-            "benchcaddy.isolation.process",
+            worker_script,
             _WORKER_FLAG,
             str(response_path),
         ]
@@ -508,9 +490,10 @@ def run_isolated(
     if not fresh_process:
         return _run_observed_call(fn, args, kw)
 
-    module_name, qualname, import_paths, source_path = _validated_target_reference(fn)
+    import_paths = _parent_import_path_snapshot()
+    module_name, qualname, source_path = _validated_target_reference(fn, import_paths)
 
-    # Pass the resolved import reference into the worker request so the child can re-import the target without inspecting the host process.
+    # Pass the resolved import reference into the worker request so the child can replay the parent's import roots for the target.
     # The worker process will re-import the target function and execute it with the provided arguments,
     # then send back a structured result or error payload. Both directions now use strictly validated JSON,
     # so the parent never deserializes executable worker-controlled objects and the request no longer touches pickle either.

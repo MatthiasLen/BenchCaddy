@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import gc
+import importlib
 import json
 import math
 import operator
 import runpy
 import sys
 import textwrap
-from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -556,6 +556,45 @@ class TestRunIsolated:
         assert result.observations[0]["kind"] == "time"
         assert result.observations[0]["duration_seconds"] >= 0.0
 
+    def test_fresh_process_replays_parent_import_path_snapshot_for_target_dependencies(self, tmp_path, monkeypatch):
+        support_root = tmp_path / "support"
+        target_root = tmp_path / "target"
+        support_root.mkdir()
+        target_root.mkdir()
+        (support_root / "shared_dep.py").write_text(
+            textwrap.dedent(
+                """
+                def add_offset(value: int) -> int:
+                    return value + 4
+                """
+            ),
+            encoding="utf-8",
+        )
+        (target_root / "target_module.py").write_text(
+            textwrap.dedent(
+                """
+                from shared_dep import add_offset
+
+
+                def dependency_backed_target(value: int) -> int:
+                    return add_offset(value)
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.syspath_prepend(str(support_root))
+        monkeypatch.syspath_prepend(str(target_root))
+        sys.modules.pop("shared_dep", None)
+        sys.modules.pop("target_module", None)
+        target_module = importlib.import_module("target_module")
+
+        result = run_isolated(target_module.dependency_backed_target, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 6
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
+
     def test_fresh_process_supports_importable_static_method_target(self):
         result = run_isolated(observed_targets.ObservableService.static_time_helper, args=(2,), fresh_process=True, timeout=30)
 
@@ -688,7 +727,6 @@ class TestRunIsolated:
             run_isolated(observed_targets.CallableTarget(), fresh_process=True)
 
     def test_rejects_unresolvable_module_symbol_for_fresh_process(self):
-        isolation_process_module._validated_target_reference.cache_clear()
         original_qualname = observed_targets.top_level_module_target.__qualname__
         observed_targets.top_level_module_target.__qualname__ = "missing_symbol"
 
@@ -703,7 +741,6 @@ class TestRunIsolated:
                 run_isolated(observed_targets.top_level_module_target, args=(1,), fresh_process=True)
         finally:
             observed_targets.top_level_module_target.__qualname__ = original_qualname
-            isolation_process_module._validated_target_reference.cache_clear()
 
     def test_execute_worker_request_applies_warmup_and_preparation(self, monkeypatch: pytest.MonkeyPatch):
         prepare_calls: list[bool] = []
@@ -780,29 +817,47 @@ class TestRunIsolated:
                 }
             )
 
+    def test_execute_worker_request_replays_exact_import_path_snapshot(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        exact_snapshot = [str((tmp_path / "first").resolve()), str((tmp_path / "second").resolve())]
+
+        monkeypatch.setattr(isolation_process_module.sys, "path", [exact_snapshot[1], "existing-entry", exact_snapshot[0]])
+        monkeypatch.setattr(isolation_process_module, "_resolve_callable", lambda module_name, qualname: _record_call)
+
+        response = isolation_process_module._execute_worker_request(
+            {
+                "module_name": "ignored",
+                "qualname": "ignored",
+                "args": (2, 3),
+                "kwargs": {},
+                "import_paths": exact_snapshot,
+                "disable_gc": False,
+                "warmup_runs": 0,
+                "lock_cpu_affinity": True,
+            }
+        )
+
+        assert response["ok"] is True
+        assert isolation_process_module.sys.path == exact_snapshot
+
     def test_validate_isolated_target_rejects_mismatched_resolved_source_path(self, monkeypatch: pytest.MonkeyPatch):
-        isolation_process_module._validated_target_reference.cache_clear()
         monkeypatch.setattr(isolation_process_module, "_resolve_callable", lambda module_name, qualname: _record_call)
 
         with pytest.raises(TypeError, match="same source file that defined the original target"):
             isolation_process_module.validate_isolated_target(observed_targets.top_level_module_target)
 
-        isolation_process_module._validated_target_reference.cache_clear()
-
-    def test_run_isolated_reuses_cached_target_validation(self, monkeypatch: pytest.MonkeyPatch):
-        isolation_process_module._validated_target_reference.cache_clear()
-        validation_calls: list[Callable[..., object]] = []
-        original_reference_lookup = isolation_process_module._importable_target_reference
+    def test_run_isolated_recomputes_parent_import_snapshot_for_each_call(self, monkeypatch: pytest.MonkeyPatch):
+        snapshot_calls = [["first-root"], ["second-root"]]
 
         monkeypatch.setattr(
             isolation_process_module,
-            "_importable_target_reference",
-            lambda fn: validation_calls.append(fn) or original_reference_lookup(fn),
+            "_parent_import_path_snapshot",
+            lambda: list(snapshot_calls.pop(0)),
         )
+        seen_requests: list[dict[str, object]] = []
         monkeypatch.setattr(
             isolation_process_module,
             "_run_subprocess_worker",
-            lambda request, timeout: {
+            lambda request, timeout: seen_requests.append(request) or {
                 "ok": True,
                 "payload": IsolatedRunResult(
                     elapsed_seconds=0.1,
@@ -816,7 +871,7 @@ class TestRunIsolated:
         result = run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
 
         assert result == IsolatedRunResult(elapsed_seconds=0.1, return_value=5, observations=[])
-        assert validation_calls == [operator.add]
+        assert seen_requests[0]["import_paths"] == ["second-root"]
 
     def test_execute_worker_request_collects_gc_before_warmups_when_gc_stays_enabled(self, monkeypatch: pytest.MonkeyPatch):
         events: list[str] = []
@@ -842,6 +897,7 @@ class TestRunIsolated:
     def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
         commands: list[list[str]] = []
         envs: list[dict[str, str]] = []
+        expected_worker_script = str(isolation_process_module.Path(isolation_process_module.__file__).resolve().with_name("worker.py"))
 
         monkeypatch.setenv("PYTHONPATH", "c:/tmp/poisoned")
         monkeypatch.setenv("PYTHONHOME", "c:/tmp/home")
@@ -884,8 +940,7 @@ class TestRunIsolated:
             [
                 sys.executable,
                 "-I",
-                "-m",
-                "benchcaddy.isolation.process",
+                expected_worker_script,
                 isolation_process_module._WORKER_FLAG,
                 commands[0][-1],
             ]
