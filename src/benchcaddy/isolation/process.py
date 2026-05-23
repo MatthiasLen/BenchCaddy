@@ -39,6 +39,14 @@ from .observability import IsolatedRunResult, collect_observations
 
 _MAX_UNIX_PRIORITY = -20
 _WORKER_FLAG = "--benchcaddy-worker"
+_WORKER_BOOTSTRAP_CODE = (
+    "import sys;"
+    "from pathlib import Path;"
+    "bootstrap_root=str(Path(sys.argv[1]).resolve());"
+    "sys.path=[bootstrap_root,*[entry for entry in sys.path if entry != bootstrap_root]];"
+    "from benchcaddy.isolation.process import _main;"
+    "raise SystemExit(_main(sys.argv[2:]))"
+)
 
 
 @dataclass
@@ -159,20 +167,32 @@ def _unsupported_target_error(reason: str) -> TypeError:
     return TypeError(f"fresh isolated execution requires an importable module-level function, static method, or class method; {reason}")
 
 
+def _parent_import_path_snapshot() -> list[str]:
+    """Capture the parent's effective import roots in deterministic order."""
+    import_roots: list[str] = []
+    for entry in sys.path:
+        try:
+            root = (Path.cwd() if not entry else Path(entry)).resolve()
+        except OSError:
+            continue
+
+        root_text = str(root)
+        if root_text not in import_roots:
+            import_roots.append(root_text)
+
+    return import_roots
+
+
 def _module_reference_from_source_path(source_path: str | None) -> tuple[str, list[str]] | None:
-    """Attempt to map a source file path back to an importable module reference."""
+    """Attempt to map a source file path back to an importable module reference and the parent import-path snapshot."""
     if not source_path:
         return None
 
     resolved_source = Path(source_path).resolve()
-    candidate_roots: list[Path] = []
-    for entry in sys.path:
-        try:
-            candidate_roots.append((Path.cwd() if not entry else Path(entry)).resolve())
-        except OSError:
-            continue
+    import_paths = _parent_import_path_snapshot()
 
-    for root in candidate_roots:
+    for import_path in import_paths:
+        root = Path(import_path)
         with suppress(ValueError):
             relative_path = resolved_source.relative_to(root)
             module_parts = relative_path.with_suffix("").parts
@@ -181,13 +201,13 @@ def _module_reference_from_source_path(source_path: str | None) -> tuple[str, li
             if module_parts[-1] == "__init__":
                 module_parts = module_parts[:-1]
             if module_parts:
-                return ".".join(module_parts), [str(root)]
+                return ".".join(module_parts), import_paths
 
     return None
 
 
 def _import_paths_for_module_name(source_path: str | None, module_name: str) -> list[str]:
-    """Determine potential import paths for a module, given its source file path and module name."""
+    """Return the parent import-path snapshot when it already imports the requested module from the given source path."""
 
     if not source_path:
         return []
@@ -196,24 +216,19 @@ def _import_paths_for_module_name(source_path: str | None, module_name: str) -> 
     module_parts = module_name.split(".")
     module_file = Path(*module_parts).with_suffix(".py")
     package_file = Path(*module_parts) / "__init__.py"
-    import_roots: list[str] = []
+    import_paths = _parent_import_path_snapshot()
 
-    for entry in sys.path:
-        try:
-            root = (Path.cwd() if not entry else Path(entry)).resolve()
-        except OSError:
-            continue
+    for import_path in import_paths:
+        root = Path(import_path)
 
         if resolved_source == root / module_file or resolved_source == root / package_file:
-            root_text = str(root)
-            if root_text not in import_roots:
-                import_roots.append(root_text)
+            return import_paths
 
-    return import_roots
+    return []
 
 
 def _importable_target_reference(fn: Callable[..., Any]) -> tuple[str, str, list[str], str | None]:
-    """Extract the module name, qualname, and potential import paths for a callable target, validating that it is suitable for subprocess isolation."""
+    """Extract the module name, qualname, parent import-path snapshot, and source path for a callable target."""
 
     resolved_target = inspect.unwrap(fn)
     module_name = getattr(resolved_target, "__module__", None)
@@ -348,12 +363,14 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
     with tempfile.TemporaryDirectory(prefix="benchcaddy-isolated-") as temp_dir:
         response_path = Path(temp_dir) / "response.json"
         request_bytes = json.dumps(request_to_json_payload(request), ensure_ascii=True, allow_nan=False).encode("utf-8")
+        worker_bootstrap_root = str(Path(__file__).resolve().parents[2])
 
         cmd = [
             sys.executable,
             "-I",
-            "-m",
-            "benchcaddy.isolation.process",
+            "-c",
+            _WORKER_BOOTSTRAP_CODE,
+            worker_bootstrap_root,
             _WORKER_FLAG,
             str(response_path),
         ]
@@ -510,7 +527,7 @@ def run_isolated(
 
     module_name, qualname, import_paths, source_path = _validated_target_reference(fn)
 
-    # Pass the resolved import reference into the worker request so the child can re-import the target without inspecting the host process.
+    # Pass the resolved import reference into the worker request so the child can replay the parent's import roots for the target.
     # The worker process will re-import the target function and execute it with the provided arguments,
     # then send back a structured result or error payload. Both directions now use strictly validated JSON,
     # so the parent never deserializes executable worker-controlled objects and the request no longer touches pickle either.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import importlib
 import json
 import math
 import operator
@@ -556,6 +557,45 @@ class TestRunIsolated:
         assert result.observations[0]["kind"] == "time"
         assert result.observations[0]["duration_seconds"] >= 0.0
 
+    def test_fresh_process_replays_parent_import_path_snapshot_for_target_dependencies(self, tmp_path, monkeypatch):
+        support_root = tmp_path / "support"
+        target_root = tmp_path / "target"
+        support_root.mkdir()
+        target_root.mkdir()
+        (support_root / "shared_dep.py").write_text(
+            textwrap.dedent(
+                """
+                def add_offset(value: int) -> int:
+                    return value + 4
+                """
+            ),
+            encoding="utf-8",
+        )
+        (target_root / "target_module.py").write_text(
+            textwrap.dedent(
+                """
+                from shared_dep import add_offset
+
+
+                def dependency_backed_target(value: int) -> int:
+                    return add_offset(value)
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.syspath_prepend(str(support_root))
+        monkeypatch.syspath_prepend(str(target_root))
+        sys.modules.pop("shared_dep", None)
+        sys.modules.pop("target_module", None)
+        target_module = importlib.import_module("target_module")
+
+        result = run_isolated(target_module.dependency_backed_target, args=(2,), fresh_process=True, timeout=30)
+
+        assert result.return_value == 6
+        assert result.elapsed_seconds >= 0.0
+        assert result.observations == []
+
     def test_fresh_process_supports_importable_static_method_target(self):
         result = run_isolated(observed_targets.ObservableService.static_time_helper, args=(2,), fresh_process=True, timeout=30)
 
@@ -842,6 +882,7 @@ class TestRunIsolated:
     def test_fresh_process_uses_package_worker_entrypoint(self, monkeypatch: pytest.MonkeyPatch):
         commands: list[list[str]] = []
         envs: list[dict[str, str]] = []
+        expected_bootstrap_root = str(isolation_process_module.Path(isolation_process_module.__file__).resolve().parents[2])
 
         monkeypatch.setenv("PYTHONPATH", "c:/tmp/poisoned")
         monkeypatch.setenv("PYTHONHOME", "c:/tmp/home")
@@ -884,12 +925,14 @@ class TestRunIsolated:
             [
                 sys.executable,
                 "-I",
-                "-m",
-                "benchcaddy.isolation.process",
+                "-c",
+                commands[0][3],
+                expected_bootstrap_root,
                 isolation_process_module._WORKER_FLAG,
                 commands[0][-1],
             ]
         ]
+        assert "from benchcaddy.isolation.process import _main" in commands[0][3]
         assert "PYTHONPATH" not in envs[0]
         assert "PYTHONHOME" not in envs[0]
 
