@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from rich.console import Console
 
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .core import BenchmarkResult
 
 
+@runtime_checkable
 class SweepReporter(Protocol):
     """Defines the progress callback contract emitted during a benchmark sweep."""
 
