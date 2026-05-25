@@ -482,6 +482,20 @@ def _assert_realistic_workflow_result(result: IsolatedRunResult) -> None:
     assert result.observations[4]["duration_seconds"] >= 0.0
 
 
+class TestPrepareSystem:
+    def test_requests_absolute_unix_priority(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        process = MagicMock()
+
+        monkeypatch.setattr(isolation_process_module.psutil, "Process", lambda: process)
+        monkeypatch.setattr(isolation_process_module.os, "name", "posix", raising=False)
+        monkeypatch.setattr(isolation_process_module.gc, "collect", lambda: None)
+        monkeypatch.setattr(isolation_process_module.gc, "freeze", lambda: None)
+
+        isolation_process_module.prepare_system(lock_cpu_affinity=False)
+
+        process.nice.assert_called_once_with(isolation_process_module._MAX_UNIX_PRIORITY)
+
+
 class TestRunIsolated:
     def test_direct_call(self):
         result = run_isolated(operator.add, args=(2, 3), fresh_process=False)
@@ -966,6 +980,30 @@ class TestRunIsolated:
 
         with pytest.raises(RuntimeError, match="Could not deserialize worker response"):
             run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+    def test_worker_failure_uses_bounded_tempfile_output(self, monkeypatch: pytest.MonkeyPatch):
+        def fake_popen(command, **kwargs):
+            del command
+            assert kwargs["stdout"] is not isolation_process_module.subprocess.PIPE
+            assert kwargs["stderr"] is not isolation_process_module.subprocess.PIPE
+            kwargs["stderr"].write(b"prefix-" + (b"x" * 40000) + b"-tail-marker")
+            kwargs["stderr"].flush()
+
+            class _FakeProc:
+                returncode = 3
+
+                def communicate(self, input=None, timeout=None):
+                    del input, timeout
+                    return (None, None)
+
+            return _FakeProc()
+
+        monkeypatch.setattr(isolation_process_module.subprocess, "Popen", fake_popen)
+
+        with pytest.raises(RuntimeError, match="tail-marker") as excinfo:
+            run_isolated(operator.add, args=(2, 3), fresh_process=True, timeout=1.0)
+
+        assert "prefix-" not in str(excinfo.value)
 
     def test_non_json_request_argument_raises_clear_error(self):
         with pytest.raises(TypeError, match="worker payload must be JSON-serializable"):

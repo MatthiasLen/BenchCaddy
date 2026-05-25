@@ -37,6 +37,7 @@ from ._protocol import (
 from .observability import IsolatedRunResult, collect_observations
 
 _MAX_UNIX_PRIORITY = -20
+_MAX_OUTPUT_CAPTURE_BYTES = 32 * 1024
 _WORKER_FLAG = "--benchcaddy-worker"
 
 
@@ -104,8 +105,8 @@ def prepare_system(lock_cpu_affinity: bool = True) -> None:
     try:
         if os.name == "nt" and hasattr(psutil, "HIGH_PRIORITY_CLASS"):
             process.nice(psutil.HIGH_PRIORITY_CLASS)
-        elif hasattr(os, "nice"):
-            os.nice(_MAX_UNIX_PRIORITY - os.nice(0))
+        else:
+            process.nice(_MAX_UNIX_PRIORITY)
     except (PermissionError, psutil.AccessDenied, AttributeError, OSError):
         pass
 
@@ -325,6 +326,18 @@ def _execute_worker_request(request: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "payload": _child_error_payload(exc)}
 
 
+def _read_output_tail(handle: Any, max_bytes: int = _MAX_OUTPUT_CAPTURE_BYTES) -> str:
+    """Read a bounded tail from one worker output stream for diagnostics."""
+    try:
+        handle.flush()
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(-min(size, max_bytes), os.SEEK_END)
+        return handle.read().decode("utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+
+
 def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> dict[str, Any]:
     """Run a worker subprocess to execute one isolated request and return its structured response."""
     with tempfile.TemporaryDirectory(prefix="benchcaddy-isolated-") as temp_dir:
@@ -344,64 +357,66 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
         for variable_name in ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE"):
             worker_env.pop(variable_name, None)
 
-        popen_kwargs = {
-            "stdin": subprocess.PIPE,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.PIPE,
-            "close_fds": True,
-            "env": worker_env,
-        }
+        with tempfile.TemporaryFile() as stdout_handle, tempfile.TemporaryFile() as stderr_handle:
+            popen_kwargs = {
+                "stdin": subprocess.PIPE,
+                "stdout": stdout_handle,
+                "stderr": stderr_handle,
+                "close_fds": True,
+                "env": worker_env,
+            }
 
-        # Windows: avoid creating a visible console for the child. POSIX: create
-        # a new session so we can terminate the whole group if the child spawns children.
-        if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
-            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-        else:
-            popen_kwargs["preexec_fn"] = os.setsid
-
-        logger = logging.getLogger(__name__)
-        logger.debug("Spawning worker: %s", cmd)
-
-        # Spawn the worker process. If this fails, there's no subprocess to clean up, so we can just raise.
-        try:
-            proc = subprocess.Popen(cmd, **popen_kwargs)
-        except Exception as exc:
-            raise RuntimeError(f"failed to spawn worker process: {exc}") from exc
-
-        def _terminate_gracefully(p: subprocess.Popen) -> None:
-            if os.name != "nt":
-                with suppress(Exception):
-                    os.killpg(p.pid, signal.SIGTERM)
+            # Windows: avoid creating a visible console for the child. POSIX: create
+            # a new session so we can terminate the whole group if the child spawns children.
+            if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             else:
-                with suppress(Exception):
-                    p.terminate()
+                popen_kwargs["preexec_fn"] = os.setsid
 
-        def _kill_forcefully(p: subprocess.Popen) -> None:
-            if os.name != "nt":
-                with suppress(Exception):
-                    os.killpg(p.pid, signal.SIGKILL)
-            else:
-                with suppress(Exception):
-                    p.kill()
+            logger = logging.getLogger(__name__)
+            logger.debug("Spawning worker: %s", cmd)
 
-        # Wait for the worker to finish or time out. If the timeout expires, attempt a graceful
-        # termination first, then escalate to a forceful kill if the worker does not exit.
-        try:
-            stdout, stderr = proc.communicate(input=request_bytes, timeout=timeout)
-            completed_returncode = proc.returncode
-            completed_stdout = (stdout or b"").decode("utf-8", errors="replace")
-            completed_stderr = (stderr or b"").decode("utf-8", errors="replace")
-        except subprocess.TimeoutExpired as e:
-            logger.debug("Worker timed out after %s seconds", timeout)
-            _terminate_gracefully(proc)
+            # Spawn the worker process. If this fails, there's no subprocess to clean up, so we can just raise.
             try:
-                proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                logger.debug("Worker did not exit after terminate; killing")
-                _kill_forcefully(proc)
-                proc.communicate()
+                proc = subprocess.Popen(cmd, **popen_kwargs)
+            except Exception as exc:
+                raise RuntimeError(f"failed to spawn worker process: {exc}") from exc
 
-            raise TimeoutError(f"run_isolated timed out after {timeout}s") from e
+            def _terminate_gracefully(p: subprocess.Popen) -> None:
+                if os.name != "nt":
+                    with suppress(Exception):
+                        os.killpg(p.pid, signal.SIGTERM)
+                else:
+                    with suppress(Exception):
+                        p.terminate()
+
+            def _kill_forcefully(p: subprocess.Popen) -> None:
+                if os.name != "nt":
+                    with suppress(Exception):
+                        os.killpg(p.pid, signal.SIGKILL)
+                else:
+                    with suppress(Exception):
+                        p.kill()
+
+            # Wait for the worker to finish or time out. If the timeout expires, attempt a graceful
+            # termination first, then escalate to a forceful kill if the worker does not exit.
+            try:
+                proc.communicate(input=request_bytes, timeout=timeout)
+                completed_returncode = proc.returncode
+            except subprocess.TimeoutExpired as e:
+                logger.debug("Worker timed out after %s seconds", timeout)
+                _terminate_gracefully(proc)
+                try:
+                    proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.debug("Worker did not exit after terminate; killing")
+                    _kill_forcefully(proc)
+                    proc.communicate()
+
+                raise TimeoutError(f"run_isolated timed out after {timeout}s") from e
+
+            completed_stdout = _read_output_tail(stdout_handle)
+            completed_stderr = _read_output_tail(stderr_handle)
 
         # If the worker wrote a response, return it. Otherwise surface
         # the child's stderr/stdout as an error.

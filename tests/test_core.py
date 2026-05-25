@@ -2079,3 +2079,38 @@ def test_get_suite_baseline_history_eager_loads_runs(tmp_path: Path, environment
     assert history is not None
     assert [entry["run"]["display_id"] for entry in history["history"]] == ["2.1", "1.1"]
     assert statement_count <= 2
+
+
+def test_sweep_rejects_zero_samples() -> None:
+    with pytest.raises(ValueError, match="samples must be >= 1"):
+        Sweep(target=scalar_target, params={}, suite_name="invalid-sample-suite", samples=0)
+
+
+def test_sweep_rejects_empty_parameter_dimension() -> None:
+    with pytest.raises(ValueError, match="parameter 'size' may not be empty"):
+        Sweep(target=scalar_target, params={"size": []}, suite_name="empty-parameter-suite")
+
+
+def test_sweep_snapshots_parameter_iterables_for_repeatable_configurations() -> None:
+    sweep = Sweep(
+        target=scalar_target,
+        params={"size": (index for index in range(3))},
+        suite_name="snapshot-parameter-suite",
+    )
+
+    configurations = sweep._configurations()
+
+    assert iter(configurations) is configurations
+    assert list(configurations) == [{"size": 0}, {"size": 1}, {"size": 2}]
+    assert list(sweep._configurations()) == [{"size": 0}, {"size": 1}, {"size": 2}]
+
+
+def test_sweep_validates_reporter_before_running(monkeypatch) -> None:
+    class PartialReporter:
+        def on_sweep_started(self, **kwargs) -> None:
+            del kwargs
+
+    monkeypatch.setattr(core_module, "prepare_system", lambda lock_cpu_affinity=True: pytest.fail("prepare_system should not run"))
+
+    with pytest.raises(TypeError, match="SweepReporter protocol"):
+        Sweep(target=scalar_target, params={}, suite_name="invalid-reporter-suite", reporter=PartialReporter()).run()

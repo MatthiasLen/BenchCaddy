@@ -68,6 +68,20 @@ class Sweep:
     verbose: bool = False
     reporter: SweepReporter | None = None
 
+    def __post_init__(self) -> None:
+        if self.samples < 1:
+            raise ValueError("samples must be >= 1")
+        if self.warmup_iterations < 0:
+            raise ValueError("warmup_iterations must be >= 0")
+
+        snapped_params: dict[str, tuple[Any, ...]] = {}
+        for name, values in self.params.items():
+            snapped_values = tuple(values)
+            if not snapped_values:
+                raise ValueError(f"parameter {name!r} may not be empty")
+            snapped_params[name] = snapped_values
+        self.params = snapped_params
+
     def _prepare_return_value(self, result: Any) -> StoredReturnValue | None:
         if not self.store_target_return_value:
             return None
@@ -84,13 +98,14 @@ class Sweep:
                 ) from error
             raise TypeError("return_value_postprocessor must return one of: bool, int, float, str, or a one-dimensional numeric array/list/tuple.") from error
 
-    def _configurations(self) -> list[dict[str, Any]]:
+    def _configurations(self) -> Iterable[dict[str, Any]]:
         if not self.params:
-            return [{}]
+            yield {}
+            return
 
         param_names = list(self.params.keys())
-        param_values = [list(values) for values in self.params.values()]
-        return [dict(zip(param_names, combination, strict=True)) for combination in product(*param_values)]
+        for combination in product(*self.params.values()):
+            yield dict(zip(param_names, combination, strict=True))
 
     def _run_sample(
         self,
@@ -125,19 +140,24 @@ class Sweep:
         )
 
     def run(self) -> list[BenchmarkResult]:
+        reporter = self.reporter or (RichSweepReporter() if self.verbose else None)
+        if reporter is not None and not isinstance(reporter, SweepReporter):
+            raise TypeError("reporter must implement the SweepReporter protocol")
+
         prepare_system(lock_cpu_affinity=self.lock_cpu_affinity)
         environment = metadata_to_dict(collect_environment_metadata())
-        configurations = self._configurations()
-        reporter = self.reporter or (RichSweepReporter() if self.verbose else None)
         results: list[BenchmarkResult] = []
         sample_count = self.samples
         validate_isolated_target(self.target)
+        total_configurations = 1
+        for values in self.params.values():
+            total_configurations *= len(values)
 
         _report(
             reporter,
             "on_sweep_started",
             suite_name=self.suite_name,
-            total_configurations=len(configurations),
+            total_configurations=total_configurations,
             samples=sample_count,
             warmup_iterations=self.warmup_iterations,
             database_path=get_database_path(self.database_path),
@@ -149,12 +169,12 @@ class Sweep:
             database_path=self.database_path,
         )
 
-        for configuration_index, configuration in enumerate(configurations, start=1):
+        for configuration_index, configuration in enumerate(self._configurations(), start=1):
             _report(
                 reporter,
                 "on_configuration_started",
                 index=configuration_index,
-                total=len(configurations),
+                total=total_configurations,
                 configuration=configuration,
             )
 
@@ -205,7 +225,7 @@ class Sweep:
                 reporter,
                 "on_configuration_completed",
                 index=configuration_index,
-                total=len(configurations),
+                total=total_configurations,
                 configuration=configuration,
                 median_seconds=median_seconds,
                 min_seconds=min_seconds,
