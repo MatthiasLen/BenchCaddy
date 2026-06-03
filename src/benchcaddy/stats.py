@@ -162,7 +162,7 @@ def _coefficient_of_variation(mean_seconds: float, std_seconds: float) -> float 
 def _outlier_indices(values: np.ndarray, *, threshold: float) -> tuple[int, ...]:
     # Modified Z-score method with MAD scaling, which is more robust for small sample sizes and non-normal distributions.
     if values.size < 20:
-        # gua
+        # guard against unreliable outlier detection in small samples
         return ()
     mad = _median_abs_deviation(values)
     if isclose(mad, 0.0, abs_tol=1e-12):
