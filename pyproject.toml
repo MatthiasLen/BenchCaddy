@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "benchcaddy"
-version = "0.1.13"
+version = "0.1.14"
 description = "Lightweight benchmark sweeps and analysis with environment capture and CLI."
 readme = "README.md"
 requires-python = ">=3.10"
