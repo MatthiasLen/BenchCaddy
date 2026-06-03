@@ -252,6 +252,16 @@ Direct run comparisons include return-value validation when values were stored:
 - 1D numeric vectors: relative error percentage based on Euclidean distance
 - strings and booleans: equality (`equal` or `different`)
 
+For more detail in inspection output, add `--verbose`:
+
+### Verbose mode
+
+```bash
+benchcaddy --verbose show nonlinear-transform
+benchcaddy --verbose compare nonlinear-transform
+benchcaddy --verbose trend nonlinear-transform
+```
+
 ### Check environment stability
 
 Inspect current machine reliability signals before recording or comparing runs:
@@ -265,7 +275,30 @@ benchcaddy env --json
 
 <img src="https://raw.githubusercontent.com/MatthiasLen/BenchCaddy/main/bc_environment.png" alt="BenchCaddy environment check" width="640"></img>
 
-### JSON output for automation and agent wrappers
+## How To Read The Output
+
+- `Mean +- Std (s)`: arithmetic mean and sample standard deviation across benchmark samples
+- suite comparisons are ranked by median runtime, not by the mean column
+- `Best Median (s)`, `Delta vs Best`, and direct-run median deltas use median runtime
+- `Median CI (s)`: bootstrap confidence interval around the median runtime
+- `MAD (s)`: median absolute deviation, a robust spread estimate
+- `CV`: coefficient of variation (`std / mean`), used as one noise signal
+- `Warnings`: low sample counts, wide confidence intervals, high variance, and detected outliers
+
+These signals are heuristics, not proof. Treat `regressing` as a prompt to investigate and `noisy` as a sign to collect more samples or stabilize the environment.
+
+## Recorded Environment Metadata
+
+Each recorded run stores environment details alongside timing data, including:
+
+- Python version and operating system string
+- CPU model and total system memory
+- GPU model when detectable
+- Git branch, commit hash, and dirty state when run inside a Git repository
+- process metadata such as PID, priority, affinity, and RSS memory
+
+
+## JSON output for automation and agent wrappers
 
 All top-level CLI commands support `-j` / `--json`: `env`, `baseline`, `compare`, `list`, `show`, `sweep`, and `trend`.
 The JSON envelope is intentionally consistent so shell automation, notebooks, and simple agent wrappers can branch on outcome before they inspect command-specific payloads.
@@ -349,35 +382,9 @@ jobs:
         run: benchcaddy compare nonlinear-transform --json --fail-if-regression 5% --database benchcaddy.db
 ```
 
-For more detail in inspection output, add `--verbose`:
 
-```bash
-benchcaddy --verbose show nonlinear-transform
-benchcaddy --verbose compare nonlinear-transform
-benchcaddy --verbose trend nonlinear-transform
-```
 
-## How To Read The Output
 
-- `Mean +- Std (s)`: arithmetic mean and sample standard deviation across benchmark samples
-- suite comparisons are ranked by median runtime, not by the mean column
-- `Best Median (s)`, `Delta vs Best`, and direct-run median deltas use median runtime
-- `Median CI (s)`: bootstrap confidence interval around the median runtime
-- `MAD (s)`: median absolute deviation, a robust spread estimate
-- `CV`: coefficient of variation (`std / mean`), used as one noise signal
-- `Warnings`: low sample counts, wide confidence intervals, high variance, and detected outliers
-
-These signals are heuristics, not proof. Treat `regressing` as a prompt to investigate and `noisy` as a sign to collect more samples or stabilize the environment.
-
-## Recorded Environment Metadata
-
-Each recorded run stores environment details alongside timing data, including:
-
-- Python version and operating system string
-- CPU model and total system memory
-- GPU model when detectable
-- Git branch, commit hash, and dirty state when run inside a Git repository
-- process metadata such as PID, priority, affinity, and RSS memory
 
 ## Feedback
 
