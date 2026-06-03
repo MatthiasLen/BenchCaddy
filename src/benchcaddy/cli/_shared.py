@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
-import click
 import typer
 from rich.console import Console
 
@@ -16,7 +15,8 @@ from ..stats import AnalysisOptions
 app = typer.Typer(
     help="BenchCaddy\n\n"
     "Record, manage, and statistically analyze benchmarks. "
-    "Compare runs and track performance trends."
+    "Compare runs and track performance trends.",
+    no_args_is_help=True
 )
 console = Console()
 REGRESSION_EXIT_CODE = 3
@@ -102,11 +102,10 @@ def callback(
 
 
 @app.command("help")
-def help_command() -> None:
+def help_command(ctx: typer.Context) -> None:
     """Show help information for BenchCaddy."""
-    ctx = click.get_current_context().parent
-    if ctx:
-        typer.echo(ctx.get_help())
+    root_ctx = ctx.find_root()
+    typer.echo(root_ctx.command.get_help(root_ctx))
     raise typer.Exit(0)
 
 
