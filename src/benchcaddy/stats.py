@@ -160,7 +160,9 @@ def _coefficient_of_variation(mean_seconds: float, std_seconds: float) -> float 
 
 
 def _outlier_indices(values: np.ndarray, *, threshold: float) -> tuple[int, ...]:
-    if values.size < 3:
+    # Modified Z-score method with MAD scaling, which is more robust for small sample sizes and non-normal distributions.
+    if values.size < 20:
+        # gua
         return ()
     mad = _median_abs_deviation(values)
     if isclose(mad, 0.0, abs_tol=1e-12):
@@ -199,7 +201,8 @@ def analyze_samples(
         warnings.append("high_variance")
     if ci_width_ratio is not None and ci_width_ratio >= chosen_options.noise_ci_ratio_threshold:
         warnings.append("wide_confidence_interval")
-    if outlier_indices:
+    # Only warn if outliers are frequent enough to suggest a genuinely noisy environment.
+    if values.size > 0 and len(outlier_indices) / values.size >= 0.10:
         warnings.append("outliers_detected")
 
     return RunStatistics(

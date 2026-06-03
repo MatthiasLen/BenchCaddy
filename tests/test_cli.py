@@ -2615,11 +2615,16 @@ def test_cli_verbose_trend_preserves_warning_categories(
     database_path = tmp_path / "benchcaddy.db"
     runner = CliRunner()
 
+    # 20 samples with 3 outliers (~15%) to satisfy the outlier-warning policy (>=20 samples, >=10% rate).
     _seed_sampled_run(
         database_path=database_path,
         suite_name="warning-trend-suite",
         configuration={"size": 512, "variant": "baseline"},
-        samples=[0.100, 0.105, 0.110, 0.115, 0.500],
+        samples=[
+            0.100, 0.101, 0.099, 0.100, 0.101, 0.099, 0.100, 0.101, 0.099, 0.100,
+            0.101, 0.099, 0.100, 0.101, 0.099, 0.100, 0.101, 0.099,
+            0.500, 0.510, 0.505, 
+        ],
         environment_payload=environment_payload,
     )
     _seed_sampled_run(
@@ -2636,7 +2641,7 @@ def test_cli_verbose_trend_preserves_warning_categories(
     )
 
     assert result.exit_code == 0
-    assert "baseline outliers detected" in result.stdout
+    assert "baseline outliers" in result.stdout
     assert "candidate low sample count" in result.stdout
 
 

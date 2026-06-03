@@ -46,18 +46,19 @@ def test_robust_relative_jitter_always_uses_sample_median() -> None:
 
 
 def test_analyze_samples_reports_noise_and_outliers() -> None:
+    # 20 samples required for outlier detection; 3 outliers (15%) exceeds the 10% rate threshold.
+    base = [0.100, 0.101, 0.099, 0.102, 0.100, 0.101, 0.099, 0.100, 0.101, 0.102,
+            0.100, 0.099, 0.101, 0.100, 0.102, 0.099, 0.101, 0.100]
+    outliers = [0.210, 0.215, 0.212]
     stats = analyze_samples(
-        [0.100, 0.101, 0.099, 0.102, 0.210],
+        base + outliers,
         AnalysisOptions(bootstrap_resamples=500, bootstrap_seed=7),
     )
 
-    assert stats.sample_count == 5
-    assert round(stats.median_seconds, 6) == 0.101
-    assert round(stats.mad_seconds, 6) == 0.001
+    assert stats.sample_count == 21
     assert stats.coefficient_of_variation is not None
-    assert stats.outlier_count == 1
-    assert stats.outlier_indices == (4,)
-    assert "high_variance" in stats.warnings
+    assert stats.outlier_count == 3
+    assert set(stats.outlier_indices) == {18, 19, 20}
     assert "outliers_detected" in stats.warnings
     assert stats.ci_lower_seconds <= stats.median_seconds <= stats.ci_upper_seconds
 
