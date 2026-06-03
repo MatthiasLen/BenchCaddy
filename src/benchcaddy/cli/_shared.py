@@ -6,13 +6,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
+import click
 import typer
 from rich.console import Console
 
 from ..presentation import serialize_json
 from ..stats import AnalysisOptions
 
-app = typer.Typer(help="Inspect BenchCaddy benchmark suites.")
+app = typer.Typer(
+    help="BenchCaddy\n\n"
+    "Record, manage, and statistically analyze benchmarks. "
+    "Compare runs and track performance trends."
+)
 console = Console()
 REGRESSION_EXIT_CODE = 3
 JSON_SCHEMA_VERSION = "1.0"
@@ -94,6 +99,15 @@ def callback(
     ] = False,
 ) -> None:
     _STATE.verbose = verbose
+
+
+@app.command("help")
+def help_command() -> None:
+    """Show help information for BenchCaddy."""
+    ctx = click.get_current_context().parent
+    if ctx:
+        typer.echo(ctx.get_help())
+    raise typer.Exit(0)
 
 
 def _emit_json_response(

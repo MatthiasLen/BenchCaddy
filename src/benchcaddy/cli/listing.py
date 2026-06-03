@@ -9,7 +9,7 @@ from ..presentation import render_table
 from ._shared import _STATE, DatabaseOption, _console, _emit_json_response, app
 
 
-@app.command("list")
+@app.command("list", help="List all benchmark suites in the database.")
 def list_command(
     json_output: Annotated[
         bool,
