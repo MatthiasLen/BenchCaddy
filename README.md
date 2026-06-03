@@ -152,6 +152,16 @@ benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
 
 Use repeated `--param` flags for parameter grids. Each flag accepts either a JSON array such as `size=[512, 2048]` or a compact scalar list such as `variant=baseline,stabilized`.
 
+For one exact configuration value, pass scalars directly instead of one-element arrays:
+
+```bash
+benchcaddy sweep examples.benchmark_nonlinear_transform:benchmark_case \
+    --suite-name nonlinear-transform-single \
+    --param size=512 \
+    --param variant=baseline \
+    --verbose
+```
+
 For machine-readable output:
 
 ```bash
