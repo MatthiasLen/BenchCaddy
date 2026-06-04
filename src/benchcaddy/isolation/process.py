@@ -348,6 +348,7 @@ def _run_subprocess_worker(request: dict[str, Any], timeout: float | None) -> di
         cmd = [
             sys.executable,
             "-I",
+            "-X", "utf8",
             worker_script,
             _WORKER_FLAG,
             str(response_path),

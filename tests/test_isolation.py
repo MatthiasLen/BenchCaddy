@@ -954,6 +954,7 @@ class TestRunIsolated:
             [
                 sys.executable,
                 "-I",
+                "-X", "utf8",
                 expected_worker_script,
                 isolation_process_module._WORKER_FLAG,
                 commands[0][-1],
@@ -1025,6 +1026,36 @@ class TestRunIsolated:
     def test_unpickleable_worker_result_raises_structured_runtime_error(self):
         with pytest.raises(RuntimeError, match="could not serialize the isolated result payload"):
             run_isolated(_return_unpickleable_value, fresh_process=True, timeout=30)
+
+    def test_unicode_output_from_target_succeeds_on_windows(self, tmp_path, monkeypatch):
+        """Regression test: benchmark target with Unicode output should not fail on Windows charmap streams."""
+        script_path = tmp_path / "unicode_target.py"
+        script_path.write_text(
+            textwrap.dedent(
+                """
+                import sys
+                from benchcaddy import observe
+
+                @observe("time")
+                def unicode_printing_target() -> str:
+                    # Write Unicode characters that would fail on cp1252/charmap encoding.
+                    sys.stdout.write("Result: π=3.14159, √2=1.41421, ∑=sum\\n")
+                    sys.stderr.write("Debug: ✓ ✗ ⚠ ℃\\n")
+                    return "success"
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.syspath_prepend(str(tmp_path))
+        namespace = runpy.run_path(str(script_path), run_name="__main__")
+        unicode_printing_target = namespace["unicode_printing_target"]
+
+        # Should not raise UnicodeEncodeError even though target outputs Unicode.
+        result = run_isolated(unicode_printing_target, fresh_process=True, timeout=30)
+
+        assert result.return_value == "success"
+        assert result.elapsed_seconds >= 0.0
 
 
 # ---------------------------------------------------------------------------
